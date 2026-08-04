@@ -121,14 +121,14 @@ from dataclasses import dataclass
 from copy import deepcopy
 
 # ── Internal imports from CHIMERA v2 module suite ────────────────────────────
-from flow_matching import (
+from .flow_matching import (
     SE3FlowMatching,
     SinusoidalTimeEmbedding,
     so3_exp,
     so3_log,
     se3_interp,
 )
-from multi_objective import (
+from .multi_objective import (
     StructuralRetriever,
     DPOTrainer,
     ParetoMultiObjectiveHead,
