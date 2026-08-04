@@ -1,0 +1,59 @@
+# CHIMERA v2 + CodonOptimizer — PSC Engineering Pipeline
+# Python >= 3.10 required
+# Install: pip install -r requirements.txt
+
+# ── Core ML ──────────────────────────────────────────────────────────────────
+torch>=2.1.0
+torchvision>=0.16.0
+
+# ── Transformers (ESM-2 for CodonOptimizer, OpenFold for EvoFormer) ─────────
+transformers>=4.36.0
+fair-esm>=2.0.0                  # ESM-2 150M for protein encoding
+einops>=0.7.0                    # tensor rearrangement (flow_matching.py)
+
+# ── Bioinformatics ───────────────────────────────────────────────────────────
+biopython>=1.81                  # Entrez database access, SeqIO
+fair-esm>=2.0.0
+
+# ── Structural Retrieval ──────────────────────────────────────────────────────
+faiss-cpu>=1.7.4                 # structural RAG index (use faiss-gpu if available)
+# faiss-gpu>=1.7.4               # GPU version — uncomment if CUDA available
+
+# ── Protein Structure ─────────────────────────────────────────────────────────
+# OpenFold (EvoFormer backbone):
+#   git clone https://github.com/aqlaboratory/openfold
+#   pip install -e openfold/
+# RFdiffusion (flow matching backbone):
+#   git clone https://github.com/RosettaCommons/RFdiffusion
+#   pip install -e RFdiffusion/
+# ProteinMPNN:
+#   git clone https://github.com/dauparas/ProteinMPNN
+#   (no install needed — import directly)
+
+# ── Codon Optimization ────────────────────────────────────────────────────────
+# ViennaRNA (RNA secondary structure prediction — for MFE calculation):
+#   conda install -c bioconda viennarna
+# OR: pip install ViennaRNA (if available for your platform)
+
+# ── Data / Numerics ───────────────────────────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.11.0
+pandas>=2.0.0
+h5py>=3.9.0                      # efficient storage of large MSA datasets
+
+# ── Visualization ────────────────────────────────────────────────────────────
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# ── Molecular Dynamics (optional, for post-design validation) ────────────────
+# openmm>=8.0.0                  # short MD runs for stability validation
+# mdtraj>=1.9.9                  # trajectory analysis
+
+# ── Utilities ────────────────────────────────────────────────────────────────
+tqdm>=4.65.0
+rich>=13.0.0                     # progress bars and logging
+typer>=0.9.0                     # CLI interface
+
+# ── Development ──────────────────────────────────────────────────────────────
+pytest>=7.4.0
+black>=23.0.0
