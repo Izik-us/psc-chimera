@@ -68,12 +68,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple, Dict
 
-from chimera.evoformer     import EvoFormer,    C_S, C_Z
+from chimera.evoformer import EvoFormer, C_S, C_Z
 from chimera.se3_diffusion import SE3Denoiser
-from chimera.proteinmpnn   import ProteinMPNN
-
+from chimera.proteinmpnn import ProteinMPNN
 
 # ── CHIMERA Connector Modules (The Novel Contribution) ───────────────────────
+
 
 class PairProjection(nn.Module):
     """
@@ -87,6 +87,7 @@ class PairProjection(nn.Module):
     between residue frames is modulated by whether those residues co-evolve in the
     animal NRPS family.
     """
+
     def __init__(self, c_z_in: int = C_Z, c_z_out: int = 256):
         super().__init__()
         self.projection = nn.Sequential(
@@ -101,8 +102,8 @@ class PairProjection(nn.Module):
         self.sym_weight = nn.Parameter(torch.tensor(0.5))
 
     def forward(self, pair_repr: torch.Tensor) -> torch.Tensor:
-        proj    = self.projection(pair_repr)                  # (B, L, L, c_z_out)
-        sym     = self.sym_weight * proj + (1 - self.sym_weight) * proj.transpose(1, 2)
+        proj = self.projection(pair_repr)  # (B, L, L, c_z_out)
+        sym = self.sym_weight * proj + (1 - self.sym_weight) * proj.transpose(1, 2)
         return sym
 
 
@@ -122,6 +123,7 @@ class NodeProjection(nn.Module):
     conservation. Variable residues (like A-domain selectivity loops) will
     have high evolutionary variance → the model explores more freely there.
     """
+
     def __init__(self, c_s_in: int = C_S, c_node_out: int = 128):
         super().__init__()
         self.projection = nn.Sequential(
@@ -148,15 +150,13 @@ class EvolCrossAttention(nn.Module):
     as key/value, allowing each noisy residue position to retrieve its
     evolutionary neighbors' context during denoising.
     """
-    def __init__(self, c_s: int = C_S, c_denoiser: int = 256,
-                 n_head: int = 8):
+
+    def __init__(self, c_s: int = C_S, c_denoiser: int = 256, n_head: int = 8):
         super().__init__()
-        self.norm_query  = nn.LayerNorm(c_denoiser)
+        self.norm_query = nn.LayerNorm(c_denoiser)
         self.norm_memory = nn.LayerNorm(c_s)
-        self.cross_attn  = nn.MultiheadAttention(
-            embed_dim=c_denoiser, num_heads=n_head,
-            kdim=c_s, vdim=c_s,
-            batch_first=True
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=c_denoiser, num_heads=n_head, kdim=c_s, vdim=c_s, batch_first=True
         )
         self.out_proj = nn.Sequential(
             nn.Linear(c_denoiser, c_denoiser),
@@ -164,8 +164,9 @@ class EvolCrossAttention(nn.Module):
         )
         self.gate = nn.Parameter(torch.zeros(1))  # learned mixing weight
 
-    def forward(self, denoiser_state: torch.Tensor,
-                evol_memory: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, denoiser_state: torch.Tensor, evol_memory: torch.Tensor
+    ) -> torch.Tensor:
         """
         denoiser_state: (B, L, c_denoiser) from SE3Denoiser intermediate layer
         evol_memory:    (B, L, c_s)        from EvoFormer single_repr
@@ -181,6 +182,7 @@ class EvolCrossAttention(nn.Module):
 
 # ── NRPS-Specific Design Constraints ─────────────────────────────────────────
 
+
 class NRPSConstraintEmbedding(nn.Module):
     """
     Embeds NRPS-specific design constraints into the conditioning signal.
@@ -193,6 +195,7 @@ class NRPSConstraintEmbedding(nn.Module):
       - Module boundary positions (linker regions for inter-module design)
       - Animal NRPS conservation score per position (from PoET log-likelihood)
     """
+
     def __init__(self, c_out: int = 256, n_constraint_types: int = 8):
         super().__init__()
         self.constraint_embed = nn.Embedding(n_constraint_types + 1, c_out)
@@ -204,18 +207,22 @@ class NRPSConstraintEmbedding(nn.Module):
         )
         self.combine = nn.Linear(c_out * 2, c_out)
 
-    def forward(self, constraint_types: torch.Tensor,
-                conservation_scores: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, constraint_types: torch.Tensor, conservation_scores: torch.Tensor
+    ) -> torch.Tensor:
         """
         constraint_types:    (B, L)   integer type per position (0=none, 1=A-selectivity, ...)
         conservation_scores: (B, L)   PoET log-likelihood per position (float, normalized 0-1)
         """
-        type_emb  = self.constraint_embed(constraint_types)           # (B, L, c_out)
-        cons_emb  = self.conservation_proj(conservation_scores.unsqueeze(-1))  # (B, L, c_out)
+        type_emb = self.constraint_embed(constraint_types)  # (B, L, c_out)
+        cons_emb = self.conservation_proj(
+            conservation_scores.unsqueeze(-1)
+        )  # (B, L, c_out)
         return self.combine(torch.cat([type_emb, cons_emb], dim=-1))
 
 
 # ── Full CHIMERA Model ────────────────────────────────────────────────────────
+
 
 class CHIMERA(nn.Module):
     """
@@ -241,6 +248,7 @@ class CHIMERA(nn.Module):
       Constraints = theozyme active site residue positions (fixed hotspots)
       Output = novel domain sequence threading around active site
     """
+
     def __init__(
         self,
         # EvoFormer config
@@ -252,25 +260,29 @@ class CHIMERA(nn.Module):
         mpnn_n_layers: int = 3,
         k_neighbors: int = 32,
         # Connector dimensions
-        c_s: int = C_S,      # 256 — EvoFormer single repr channels
-        c_z: int = C_Z,      # 128 — EvoFormer pair repr channels
-        c_denoiser: int = 256, # SE3Denoiser internal channels
-        c_node: int = 128,   # ProteinMPNN node channels
+        c_s: int = C_S,  # 256 — EvoFormer single repr channels
+        c_z: int = C_Z,  # 128 — EvoFormer pair repr channels
+        c_denoiser: int = 256,  # SE3Denoiser internal channels
+        c_node: int = 128,  # ProteinMPNN node channels
     ):
         super().__init__()
 
         # ── Pretrained base models (frozen in fine-tuning) ─────────────────
-        self.evoformer   = EvoFormer(n_blocks=evoformer_n_blocks)
-        self.se3denoiser = SE3Denoiser(c_s=c_denoiser, c_z=c_denoiser,
-                                       n_blocks=se3_n_blocks,
-                                       max_t=n_diffusion_steps)
-        self.mpnn        = ProteinMPNN(c_node=c_node, n_mp_layers=mpnn_n_layers,
-                                       k_neighbors=k_neighbors)
+        self.evoformer = EvoFormer(n_blocks=evoformer_n_blocks)
+        self.se3denoiser = SE3Denoiser(
+            c_s=c_denoiser,
+            c_z=c_denoiser,
+            n_blocks=se3_n_blocks,
+            max_t=n_diffusion_steps,
+        )
+        self.mpnn = ProteinMPNN(
+            c_node=c_node, n_mp_layers=mpnn_n_layers, k_neighbors=k_neighbors
+        )
 
         # ── Novel CHIMERA connector modules (trainable) ────────────────────
-        self.pair_projection    = PairProjection(c_z, c_denoiser)
-        self.node_projection    = NodeProjection(c_s, c_node)
-        self.evol_cross_attn    = EvolCrossAttention(c_s, c_denoiser)
+        self.pair_projection = PairProjection(c_z, c_denoiser)
+        self.node_projection = NodeProjection(c_s, c_node)
+        self.evol_cross_attn = EvolCrossAttention(c_s, c_denoiser)
 
         # ── NRPS constraint conditioning ───────────────────────────────────
         self.nrps_constraint_embed = NRPSConstraintEmbedding(c_denoiser)
@@ -297,9 +309,13 @@ class CHIMERA(nn.Module):
 
     def unfreeze_connectors(self):
         """Ensure connector modules are trainable."""
-        for module in [self.pair_projection, self.node_projection,
-                       self.evol_cross_attn, self.nrps_constraint_embed,
-                       self.to_poet_embedding]:
+        for module in [
+            self.pair_projection,
+            self.node_projection,
+            self.evol_cross_attn,
+            self.nrps_constraint_embed,
+            self.to_poet_embedding,
+        ]:
             for param in module.parameters():
                 param.requires_grad = True
 
@@ -308,7 +324,7 @@ class CHIMERA(nn.Module):
         total = len(self.evoformer.blocks)
         for i, block in enumerate(self.evoformer.blocks):
             for param in block.parameters():
-                param.requires_grad = (i >= total - n)
+                param.requires_grad = i >= total - n
 
     @property
     def trainable_params(self) -> int:
@@ -374,14 +390,16 @@ class CHIMERA(nn.Module):
         if self.training and noisy_R is not None:
             # Training mode: predict denoised frames from noisy input
             R_pred, t_pred = self.se3denoiser(
-                noisy_R, noisy_t, pair_cond, timestep,
-                motif_mask, motif_coords
+                noisy_R, noisy_t, pair_cond, timestep, motif_mask, motif_coords
             )
         else:
             # Inference mode: full reverse diffusion sampling
             R_pred, t_pred = self.se3denoiser.sample(
-                L, pair_cond, motif_mask, motif_coords,
-                n_steps=n_diffusion_steps or self.n_diffusion_steps
+                L,
+                pair_cond,
+                motif_mask,
+                motif_coords,
+                n_steps=n_diffusion_steps or self.n_diffusion_steps,
             )
 
         # ── CHIMERA Connector 2: node_projection ─────────────────────────
@@ -395,7 +413,7 @@ class CHIMERA(nn.Module):
             R_frames=R_pred,
             evol_node_features=evol_node_features,
             fixed_positions=motif_mask,
-            fixed_aas=None
+            fixed_aas=None,
         )  # (B, L, 20)
 
         # ── PoET Compatibility Output ─────────────────────────────────────
@@ -403,19 +421,22 @@ class CHIMERA(nn.Module):
         poet_emb = self.to_poet_embedding(evol_node_features)  # (B, L, 512)
 
         return {
-            'sequences':     sequence_logits,  # (B, L, 20) — softmax for probabilities
-            'R_frames':      R_pred,            # (B, L, 3, 3)
-            't_coords':      t_pred,            # (B, L, 3)
-            'poet_embedding': poet_emb,         # (B, L, 512) for PoET scoring
-            'single_repr':   single_repr,       # (B, L, 256) raw EvoFormer output
-            'pair_repr':     pair_cond,         # (B, L, L, 256) projected
+            "sequences": sequence_logits,  # (B, L, 20) — softmax for probabilities
+            "R_frames": R_pred,  # (B, L, 3, 3)
+            "t_coords": t_pred,  # (B, L, 3)
+            "poet_embedding": poet_emb,  # (B, L, 512) for PoET scoring
+            "single_repr": single_repr,  # (B, L, 256) raw EvoFormer output
+            "pair_repr": pair_cond,  # (B, L, L, 256) projected
         }
 
     @classmethod
-    def from_pretrained(cls, evoformer_checkpoint: str = None,
-                        se3_checkpoint: str = None,
-                        mpnn_checkpoint: str = None,
-                        **kwargs) -> 'CHIMERA':
+    def from_pretrained(
+        cls,
+        evoformer_checkpoint: str = None,
+        se3_checkpoint: str = None,
+        mpnn_checkpoint: str = None,
+        **kwargs,
+    ) -> "CHIMERA":
         """
         Instantiate CHIMERA and load pretrained weights.
 
@@ -427,20 +448,23 @@ class CHIMERA(nn.Module):
         model = cls(**kwargs)
 
         if evoformer_checkpoint:
-            state = torch.load(evoformer_checkpoint, map_location='cpu')
+            state = torch.load(evoformer_checkpoint, map_location="cpu")
             # Filter to EvoFormer-relevant keys
-            evof_state = {k.replace('evoformer.', ''): v
-                          for k, v in state.items() if 'evoformer' in k}
+            evof_state = {
+                k.replace("evoformer.", ""): v
+                for k, v in state.items()
+                if "evoformer" in k
+            }
             model.evoformer.load_state_dict(evof_state, strict=False)
             print(f"Loaded EvoFormer weights from {evoformer_checkpoint}")
 
         if se3_checkpoint:
-            state = torch.load(se3_checkpoint, map_location='cpu')
+            state = torch.load(se3_checkpoint, map_location="cpu")
             model.se3denoiser.load_state_dict(state, strict=False)
             print(f"Loaded SE3Denoiser weights from {se3_checkpoint}")
 
         if mpnn_checkpoint:
-            state = torch.load(mpnn_checkpoint, map_location='cpu')
+            state = torch.load(mpnn_checkpoint, map_location="cpu")
             model.mpnn.load_state_dict(state, strict=False)
             print(f"Loaded ProteinMPNN weights from {mpnn_checkpoint}")
 
@@ -449,51 +473,69 @@ class CHIMERA(nn.Module):
 
 # ── Training Utilities ────────────────────────────────────────────────────────
 
+
 class CHIMERALoss(nn.Module):
     """
     Multi-objective training loss for CHIMERA connector fine-tuning.
 
       L = L_struct + λ1·L_seq + λ2·L_evol + λ3·L_nrps
     """
-    def __init__(self, lambda_seq: float = 1.0, lambda_evol: float = 0.5,
-                 lambda_nrps: float = 0.3):
+
+    def __init__(
+        self,
+        lambda_seq: float = 1.0,
+        lambda_evol: float = 0.5,
+        lambda_nrps: float = 0.3,
+    ):
         super().__init__()
-        self.lambda_seq  = lambda_seq
+        self.lambda_seq = lambda_seq
         self.lambda_evol = lambda_evol
         self.lambda_nrps = lambda_nrps
 
-    def structure_loss(self, R_pred: torch.Tensor, t_pred: torch.Tensor,
-                       R_true: torch.Tensor, t_true: torch.Tensor) -> torch.Tensor:
+    def structure_loss(
+        self,
+        R_pred: torch.Tensor,
+        t_pred: torch.Tensor,
+        R_true: torch.Tensor,
+        t_true: torch.Tensor,
+    ) -> torch.Tensor:
         """FAPE-like structure loss (frame-aligned point error)."""
         t_loss = F.smooth_l1_loss(t_pred, t_true)
         # Rotation matrix Frobenius distance
-        R_diff  = torch.bmm(R_pred.view(-1, 3, 3),
-                             R_true.view(-1, 3, 3).transpose(1, 2))
-        I        = torch.eye(3, device=R_pred.device).unsqueeze(0)
-        R_loss   = (R_diff - I).norm(dim=(-1, -2)).mean()
+        R_diff = torch.bmm(R_pred.view(-1, 3, 3), R_true.view(-1, 3, 3).transpose(1, 2))
+        I = torch.eye(3, device=R_pred.device).unsqueeze(0)
+        R_loss = (R_diff - I).norm(dim=(-1, -2)).mean()
         return t_loss + R_loss
 
-    def sequence_loss(self, seq_logits: torch.Tensor,
-                      seq_true: torch.Tensor,
-                      mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def sequence_loss(
+        self,
+        seq_logits: torch.Tensor,
+        seq_true: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Cross-entropy sequence recovery loss."""
-        loss = F.cross_entropy(seq_logits.view(-1, 20), seq_true.view(-1),
-                               reduction='none')
+        loss = F.cross_entropy(
+            seq_logits.view(-1, 20), seq_true.view(-1), reduction="none"
+        )
         if mask is not None:
             loss = (loss * mask.view(-1).float()).sum() / mask.float().sum()
         return loss.mean()
 
-    def evol_consistency_loss(self, poet_emb: torch.Tensor,
-                              poet_target: torch.Tensor) -> torch.Tensor:
+    def evol_consistency_loss(
+        self, poet_emb: torch.Tensor, poet_target: torch.Tensor
+    ) -> torch.Tensor:
         """
         Pull CHIMERA outputs toward high-PoET-score region of sequence space.
         poet_target: embedding of known high-scoring animal NRPS sequences.
         """
         return F.mse_loss(poet_emb, poet_target)
 
-    def nrps_constraint_loss(self, seq_logits: torch.Tensor,
-                              constraint_mask: torch.Tensor,
-                              required_aa: torch.Tensor) -> torch.Tensor:
+    def nrps_constraint_loss(
+        self,
+        seq_logits: torch.Tensor,
+        constraint_mask: torch.Tensor,
+        required_aa: torch.Tensor,
+    ) -> torch.Tensor:
         """
         Enforce NRPS-specific constraints:
           - Conserved positions must match known amino acid
@@ -501,49 +543,61 @@ class CHIMERALoss(nn.Module):
           - Catalytic residues must remain catalytically competent
         """
         constrained_logits = seq_logits[constraint_mask]
-        constrained_aa     = required_aa[constraint_mask]
+        constrained_aa = required_aa[constraint_mask]
         return F.cross_entropy(constrained_logits, constrained_aa)
 
     def forward(self, outputs: Dict, targets: Dict) -> Dict[str, torch.Tensor]:
         L_struct = self.structure_loss(
-            outputs['R_frames'], outputs['t_coords'],
-            targets['R_true'],   targets['t_true']
+            outputs["R_frames"],
+            outputs["t_coords"],
+            targets["R_true"],
+            targets["t_true"],
         )
         L_seq = self.sequence_loss(
-            outputs['sequences'], targets['sequence'],
-            targets.get('design_mask')
+            outputs["sequences"], targets["sequence"], targets.get("design_mask")
         )
-        L_evol = self.evol_consistency_loss(
-            outputs['poet_embedding'], targets['poet_target']
-        ) if 'poet_target' in targets else torch.tensor(0.0)
+        L_evol = (
+            self.evol_consistency_loss(
+                outputs["poet_embedding"], targets["poet_target"]
+            )
+            if "poet_target" in targets
+            else torch.tensor(0.0)
+        )
 
-        L_nrps = self.nrps_constraint_loss(
-            outputs['sequences'],
-            targets['constraint_mask'],
-            targets['required_aa']
-        ) if 'constraint_mask' in targets else torch.tensor(0.0)
+        L_nrps = (
+            self.nrps_constraint_loss(
+                outputs["sequences"], targets["constraint_mask"], targets["required_aa"]
+            )
+            if "constraint_mask" in targets
+            else torch.tensor(0.0)
+        )
 
-        total = (L_struct
-                 + self.lambda_seq  * L_seq
-                 + self.lambda_evol * L_evol
-                 + self.lambda_nrps * L_nrps)
+        total = (
+            L_struct
+            + self.lambda_seq * L_seq
+            + self.lambda_evol * L_evol
+            + self.lambda_nrps * L_nrps
+        )
 
         return {
-            'total': total, 'structure': L_struct,
-            'sequence': L_seq, 'evol': L_evol, 'nrps': L_nrps
+            "total": total,
+            "structure": L_struct,
+            "sequence": L_seq,
+            "evol": L_evol,
+            "nrps": L_nrps,
         }
 
 
 # ── Quick sanity check ────────────────────────────────────────────────────────
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("Initializing CHIMERA (small config for testing)...")
 
     model = CHIMERA(
         evoformer_n_blocks=2,  # 48 in production
-        se3_n_blocks=2,        # 8 in production
+        se3_n_blocks=2,  # 8 in production
         n_diffusion_steps=10,  # 200 in production
-        mpnn_n_layers=2,       # 3 in production
+        mpnn_n_layers=2,  # 3 in production
     )
     model.freeze_pretrained()
     model.unfreeze_connectors()
@@ -553,7 +607,7 @@ if __name__ == '__main__':
 
     # Dummy forward pass: batch=2, N_seq=8, L=32 residues
     B, N_seq, L = 2, 8, 32
-    msa   = torch.randint(0, 22, (B, N_seq, L))
+    msa = torch.randint(0, 22, (B, N_seq, L))
     ctypes = torch.randint(0, 8, (B, L))
     cscores = torch.rand(B, L)
 
