@@ -12,10 +12,13 @@ and icosahedral self-assembly within the PSC.
 """
 
 __version__ = "2.0.0"
-__author__  = "PSC Engineering Pipeline"
+__author__ = "PSC Engineering Pipeline"
 
 from chimera.chimera_v2 import CHIMERAv2, NRPSConstraints
-from chimera.codon_optimizer import CodonOptimizer, optimize_nrps_for_mammalian_expression
+from chimera.codon_optimizer import (
+    CodonOptimizer,
+    optimize_nrps_for_mammalian_expression,
+)
 from chimera.flow_matching import SE3FlowMatching
 from chimera.multi_objective import (
     StructuralRetriever,

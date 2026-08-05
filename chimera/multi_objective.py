@@ -40,10 +40,10 @@ import numpy as np
 from typing import List, Optional, Tuple, Dict, NamedTuple
 from dataclasses import dataclass
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. STRUCTURAL RETRIEVAL-AUGMENTED GENERATION
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class StructuralRetriever(nn.Module):
     """
@@ -57,7 +57,7 @@ class StructuralRetriever(nn.Module):
     a novel A-domain geometry from scratch, CHIMERA adapts the closest
     known structure toward the desired substrate and mammalian compatibility.
 
-    Embedding space: 
+    Embedding space:
         Structure → ESMFold-derived per-residue embeddings pooled over
         the 10 Stachelhaus selectivity code positions.
         This ensures retrieval is dominated by substrate pocket similarity,
@@ -66,12 +66,12 @@ class StructuralRetriever(nn.Module):
 
     def __init__(
         self,
-        d_embed:    int = 256,
-        d_context:  int = 256,
+        d_embed: int = 256,
+        d_context: int = 256,
         n_retrieve: int = 5,
     ):
         super().__init__()
-        self.d_embed    = d_embed
+        self.d_embed = d_embed
         self.n_retrieve = n_retrieve
 
         # Query encoder: substrate SMILES or amino acid identity → query embedding
@@ -83,7 +83,7 @@ class StructuralRetriever(nn.Module):
         # Context encoder: retrieved structure → conditioning vector
         # Takes backbone coordinates of retrieved A-domain pocket (K=10 key residues)
         self.context_encoder = nn.Sequential(
-            nn.Linear(10 * 3, d_embed),   # 10 Stachelhaus positions × 3D coords
+            nn.Linear(10 * 3, d_embed),  # 10 Stachelhaus positions × 3D coords
             nn.LayerNorm(d_embed),
             nn.GELU(),
             nn.Linear(d_embed, d_context),
@@ -98,9 +98,9 @@ class StructuralRetriever(nn.Module):
         self.retrieval_norm = nn.LayerNorm(d_context)
 
         # The actual index lives in CPU memory (FAISS)
-        self.index      = None   # set via build_index()
-        self.index_embs = None   # (N_structures, d_embed) numpy array
-        self.index_meta = []     # list of dicts: pdb_id, substrate, coords
+        self.index = None  # set via build_index()
+        self.index_embs = None  # (N_structures, d_embed) numpy array
+        self.index_meta = []  # list of dicts: pdb_id, substrate, coords
 
     def build_index(self, structure_embeddings: np.ndarray, metadata: List[dict]):
         """
@@ -113,6 +113,7 @@ class StructuralRetriever(nn.Module):
         """
         try:
             import faiss
+
             self.index = faiss.IndexFlatL2(self.d_embed)
             self.index.add(structure_embeddings.astype(np.float32))
             self.index_embs = structure_embeddings
@@ -136,25 +137,23 @@ class StructuralRetriever(nn.Module):
 
         if self.index is not None:
             import faiss
+
             _, indices = self.index.search(q_np, self.n_retrieve)
         elif self.index_embs is not None:
             # Brute force fallback
-            dists = torch.cdist(
-                query_embedding.cpu(),
-                self.index_embs.float()
-            )
+            dists = torch.cdist(query_embedding.cpu(), self.index_embs.float())
             indices = dists.topk(self.n_retrieve, dim=-1, largest=False).indices.numpy()
         else:
             return [[]] * B, None
 
         # Gather retrieved pocket coordinates
-        all_meta   = []
+        all_meta = []
         all_coords = []
         for b in range(B):
-            batch_meta   = [self.index_meta[i] for i in indices[b]]
-            batch_coords = torch.stack([
-                torch.tensor(meta['pocket_coords']) for meta in batch_meta
-            ])  # (K, 10, 3)
+            batch_meta = [self.index_meta[i] for i in indices[b]]
+            batch_coords = torch.stack(
+                [torch.tensor(meta["pocket_coords"]) for meta in batch_meta]
+            )  # (K, 10, 3)
             all_meta.append(batch_meta)
             all_coords.append(batch_coords)
 
@@ -164,7 +163,7 @@ class StructuralRetriever(nn.Module):
     def forward(
         self,
         current_design_repr: torch.Tensor,  # (B, L, d_context)
-        substrate_tokens:    torch.Tensor,  # (B, S) amino acid tokens for substrate
+        substrate_tokens: torch.Tensor,  # (B, S) amino acid tokens for substrate
     ) -> torch.Tensor:
         """
         Enrich current design representation with retrieved structural analogs.
@@ -173,9 +172,9 @@ class StructuralRetriever(nn.Module):
         B = substrate_tokens.shape[0]
 
         # Encode substrate query
-        emb  = self.substrate_encoder[0](substrate_tokens)  # (B, S, 64)
+        emb = self.substrate_encoder[0](substrate_tokens)  # (B, S, 64)
         _, (h, _) = self.substrate_encoder[1](emb)
-        query_emb = h.permute(1, 0, 2).reshape(B, -1)[:, :self.d_embed]  # (B, d_embed)
+        query_emb = h.permute(1, 0, 2).reshape(B, -1)[:, : self.d_embed]  # (B, d_embed)
 
         # Retrieve similar structures
         _, pocket_coords = self.retrieve(query_emb)
@@ -185,13 +184,15 @@ class StructuralRetriever(nn.Module):
         # Encode retrieved pocket contexts
         K = pocket_coords.shape[1]
         coords_flat = pocket_coords.reshape(B * K, -1)  # (B*K, 30)
-        ctx  = self.context_encoder(coords_flat.float()).reshape(B, K, -1)  # (B, K, d_ctx)
+        ctx = self.context_encoder(coords_flat.float()).reshape(
+            B, K, -1
+        )  # (B, K, d_ctx)
 
         # Cross-attend: current design queries retrieved structural contexts
         enriched, _ = self.retrieval_cross_attn(
-            query  = current_design_repr,   # (B, L, d_ctx)
-            key    = ctx,                   # (B, K, d_ctx)
-            value  = ctx,
+            query=current_design_repr,  # (B, L, d_ctx)
+            key=ctx,  # (B, K, d_ctx)
+            value=ctx,
         )
         return self.retrieval_norm(current_design_repr + enriched)
 
@@ -199,6 +200,7 @@ class StructuralRetriever(nn.Module):
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. DIRECT PREFERENCE OPTIMIZATION (DPO) FROM PROTEUS
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 @dataclass
 class ProteusPreferencePair:
@@ -208,10 +210,11 @@ class ProteusPreferencePair:
     loser:  sequence that failed PROTEUS selection
     msa:    the MSA context used to generate both sequences
     """
-    winner_tokens: torch.Tensor   # (L,) integer amino acid tokens
-    loser_tokens:  torch.Tensor   # (L,)
-    msa_tokens:    torch.Tensor   # (N_seq, L) MSA context
-    pair_features: torch.Tensor   # (L, L, 128) pair features
+
+    winner_tokens: torch.Tensor  # (L,) integer amino acid tokens
+    loser_tokens: torch.Tensor  # (L,)
+    msa_tokens: torch.Tensor  # (N_seq, L) MSA context
+    pair_features: torch.Tensor  # (L, L, 128) pair features
 
 
 class DPOTrainer(nn.Module):
@@ -252,9 +255,9 @@ class DPOTrainer(nn.Module):
     def compute_sequence_logprob(
         self,
         model,
-        sequence_tokens: torch.Tensor,   # (B, L) integer tokens
-        msa_tokens:      torch.Tensor,   # (B, N_seq, L)
-        pair_features:   torch.Tensor,   # (B, L, L, 128)
+        sequence_tokens: torch.Tensor,  # (B, L) integer tokens
+        msa_tokens: torch.Tensor,  # (B, N_seq, L)
+        pair_features: torch.Tensor,  # (B, L, L, 128)
     ) -> torch.Tensor:
         """
         Compute log probability of a sequence under a CHIMERA model.
@@ -265,24 +268,25 @@ class DPOTrainer(nn.Module):
         of the target sequence against these logits.
         """
         outputs = model(
-            msa_tokens    = msa_tokens,
-            initial_pair_features = pair_features,
+            msa_tokens=msa_tokens,
+            initial_pair_features=pair_features,
         )
-        seq_logits = outputs['sequences']  # (B, L, 20) log probabilities
+        seq_logits = outputs["sequences"]  # (B, L, 20) log probabilities
 
         # Sum log-probs over sequence length (log-likelihood)
         log_probs = F.log_softmax(seq_logits, dim=-1)
         target_logprobs = log_probs.gather(
-            dim=-1,
-            index=sequence_tokens.unsqueeze(-1)
-        ).squeeze(-1)  # (B, L)
+            dim=-1, index=sequence_tokens.unsqueeze(-1)
+        ).squeeze(
+            -1
+        )  # (B, L)
 
         return target_logprobs.sum(dim=-1)  # (B,) total log-likelihood
 
     def dpo_loss(
         self,
-        policy_model,        # current CHIMERA (being trained)
-        reference_model,     # frozen reference CHIMERA (before DPO)
+        policy_model,  # current CHIMERA (being trained)
+        reference_model,  # frozen reference CHIMERA (before DPO)
         pairs: List[ProteusPreferencePair],
     ) -> torch.Tensor:
         """
@@ -294,33 +298,37 @@ class DPOTrainer(nn.Module):
         # Stack batch
         device = pairs[0].winner_tokens.device
         winner_toks = torch.stack([p.winner_tokens for p in pairs]).to(device)
-        loser_toks  = torch.stack([p.loser_tokens  for p in pairs]).to(device)
-        msa         = torch.stack([p.msa_tokens    for p in pairs]).to(device)
-        pair_feat   = torch.stack([p.pair_features for p in pairs]).to(device)
+        loser_toks = torch.stack([p.loser_tokens for p in pairs]).to(device)
+        msa = torch.stack([p.msa_tokens for p in pairs]).to(device)
+        pair_feat = torch.stack([p.pair_features for p in pairs]).to(device)
 
         # Policy log-probabilities
-        pi_yw = self.compute_sequence_logprob(policy_model,    winner_toks, msa, pair_feat)
-        pi_yl = self.compute_sequence_logprob(policy_model,    loser_toks,  msa, pair_feat)
+        pi_yw = self.compute_sequence_logprob(policy_model, winner_toks, msa, pair_feat)
+        pi_yl = self.compute_sequence_logprob(policy_model, loser_toks, msa, pair_feat)
 
         # Reference log-probabilities (no gradients)
         with torch.no_grad():
-            ref_yw = self.compute_sequence_logprob(reference_model, winner_toks, msa, pair_feat)
-            ref_yl = self.compute_sequence_logprob(reference_model, loser_toks,  msa, pair_feat)
+            ref_yw = self.compute_sequence_logprob(
+                reference_model, winner_toks, msa, pair_feat
+            )
+            ref_yl = self.compute_sequence_logprob(
+                reference_model, loser_toks, msa, pair_feat
+            )
 
         # DPO loss
-        rewards  = self.beta * ((pi_yw - ref_yw) - (pi_yl - ref_yl))
-        loss     = -F.logsigmoid(rewards).mean()
+        rewards = self.beta * ((pi_yw - ref_yw) - (pi_yl - ref_yl))
+        loss = -F.logsigmoid(rewards).mean()
 
         # Monitor implicit reward margins (should be positive and growing)
         with torch.no_grad():
             winner_reward = (pi_yw - ref_yw).mean()
-            loser_reward  = (pi_yl - ref_yl).mean()
+            loser_reward = (pi_yl - ref_yl).mean()
 
         return loss, {
-            'dpo_loss':       loss.item(),
-            'winner_reward':  winner_reward.item(),
-            'loser_reward':   loser_reward.item(),
-            'reward_margin':  (winner_reward - loser_reward).item(),
+            "dpo_loss": loss.item(),
+            "winner_reward": winner_reward.item(),
+            "loser_reward": loser_reward.item(),
+            "reward_margin": (winner_reward - loser_reward).item(),
         }
 
     def update_from_proteus_round(
@@ -328,11 +336,11 @@ class DPOTrainer(nn.Module):
         policy_model,
         reference_model,
         surviving_sequences: List[str],
-        failed_sequences:    List[str],
-        msa_tokens:          torch.Tensor,
-        pair_features:       torch.Tensor,
-        n_dpo_steps:         int = 50,
-        learning_rate:       float = 1e-5,
+        failed_sequences: List[str],
+        msa_tokens: torch.Tensor,
+        pair_features: torch.Tensor,
+        n_dpo_steps: int = 50,
+        learning_rate: float = 1e-5,
     ) -> Dict:
         """
         One-call interface: take PROTEUS results, run DPO fine-tuning.
@@ -351,7 +359,8 @@ class DPOTrainer(nn.Module):
         # Only train connector parameters via DPO (pretrained models stay frozen)
         optimizer = torch.optim.AdamW(
             [p for p in policy_model.parameters() if p.requires_grad],
-            lr=learning_rate, weight_decay=1e-4,
+            lr=learning_rate,
+            weight_decay=1e-4,
         )
 
         # Build preference pairs from PROTEUS results
@@ -359,10 +368,10 @@ class DPOTrainer(nn.Module):
         pairs = []
         for winner_seq, loser_seq in zip(surviving_sequences, failed_sequences):
             pair = ProteusPreferencePair(
-                winner_tokens = self._tokenize(winner_seq),
-                loser_tokens  = self._tokenize(loser_seq),
-                msa_tokens    = msa_tokens[0],   # context for this batch
-                pair_features = pair_features[0],
+                winner_tokens=self._tokenize(winner_seq),
+                loser_tokens=self._tokenize(loser_seq),
+                msa_tokens=msa_tokens[0],  # context for this batch
+                pair_features=pair_features[0],
             )
             pairs.append(pair)
 
@@ -370,7 +379,7 @@ class DPOTrainer(nn.Module):
         for step in range(n_dpo_steps):
             # Sample a mini-batch of preference pairs
             batch_size = min(8, len(pairs))
-            batch      = pairs[:batch_size]  # in production: random sample
+            batch = pairs[:batch_size]  # in production: random sample
 
             loss, metrics = self.dpo_loss(policy_model, reference_model, batch)
             loss.backward()
@@ -382,10 +391,14 @@ class DPOTrainer(nn.Module):
             optimizer.zero_grad()
             metrics_history.append(metrics)
 
-        avg_metrics = {k: np.mean([m[k] for m in metrics_history]) for k in metrics_history[0]}
-        print(f"[DPO] {n_dpo_steps} steps | "
-              f"reward margin: {avg_metrics['reward_margin']:.3f} | "
-              f"loss: {avg_metrics['dpo_loss']:.4f}")
+        avg_metrics = {
+            k: np.mean([m[k] for m in metrics_history]) for k in metrics_history[0]
+        }
+        print(
+            f"[DPO] {n_dpo_steps} steps | "
+            f"reward margin: {avg_metrics['reward_margin']:.3f} | "
+            f"loss: {avg_metrics['dpo_loss']:.4f}"
+        )
         return avg_metrics
 
     @staticmethod
@@ -399,14 +412,16 @@ class DPOTrainer(nn.Module):
 # 3. PARETO-FRONT MULTI-OBJECTIVE OPTIMIZATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @dataclass
 class ParetoObjectives:
     """Five objectives for PSC NRPS sequence design."""
+
     evolutionary_plausibility: torch.Tensor  # PoET log-prob (higher = better)
-    structural_stability:      torch.Tensor  # predicted pLDDT (0-100)
-    expression_efficiency:     torch.Tensor  # CodonOptimizer critic (0-1)
-    substrate_selectivity:     torch.Tensor  # Stachelhaus code match (0-1)
-    assembly_compatibility:    torch.Tensor  # icosahedral face score (0-1)
+    structural_stability: torch.Tensor  # predicted pLDDT (0-100)
+    expression_efficiency: torch.Tensor  # CodonOptimizer critic (0-1)
+    substrate_selectivity: torch.Tensor  # Stachelhaus code match (0-1)
+    assembly_compatibility: torch.Tensor  # icosahedral face score (0-1)
 
 
 class ParetoMultiObjectiveHead(nn.Module):
@@ -452,31 +467,32 @@ class ParetoMultiObjectiveHead(nn.Module):
                 nn.Linear(d_model // 2, out_dim),
             )
 
-        self.head_evol   = head(1)  # scalar log-prob
-        self.head_stab   = head(1)  # 0-100 pLDDT
-        self.head_expr   = head(1)  # 0-1 expression efficiency
-        self.head_sel    = head(1)  # 0-1 selectivity match
-        self.head_asm    = head(1)  # 0-1 assembly compatibility
+        self.head_evol = head(1)  # scalar log-prob
+        self.head_stab = head(1)  # 0-100 pLDDT
+        self.head_expr = head(1)  # 0-1 expression efficiency
+        self.head_sel = head(1)  # 0-1 selectivity match
+        self.head_asm = head(1)  # 0-1 assembly compatibility
 
     def forward(self, repr: torch.Tensor) -> ParetoObjectives:
         """
         repr: (B, L, d_model) sequence-level representation
         Returns ParetoObjectives with predicted scores for each objective.
         """
-        pooled  = self.shared(repr).mean(dim=1)  # (B, d_model)
+        pooled = self.shared(repr).mean(dim=1)  # (B, d_model)
         return ParetoObjectives(
-            evolutionary_plausibility = self.head_evol(pooled).squeeze(-1),
-            structural_stability      = 100 * torch.sigmoid(self.head_stab(pooled)).squeeze(-1),
-            expression_efficiency     = torch.sigmoid(self.head_expr(pooled)).squeeze(-1),
-            substrate_selectivity     = torch.sigmoid(self.head_sel(pooled)).squeeze(-1),
-            assembly_compatibility    = torch.sigmoid(self.head_asm(pooled)).squeeze(-1),
+            evolutionary_plausibility=self.head_evol(pooled).squeeze(-1),
+            structural_stability=100
+            * torch.sigmoid(self.head_stab(pooled)).squeeze(-1),
+            expression_efficiency=torch.sigmoid(self.head_expr(pooled)).squeeze(-1),
+            substrate_selectivity=torch.sigmoid(self.head_sel(pooled)).squeeze(-1),
+            assembly_compatibility=torch.sigmoid(self.head_asm(pooled)).squeeze(-1),
         )
 
     def pcgrad_loss(
         self,
-        objectives:   ParetoObjectives,
-        labels:       Dict[str, Optional[torch.Tensor]],
-        weights:      Dict[str, float] = None,
+        objectives: ParetoObjectives,
+        labels: Dict[str, Optional[torch.Tensor]],
+        weights: Dict[str, float] = None,
     ) -> Tuple[torch.Tensor, Dict]:
         """
         PCGrad: Project Conflicting Gradients multi-task loss.
@@ -491,23 +507,28 @@ class ParetoMultiObjectiveHead(nn.Module):
         """
         if weights is None:
             weights = {
-                'evol': 1.0, 'stab': 0.8,
-                'expr': 0.6, 'sel': 1.0, 'asm': 0.4,
+                "evol": 1.0,
+                "stab": 0.8,
+                "expr": 0.6,
+                "sel": 1.0,
+                "asm": 0.4,
             }
 
         losses = {}
-        if labels.get('evol') is not None:
-            losses['evol'] = F.mse_loss(objectives.evolutionary_plausibility, labels['evol'])
-        if labels.get('stab') is not None:
-            losses['stab'] = F.mse_loss(objectives.structural_stability,      labels['stab'])
-        if labels.get('expr') is not None:
-            losses['expr'] = F.binary_cross_entropy(
-                objectives.expression_efficiency, labels['expr']
+        if labels.get("evol") is not None:
+            losses["evol"] = F.mse_loss(
+                objectives.evolutionary_plausibility, labels["evol"]
             )
-        if labels.get('sel') is not None:
-            losses['sel']  = F.mse_loss(objectives.substrate_selectivity,     labels['sel'])
-        if labels.get('asm') is not None:
-            losses['asm']  = F.mse_loss(objectives.assembly_compatibility,    labels['asm'])
+        if labels.get("stab") is not None:
+            losses["stab"] = F.mse_loss(objectives.structural_stability, labels["stab"])
+        if labels.get("expr") is not None:
+            losses["expr"] = F.binary_cross_entropy(
+                objectives.expression_efficiency, labels["expr"]
+            )
+        if labels.get("sel") is not None:
+            losses["sel"] = F.mse_loss(objectives.substrate_selectivity, labels["sel"])
+        if labels.get("asm") is not None:
+            losses["asm"] = F.mse_loss(objectives.assembly_compatibility, labels["asm"])
 
         total = sum(weights.get(k, 1.0) * v for k, v in losses.items())
         return total, {k: v.item() for k, v in losses.items()}
@@ -515,15 +536,15 @@ class ParetoMultiObjectiveHead(nn.Module):
     @staticmethod
     def compute_pareto_frontier(
         objectives_matrix: torch.Tensor,  # (N, 5) all five objectives for N sequences
-        maximize: List[bool] = None,       # True = maximize, False = minimize
+        maximize: List[bool] = None,  # True = maximize, False = minimize
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         NSGA-II non-dominated sorting to find Pareto front.
-        
+
         Args:
             objectives_matrix: (N, 5) tensor of objective values
             maximize: which objectives to maximize (default: all True for PSC)
-        
+
         Returns:
             pareto_front:   (K, 5) sequences on the Pareto frontier
             pareto_indices: (K,) indices of Pareto-optimal sequences
@@ -551,7 +572,7 @@ class ParetoMultiObjectiveHead(nn.Module):
                     is_pareto[j] = False
 
         pareto_indices = np.where(is_pareto)[0]
-        pareto_front   = objectives_matrix[pareto_indices]
+        pareto_front = objectives_matrix[pareto_indices]
 
         return pareto_front, torch.tensor(pareto_indices)
 
@@ -559,6 +580,7 @@ class ParetoMultiObjectiveHead(nn.Module):
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. BAYESIAN UNCERTAINTY + ACTIVE LEARNING ACQUISITION
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class BayesianUncertaintyEstimator(nn.Module):
     """
@@ -599,8 +621,8 @@ class BayesianUncertaintyEstimator(nn.Module):
     def __init__(self, n_mc_samples: int = 30, dropout_rate: float = 0.1):
         super().__init__()
         self.n_mc_samples = n_mc_samples
-        self.dropout_rate  = dropout_rate
-        self.dropout       = nn.Dropout(p=dropout_rate)
+        self.dropout_rate = dropout_rate
+        self.dropout = nn.Dropout(p=dropout_rate)
 
     def estimate_uncertainty(
         self,
@@ -618,15 +640,15 @@ class BayesianUncertaintyEstimator(nn.Module):
         model.train()  # train mode = dropout active
 
         all_sequence_logits = []
-        all_pareto_scores   = []
+        all_pareto_scores = []
 
         with torch.no_grad():
             for _ in range(n):
                 outputs = model(**inputs)
-                seq_probs = F.softmax(outputs['sequences'], dim=-1)  # (B, L, 20)
+                seq_probs = F.softmax(outputs["sequences"], dim=-1)  # (B, L, 20)
                 all_sequence_logits.append(seq_probs)
-                if 'pareto_objectives' in outputs:
-                    all_pareto_scores.append(outputs['pareto_objectives'])
+                if "pareto_objectives" in outputs:
+                    all_pareto_scores.append(outputs["pareto_objectives"])
 
         model.eval()
 
@@ -647,27 +669,27 @@ class BayesianUncertaintyEstimator(nn.Module):
         total_uncertainty = epistemic + aleatoric
 
         results = {
-            'mean_prediction':    mean_pred,
-            'epistemic':          epistemic,
-            'aleatoric':          aleatoric,
-            'total_uncertainty':  total_uncertainty,
+            "mean_prediction": mean_pred,
+            "epistemic": epistemic,
+            "aleatoric": aleatoric,
+            "total_uncertainty": total_uncertainty,
         }
 
         # Per-sequence uncertainty (for ranking)
-        results['sequence_uncertainty'] = total_uncertainty.mean(dim=-1)  # (B,)
+        results["sequence_uncertainty"] = total_uncertainty.mean(dim=-1)  # (B,)
 
         return results
 
     def expected_improvement_acquisition(
         self,
-        uncertainty:      torch.Tensor,  # (N,) epistemic uncertainty per sequence
-        predicted_quality: torch.Tensor, # (N,) predicted quality score (e.g., PoET)
-        best_observed:    float = 0.0,   # best quality score seen so far in PROTEUS
-        xi:               float = 0.01,  # exploration bonus
+        uncertainty: torch.Tensor,  # (N,) epistemic uncertainty per sequence
+        predicted_quality: torch.Tensor,  # (N,) predicted quality score (e.g., PoET)
+        best_observed: float = 0.0,  # best quality score seen so far in PROTEUS
+        xi: float = 0.01,  # exploration bonus
     ) -> torch.Tensor:
         """
         Expected Improvement acquisition function for active learning.
-        
+
         EI(x) ≈ (μ(x) - f* - ξ) × Φ(z) + σ(x) × φ(z)
         where z = (μ(x) - f* - ξ) / σ(x)
         Φ = standard normal CDF, φ = standard normal PDF
@@ -678,7 +700,7 @@ class BayesianUncertaintyEstimator(nn.Module):
         """
         # Simplified EI: uncertainty × improvement
         improvement = torch.clamp(predicted_quality - best_observed - xi, min=0)
-        ei          = uncertainty * improvement
+        ei = uncertainty * improvement
 
         # Normalize to [0, 1] for interpretability
         ei_norm = (ei - ei.min()) / (ei.max() - ei.min() + 1e-8)
@@ -687,9 +709,9 @@ class BayesianUncertaintyEstimator(nn.Module):
     def select_proteus_batch(
         self,
         model,
-        candidate_inputs:  List[Dict],    # generated sequences to evaluate
-        n_select:          int = 96,      # 96-well plate PROTEUS experiment
-        best_observed:     float = 0.0,
+        candidate_inputs: List[Dict],  # generated sequences to evaluate
+        n_select: int = 96,  # 96-well plate PROTEUS experiment
+        best_observed: float = 0.0,
     ) -> Tuple[List[int], torch.Tensor]:
         """
         Select the most informative n_select sequences for the next PROTEUS round.
@@ -700,20 +722,22 @@ class BayesianUncertaintyEstimator(nn.Module):
         n_select=96 matches a standard 96-well plate — the natural PROTEUS unit.
         """
         all_uncertainties = []
-        all_qualities     = []
+        all_qualities = []
 
         for inp in candidate_inputs:
-            unc_dict  = self.estimate_uncertainty(model, inp)
-            unc       = unc_dict['sequence_uncertainty']  # (1,)
+            unc_dict = self.estimate_uncertainty(model, inp)
+            unc = unc_dict["sequence_uncertainty"]  # (1,)
             all_uncertainties.append(unc)
 
             with torch.no_grad():
-                out     = model(**inp)
-                quality = out['sequences'].mean(dim=1).max(dim=-1).values  # crude quality proxy
+                out = model(**inp)
+                quality = (
+                    out["sequences"].mean(dim=1).max(dim=-1).values
+                )  # crude quality proxy
                 all_qualities.append(quality)
 
         uncertainties = torch.cat(all_uncertainties)
-        qualities     = torch.cat(all_qualities)
+        qualities = torch.cat(all_qualities)
 
         # Compute EI scores
         ei_scores = self.expected_improvement_acquisition(
@@ -725,10 +749,10 @@ class BayesianUncertaintyEstimator(nn.Module):
         # Select top-n_select by EI, with diversity enforcement:
         # Don't pick sequences that are too similar to each other
         selected_indices = []
-        selected_ei      = []
+        selected_ei = []
 
         # Greedy selection with diversity bonus (MaxMin distance)
-        candidates       = ei_scores.argsort(descending=True)
+        candidates = ei_scores.argsort(descending=True)
 
         for idx in candidates:
             if len(selected_indices) >= n_select:
@@ -744,6 +768,7 @@ class BayesianUncertaintyEstimator(nn.Module):
 # ═══════════════════════════════════════════════════════════════════════════════
 # 5. MULTI-SCALE HIERARCHICAL SEQUENCE DESIGNER
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class MultiScaleNRPSDesigner(nn.Module):
     """
@@ -787,27 +812,30 @@ class MultiScaleNRPSDesigner(nn.Module):
 
     def __init__(
         self,
-        d_residue:  int = 128,   # per-residue feature dim (ProteinMPNN node dim)
-        d_domain:   int = 256,   # per-domain feature dim
-        d_module:   int = 512,   # per-module feature dim
-        d_assembly: int = 256,   # assembly context dim
-        n_domains:  int = 5,     # A, T, C, TE, linker
-        n_modules:  int = 5,     # up to 5 NRPS modules in PSC Layer 1
-        vocab_size: int = 20,    # amino acid vocabulary
+        d_residue: int = 128,  # per-residue feature dim (ProteinMPNN node dim)
+        d_domain: int = 256,  # per-domain feature dim
+        d_module: int = 512,  # per-module feature dim
+        d_assembly: int = 256,  # assembly context dim
+        n_domains: int = 5,  # A, T, C, TE, linker
+        n_modules: int = 5,  # up to 5 NRPS modules in PSC Layer 1
+        vocab_size: int = 20,  # amino acid vocabulary
     ):
         super().__init__()
-        self.n_domains  = n_domains
-        self.n_modules  = n_modules
+        self.n_domains = n_domains
+        self.n_modules = n_modules
 
         # ── Scale 1: Residue-level (ProteinMPNN-style) ──────────────────────
-        self.residue_mpnn = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(d_residue + 16, d_residue),  # node feat + edge feat
-                nn.LayerNorm(d_residue),
-                nn.GELU(),
-                nn.Linear(d_residue, d_residue),
-            ) for _ in range(3)  # 3 rounds of message passing
-        ])
+        self.residue_mpnn = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(d_residue + 16, d_residue),  # node feat + edge feat
+                    nn.LayerNorm(d_residue),
+                    nn.GELU(),
+                    nn.Linear(d_residue, d_residue),
+                )
+                for _ in range(3)  # 3 rounds of message passing
+            ]
+        )
         self.edge_proj = nn.Linear(16, d_residue)  # geometric edge features
 
         # ── Scale 2: Domain-level pooling and attention ──────────────────────
@@ -815,15 +843,15 @@ class MultiScaleNRPSDesigner(nn.Module):
         self.domain_attn = nn.MultiheadAttention(
             embed_dim=d_domain, num_heads=8, batch_first=True
         )
-        self.domain_ffn  = nn.Sequential(
+        self.domain_ffn = nn.Sequential(
             nn.LayerNorm(d_domain),
             nn.Linear(d_domain, d_domain * 2),
             nn.GELU(),
             nn.Linear(d_domain * 2, d_domain),
         )
-        self.domain_norms = nn.ModuleList([
-            nn.LayerNorm(d_domain) for _ in range(n_domains)
-        ])
+        self.domain_norms = nn.ModuleList(
+            [nn.LayerNorm(d_domain) for _ in range(n_domains)]
+        )
 
         # ── Scale 3: Module-level attention ─────────────────────────────────
         self.module_pool = nn.Linear(d_domain, d_module)
@@ -838,16 +866,16 @@ class MultiScaleNRPSDesigner(nn.Module):
 
         # ── Scale 4: Assembly context (icosahedral face) ─────────────────────
         # Fixed sinusoidal encoding of icosahedral face identity (0-19)
-        self.face_encoding    = nn.Embedding(20, d_assembly)
+        self.face_encoding = nn.Embedding(20, d_assembly)
         self.assembly_project = nn.Linear(d_module, d_assembly)
-        self.assembly_attn    = nn.MultiheadAttention(
+        self.assembly_attn = nn.MultiheadAttention(
             embed_dim=d_assembly, num_heads=4, batch_first=True
         )
 
         # ── Top-down projections (assembly → module → domain → residue) ────
         self.td_assembly_to_module = nn.Linear(d_assembly, d_module)
-        self.td_module_to_domain   = nn.Linear(d_module,   d_domain)
-        self.td_domain_to_residue  = nn.Linear(d_domain,   d_residue)
+        self.td_module_to_domain = nn.Linear(d_module, d_domain)
+        self.td_domain_to_residue = nn.Linear(d_domain, d_residue)
 
         # ── Final sequence prediction ─────────────────────────────────────
         self.sequence_head = nn.Sequential(
@@ -859,35 +887,37 @@ class MultiScaleNRPSDesigner(nn.Module):
 
     def forward(
         self,
-        residue_feats:     torch.Tensor,   # (B, L, d_residue) from ProteinMPNN
-        evol_node_feats:   torch.Tensor,   # (B, L, d_residue) from EvoFormer
-        edge_feats:        torch.Tensor,   # (B, L, K, 16) geometric edge features
-        edge_index:        torch.Tensor,   # (B, L, K) k-NN indices
-        domain_boundaries: torch.Tensor,   # (B, n_domains, 2) [start, end] per domain
-        module_boundaries: torch.Tensor,   # (B, n_modules, 2) [start, end] per module
-        icosahedral_face:  torch.Tensor,   # (B,) which face (0-19) is this module on
+        residue_feats: torch.Tensor,  # (B, L, d_residue) from ProteinMPNN
+        evol_node_feats: torch.Tensor,  # (B, L, d_residue) from EvoFormer
+        edge_feats: torch.Tensor,  # (B, L, K, 16) geometric edge features
+        edge_index: torch.Tensor,  # (B, L, K) k-NN indices
+        domain_boundaries: torch.Tensor,  # (B, n_domains, 2) [start, end] per domain
+        module_boundaries: torch.Tensor,  # (B, n_modules, 2) [start, end] per module
+        icosahedral_face: torch.Tensor,  # (B,) which face (0-19) is this module on
     ) -> torch.Tensor:  # (B, L, 20) amino acid logits
         B, L, _ = residue_feats.shape
 
         # ── Scale 1: Residue message passing ─────────────────────────────────
-        s = residue_feats + evol_node_feats   # fuse evolutionary context
+        s = residue_feats + evol_node_feats  # fuse evolutionary context
 
         for mpnn_layer in self.residue_mpnn:
             # Aggregate neighbor messages
             neighbors = edge_index.unsqueeze(-1).expand(-1, -1, -1, s.shape[-1])
             neighbor_feats = s.unsqueeze(2).expand(-1, -1, edge_index.shape[-1], -1)
-            neighbor_feats = s.unsqueeze(1).expand(-1, L, -1, -1).gather(
-                2, neighbors
+            neighbor_feats = (
+                s.unsqueeze(1).expand(-1, L, -1, -1).gather(2, neighbors)
             )  # (B, L, K, d_residue)
             neighbor_feats_flat = neighbor_feats.mean(dim=2)  # pool neighbors
-            combined = torch.cat([s, neighbor_feats_flat], dim=-1)[:, :, :s.shape[-1]+16]
+            combined = torch.cat([s, neighbor_feats_flat], dim=-1)[
+                :, :, : s.shape[-1] + 16
+            ]
             s = s + mpnn_layer(combined)
 
         # ── Scale 2: Bottom-up domain pooling ────────────────────────────────
         domain_feats = []
         for d in range(self.n_domains):
             start = domain_boundaries[:, d, 0]  # (B,)
-            end   = domain_boundaries[:, d, 1]
+            end = domain_boundaries[:, d, 1]
 
             # Pool residue features within this domain
             domain_residues = []
@@ -901,13 +931,13 @@ class MultiScaleNRPSDesigner(nn.Module):
 
         # Domain self-attention (which domains influence which)
         domain_ctx, _ = self.domain_attn(domain_repr, domain_repr, domain_repr)
-        domain_repr   = domain_repr + self.domain_ffn(domain_ctx)
+        domain_repr = domain_repr + self.domain_ffn(domain_ctx)
 
         # ── Scale 3: Bottom-up module pooling ─────────────────────────────────
         module_feats = []
         for m in range(self.n_modules):
             start = module_boundaries[:, m, 0]
-            end   = module_boundaries[:, m, 1]
+            end = module_boundaries[:, m, 1]
             module_residues = []
             for b in range(B):
                 s_b, e_b = start[b].item(), end[b].item()
@@ -919,30 +949,30 @@ class MultiScaleNRPSDesigner(nn.Module):
 
         # Module self-attention — THIS learns inter-module compatibility
         module_ctx, _ = self.module_attn(module_repr, module_repr, module_repr)
-        module_repr   = module_repr + module_ctx
+        module_repr = module_repr + module_ctx
 
         # Module pair interaction (explicit interface modeling)
         if module_repr.shape[1] > 1:
-            left  = module_repr[:, :-1, :]
+            left = module_repr[:, :-1, :]
             right = module_repr[:, 1:, :]
-            interface = self.module_interface_head(
-                torch.cat([left, right], dim=-1)
-            )
+            interface = self.module_interface_head(torch.cat([left, right], dim=-1))
             module_repr[:, :-1] = module_repr[:, :-1] + 0.1 * interface
-            module_repr[:, 1:]  = module_repr[:, 1:]  + 0.1 * interface
+            module_repr[:, 1:] = module_repr[:, 1:] + 0.1 * interface
 
         # ── Scale 4: Assembly context ─────────────────────────────────────────
-        face_emb      = self.face_encoding(icosahedral_face)    # (B, d_assembly)
-        assembly_repr = self.assembly_project(module_repr)       # (B, n_modules, d_assembly)
-        assembly_repr = assembly_repr + face_emb.unsqueeze(1)    # broadcast face context
+        face_emb = self.face_encoding(icosahedral_face)  # (B, d_assembly)
+        assembly_repr = self.assembly_project(module_repr)  # (B, n_modules, d_assembly)
+        assembly_repr = assembly_repr + face_emb.unsqueeze(1)  # broadcast face context
 
         # Assembly-level attention (module sees icosahedral context)
-        asm_ctx, _    = self.assembly_attn(assembly_repr, assembly_repr, assembly_repr)
+        asm_ctx, _ = self.assembly_attn(assembly_repr, assembly_repr, assembly_repr)
         assembly_repr = assembly_repr + asm_ctx
 
         # ── Top-down pass: flow assembly context back to residues ────────────
         # Assembly → module
-        asm_to_mod = self.td_assembly_to_module(assembly_repr.mean(dim=1))  # (B, d_module)
+        asm_to_mod = self.td_assembly_to_module(
+            assembly_repr.mean(dim=1)
+        )  # (B, d_module)
         module_repr = module_repr + asm_to_mod.unsqueeze(1)
 
         # Module → domain
