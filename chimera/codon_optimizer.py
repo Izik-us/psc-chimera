@@ -61,34 +61,33 @@ import math
 import subprocess
 from typing import Optional, List, Tuple, Dict
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # CODON TABLE AND VOCABULARY
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Standard genetic code: amino acid → list of synonymous codons
 CODON_TABLE: Dict[str, List[str]] = {
-    'A': ['GCT', 'GCC', 'GCA', 'GCG'],
-    'R': ['CGT', 'CGC', 'CGA', 'CGG', 'AGA', 'AGG'],
-    'N': ['AAT', 'AAC'],
-    'D': ['GAT', 'GAC'],
-    'C': ['TGT', 'TGC'],
-    'Q': ['CAA', 'CAG'],
-    'E': ['GAA', 'GAG'],
-    'G': ['GGT', 'GGC', 'GGA', 'GGG'],
-    'H': ['CAT', 'CAC'],
-    'I': ['ATT', 'ATC', 'ATA'],
-    'L': ['TTA', 'TTG', 'CTT', 'CTC', 'CTA', 'CTG'],
-    'K': ['AAA', 'AAG'],
-    'M': ['ATG'],
-    'F': ['TTT', 'TTC'],
-    'P': ['CCT', 'CCC', 'CCA', 'CCG'],
-    'S': ['TCT', 'TCC', 'TCA', 'TCG', 'AGT', 'AGC'],
-    'T': ['ACT', 'ACC', 'ACA', 'ACG'],
-    'W': ['TGG'],
-    'Y': ['TAT', 'TAC'],
-    'V': ['GTT', 'GTC', 'GTA', 'GTG'],
-    '*': ['TAA', 'TAG', 'TGA'],
+    "A": ["GCT", "GCC", "GCA", "GCG"],
+    "R": ["CGT", "CGC", "CGA", "CGG", "AGA", "AGG"],
+    "N": ["AAT", "AAC"],
+    "D": ["GAT", "GAC"],
+    "C": ["TGT", "TGC"],
+    "Q": ["CAA", "CAG"],
+    "E": ["GAA", "GAG"],
+    "G": ["GGT", "GGC", "GGA", "GGG"],
+    "H": ["CAT", "CAC"],
+    "I": ["ATT", "ATC", "ATA"],
+    "L": ["TTA", "TTG", "CTT", "CTC", "CTA", "CTG"],
+    "K": ["AAA", "AAG"],
+    "M": ["ATG"],
+    "F": ["TTT", "TTC"],
+    "P": ["CCT", "CCC", "CCA", "CCG"],
+    "S": ["TCT", "TCC", "TCA", "TCG", "AGT", "AGC"],
+    "T": ["ACT", "ACC", "ACA", "ACG"],
+    "W": ["TGG"],
+    "Y": ["TAT", "TAC"],
+    "V": ["GTT", "GTC", "GTA", "GTG"],
+    "*": ["TAA", "TAG", "TGA"],
 }
 
 # Global codon vocabulary: all 64 codons, sorted (deterministic ordering)
@@ -97,13 +96,13 @@ CODON_TO_IDX: Dict[str, int] = {c: i for i, c in enumerate(ALL_CODONS)}
 IDX_TO_CODON: Dict[int, str] = {i: c for c, i in CODON_TO_IDX.items()}
 
 # Special tokens (BOS=64, EOS=65, PAD=66)
-BOS_TOKEN = len(ALL_CODONS)       # 64
-EOS_TOKEN = len(ALL_CODONS) + 1   # 65
-PAD_TOKEN = len(ALL_CODONS) + 2   # 66
+BOS_TOKEN = len(ALL_CODONS)  # 64
+EOS_TOKEN = len(ALL_CODONS) + 1  # 65
+PAD_TOKEN = len(ALL_CODONS) + 2  # 66
 VOCAB_SIZE = len(ALL_CODONS) + 3  # 67
 
 # Amino acid vocabulary (standard + unknown)
-AA_VOCAB  = "ACDEFGHIKLMNPQRSTVWY"
+AA_VOCAB = "ACDEFGHIKLMNPQRSTVWY"
 AA_TO_IDX = {aa: i for i, aa in enumerate(AA_VOCAB)}
 
 # Human codon usage frequency table (from highly expressed HEK293 genes)
@@ -111,47 +110,90 @@ AA_TO_IDX = {aa: i for i, aa in enumerate(AA_VOCAB)}
 # Source: derived from Kazusa codon usage database, human HEK293 tissue
 HUMAN_CODON_FREQ: Dict[str, float] = {
     # Phe
-    'TTT': 0.45, 'TTC': 0.55,
+    "TTT": 0.45,
+    "TTC": 0.55,
     # Leu
-    'TTA': 0.07, 'TTG': 0.13, 'CTT': 0.13, 'CTC': 0.20, 'CTA': 0.07, 'CTG': 0.41,
+    "TTA": 0.07,
+    "TTG": 0.13,
+    "CTT": 0.13,
+    "CTC": 0.20,
+    "CTA": 0.07,
+    "CTG": 0.41,
     # Ile
-    'ATT': 0.36, 'ATC': 0.48, 'ATA': 0.16,
+    "ATT": 0.36,
+    "ATC": 0.48,
+    "ATA": 0.16,
     # Met
-    'ATG': 1.00,
+    "ATG": 1.00,
     # Val
-    'GTT': 0.18, 'GTC': 0.24, 'GTA': 0.12, 'GTG': 0.46,
+    "GTT": 0.18,
+    "GTC": 0.24,
+    "GTA": 0.12,
+    "GTG": 0.46,
     # Ser
-    'TCT': 0.15, 'TCC': 0.22, 'TCA': 0.15, 'TCG': 0.06, 'AGT': 0.15, 'AGC': 0.24,
+    "TCT": 0.15,
+    "TCC": 0.22,
+    "TCA": 0.15,
+    "TCG": 0.06,
+    "AGT": 0.15,
+    "AGC": 0.24,
     # Pro
-    'CCT': 0.28, 'CCC': 0.33, 'CCA': 0.27, 'CCG': 0.11,
+    "CCT": 0.28,
+    "CCC": 0.33,
+    "CCA": 0.27,
+    "CCG": 0.11,
     # Thr
-    'ACT': 0.25, 'ACC': 0.36, 'ACA': 0.28, 'ACG': 0.11,
+    "ACT": 0.25,
+    "ACC": 0.36,
+    "ACA": 0.28,
+    "ACG": 0.11,
     # Ala
-    'GCT': 0.26, 'GCC': 0.40, 'GCA': 0.23, 'GCG': 0.11,
+    "GCT": 0.26,
+    "GCC": 0.40,
+    "GCA": 0.23,
+    "GCG": 0.11,
     # Tyr
-    'TAT': 0.43, 'TAC': 0.57,
+    "TAT": 0.43,
+    "TAC": 0.57,
     # Stop
-    'TAA': 0.28, 'TAG': 0.20, 'TGA': 0.52,
+    "TAA": 0.28,
+    "TAG": 0.20,
+    "TGA": 0.52,
     # His
-    'CAT': 0.41, 'CAC': 0.59,
+    "CAT": 0.41,
+    "CAC": 0.59,
     # Gln
-    'CAA': 0.25, 'CAG': 0.75,
+    "CAA": 0.25,
+    "CAG": 0.75,
     # Asn
-    'AAT': 0.46, 'AAC': 0.54,
+    "AAT": 0.46,
+    "AAC": 0.54,
     # Lys
-    'AAA': 0.42, 'AAG': 0.58,
+    "AAA": 0.42,
+    "AAG": 0.58,
     # Asp
-    'GAT': 0.46, 'GAC': 0.54,
+    "GAT": 0.46,
+    "GAC": 0.54,
     # Glu
-    'GAA': 0.42, 'GAG': 0.58,
+    "GAA": 0.42,
+    "GAG": 0.58,
     # Cys
-    'TGT': 0.45, 'TGC': 0.55,
+    "TGT": 0.45,
+    "TGC": 0.55,
     # Trp
-    'TGG': 1.00,
+    "TGG": 1.00,
     # Arg
-    'CGT': 0.08, 'CGC': 0.19, 'CGA': 0.11, 'CGG': 0.21, 'AGA': 0.20, 'AGG': 0.20,
+    "CGT": 0.08,
+    "CGC": 0.19,
+    "CGA": 0.11,
+    "CGG": 0.21,
+    "AGA": 0.20,
+    "AGG": 0.20,
     # Gly
-    'GGT': 0.16, 'GGC': 0.34, 'GGA': 0.25, 'GGG': 0.25,
+    "GGT": 0.16,
+    "GGC": 0.34,
+    "GGA": 0.25,
+    "GGG": 0.25,
 }
 
 
@@ -169,37 +211,37 @@ def get_synonymous_mask(amino_acid: str, device: torch.device) -> torch.Tensor:
 
 def tokenize_protein(seq: str) -> torch.Tensor:
     """Convert amino acid string to integer token tensor."""
-    return torch.tensor([AA_TO_IDX.get(aa, len(AA_VOCAB) - 1) for aa in seq],
-                        dtype=torch.long)
+    return torch.tensor(
+        [AA_TO_IDX.get(aa, len(AA_VOCAB) - 1) for aa in seq], dtype=torch.long
+    )
 
 
 def tokenize_dna(dna: str) -> torch.Tensor:
     """Convert DNA coding sequence (codons) to integer token tensor."""
     assert len(dna) % 3 == 0, "DNA length must be divisible by 3"
-    codons = [dna[i:i+3] for i in range(0, len(dna), 3)]
+    codons = [dna[i : i + 3] for i in range(0, len(dna), 3)]
     return torch.tensor([CODON_TO_IDX.get(c, 0) for c in codons], dtype=torch.long)
 
 
 def detokenize_dna(tokens: torch.Tensor) -> str:
     """Convert codon token tensor back to DNA string."""
-    return ''.join(IDX_TO_CODON.get(t.item(), 'NNN') for t in tokens)
+    return "".join(IDX_TO_CODON.get(t.item(), "NNN") for t in tokens)
 
 
 def translate_dna(dna: str) -> str:
     """Translate DNA coding sequence to amino acid sequence."""
     GENETIC_CODE = {
-        codon: aa
-        for aa, codons in CODON_TABLE.items()
-        for codon in codons
-        if aa != '*'
+        codon: aa for aa, codons in CODON_TABLE.items() for codon in codons if aa != "*"
     }
-    return ''.join(GENETIC_CODE.get(dna[i:i+3], 'X')
-                   for i in range(0, len(dna)-2, 3))
+    return "".join(
+        GENETIC_CODE.get(dna[i : i + 3], "X") for i in range(0, len(dna) - 2, 3)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BIOLOGICAL QUALITY METRICS (differentiable approximations)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def compute_cai(codon_tokens: torch.Tensor) -> torch.Tensor:
     """
@@ -209,11 +251,12 @@ def compute_cai(codon_tokens: torch.Tensor) -> torch.Tensor:
     """
     freq_tensor = torch.tensor(
         [HUMAN_CODON_FREQ.get(ALL_CODONS[i], 0.1) for i in range(len(ALL_CODONS))],
-        dtype=torch.float32, device=codon_tokens.device,
+        dtype=torch.float32,
+        device=codon_tokens.device,
     )
     # Geometric mean of per-codon frequencies
-    codon_freqs   = freq_tensor[codon_tokens]
-    log_cai       = torch.log(codon_freqs + 1e-8).mean()
+    codon_freqs = freq_tensor[codon_tokens]
+    log_cai = torch.log(codon_freqs + 1e-8).mean()
     return torch.exp(log_cai)
 
 
@@ -224,9 +267,10 @@ def compute_cai_from_logits(logits: torch.Tensor) -> torch.Tensor:
     """
     freq_tensor = torch.tensor(
         [HUMAN_CODON_FREQ.get(ALL_CODONS[i], 0.1) for i in range(len(ALL_CODONS))],
-        dtype=torch.float32, device=logits.device,
+        dtype=torch.float32,
+        device=logits.device,
     )  # (64,)
-    probs    = F.softmax(logits, dim=-1)            # (L, 64)
+    probs = F.softmax(logits, dim=-1)  # (L, 64)
     mean_freq = (probs * freq_tensor.unsqueeze(0)).sum(dim=-1)  # (L,)
     return torch.exp(torch.log(mean_freq + 1e-8).mean())
 
@@ -234,9 +278,12 @@ def compute_cai_from_logits(logits: torch.Tensor) -> torch.Tensor:
 def gc_fraction(codon_tokens: torch.Tensor) -> torch.Tensor:
     """GC content per codon, averaged over sequence."""
     gc_per_codon = torch.tensor(
-        [sum(1 for nt in ALL_CODONS[i] if nt in 'GC') / 3.0
-         for i in range(len(ALL_CODONS))],
-        dtype=torch.float32, device=codon_tokens.device,
+        [
+            sum(1 for nt in ALL_CODONS[i] if nt in "GC") / 3.0
+            for i in range(len(ALL_CODONS))
+        ],
+        dtype=torch.float32,
+        device=codon_tokens.device,
     )
     return gc_per_codon[codon_tokens].mean()
 
@@ -244,9 +291,12 @@ def gc_fraction(codon_tokens: torch.Tensor) -> torch.Tensor:
 def gc_from_logits(logits: torch.Tensor) -> torch.Tensor:
     """Differentiable GC content from soft codon probabilities."""
     gc_vals = torch.tensor(
-        [sum(1 for nt in ALL_CODONS[i] if nt in 'GC') / 3.0
-         for i in range(len(ALL_CODONS))],
-        dtype=torch.float32, device=logits.device,
+        [
+            sum(1 for nt in ALL_CODONS[i] if nt in "GC") / 3.0
+            for i in range(len(ALL_CODONS))
+        ],
+        dtype=torch.float32,
+        device=logits.device,
     )
     probs = F.softmax(logits, dim=-1)  # (L, 64)
     return (probs * gc_vals.unsqueeze(0)).sum(dim=-1).mean()
@@ -259,18 +309,18 @@ def upa_penalty(logits: torch.Tensor) -> torch.Tensor:
     This penalizes codons that END in a nucleotide adjacent to codons that START with A.
     """
     ends_with_non_A = torch.tensor(
-        [0.0 if ALL_CODONS[i][-1] != 'A' else 1.0
-         for i in range(len(ALL_CODONS))],
-        dtype=torch.float32, device=logits.device,
+        [0.0 if ALL_CODONS[i][-1] != "A" else 1.0 for i in range(len(ALL_CODONS))],
+        dtype=torch.float32,
+        device=logits.device,
     )
     starts_with_A = torch.tensor(
-        [1.0 if ALL_CODONS[i][0] == 'A' else 0.0
-         for i in range(len(ALL_CODONS))],
-        dtype=torch.float32, device=logits.device,
+        [1.0 if ALL_CODONS[i][0] == "A" else 0.0 for i in range(len(ALL_CODONS))],
+        dtype=torch.float32,
+        device=logits.device,
     )
-    probs = F.softmax(logits, dim=-1)   # (L, 64)
-    ends  = (probs * ends_with_non_A).sum(-1)[:-1]   # (L-1,)
-    starts = (probs * starts_with_A).sum(-1)[1:]      # (L-1,) shifted
+    probs = F.softmax(logits, dim=-1)  # (L, 64)
+    ends = (probs * ends_with_non_A).sum(-1)[:-1]  # (L-1,)
+    starts = (probs * starts_with_A).sum(-1)[1:]  # (L-1,) shifted
     return (ends * starts).sum()
 
 
@@ -279,18 +329,19 @@ def count_bad_motifs(dna_seq: str) -> int:
     Count occurrences of all Fath et al. bad sequence motifs.
     Used for reporting and hard post-processing.
     """
-    rna = dna_seq.replace('T', 'U')
+    rna = dna_seq.replace("T", "U")
     count = 0
-    count += len(re.findall(r'AATAAA|ATTAAA', dna_seq))           # (vi) poly-A signals
-    count += len(re.findall(r'AUUUA|UAUUUAU', rna))               # (iv) AU-rich elements
-    count += len(re.findall(r'GT[ACGT]{4,6}AG', dna_seq))         # (v)  cryptic splice
-    count += dna_seq.count('CG') // 10                             # approximate CpG check
+    count += len(re.findall(r"AATAAA|ATTAAA", dna_seq))  # (vi) poly-A signals
+    count += len(re.findall(r"AUUUA|UAUUUAU", rna))  # (iv) AU-rich elements
+    count += len(re.findall(r"GT[ACGT]{4,6}AG", dna_seq))  # (v)  cryptic splice
+    count += dna_seq.count("CG") // 10  # approximate CpG check
     return count
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EXPRESSION PREDICTOR (Biological Critic)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class ExpressionPredictor(nn.Module):
     """
@@ -328,11 +379,15 @@ class ExpressionPredictor(nn.Module):
 
         # Global feature extraction: Transformer (captures long-range structure)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=n_heads,
-            dim_feedforward=d_model * 4, dropout=0.1,
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            dropout=0.1,
             batch_first=True,
         )
-        self.global_transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.global_transformer = nn.TransformerEncoder(
+            encoder_layer, num_layers=n_layers
+        )
 
         # Fusion: combine local (CNN) + global (Transformer) features
         self.fusion = nn.Sequential(
@@ -357,24 +412,27 @@ class ExpressionPredictor(nn.Module):
         codon_tokens: (B, L) integer codon token IDs
         Returns: (B,) predicted expression yield in [0, 1]
         """
-        x   = self.codon_embed(codon_tokens)          # (B, L, d_model)
+        x = self.codon_embed(codon_tokens)  # (B, L, d_model)
 
         # Local: CNN features
-        x_t = x.transpose(1, 2)                       # (B, d_model, L) for Conv1d
+        x_t = x.transpose(1, 2)  # (B, d_model, L) for Conv1d
         local_feat = self.local_cnn(x_t).transpose(1, 2)  # (B, L, d_model)
 
         # Global: Transformer features
-        global_feat = self.global_transformer(x)      # (B, L, d_model)
+        global_feat = self.global_transformer(x)  # (B, L, d_model)
 
         # Fuse
-        fused = self.fusion(torch.cat([local_feat, global_feat], dim=-1))  # (B, L, d_model)
+        fused = self.fusion(
+            torch.cat([local_feat, global_feat], dim=-1)
+        )  # (B, L, d_model)
 
-        return self.yield_head(fused.transpose(1, 2)).squeeze(-1)   # (B,)
+        return self.yield_head(fused.transpose(1, 2)).squeeze(-1)  # (B,)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CODON OPTIMIZER — MAIN MODEL
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class CodonOptimizer(nn.Module):
     """
@@ -392,12 +450,12 @@ class CodonOptimizer(nn.Module):
 
     def __init__(
         self,
-        d_model:      int = 256,
-        n_heads:      int = 8,
+        d_model: int = 256,
+        n_heads: int = 8,
         n_dec_layers: int = 6,
-        dim_ff:       int = 1024,
-        dropout:      float = 0.1,
-        esm_model_name: str = 'esm2_t30_150M_UR50D',
+        dim_ff: int = 1024,
+        dropout: float = 0.1,
+        esm_model_name: str = "esm2_t30_150M_UR50D",
     ):
         super().__init__()
         self.d_model = d_model
@@ -405,11 +463,14 @@ class CodonOptimizer(nn.Module):
         # ── Encoder: ESM-2 150M (mostly frozen) ─────────────────────────────
         # In production: from transformers import EsmModel
         # Here: learnable embedding as structural stand-in
-        self.aa_embedding   = nn.Embedding(len(AA_VOCAB) + 1, d_model)
+        self.aa_embedding = nn.Embedding(len(AA_VOCAB) + 1, d_model)
         self.protein_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
-                d_model=d_model, nhead=n_heads, dim_feedforward=dim_ff,
-                dropout=dropout, batch_first=True,
+                d_model=d_model,
+                nhead=n_heads,
+                dim_feedforward=dim_ff,
+                dropout=dropout,
+                batch_first=True,
             ),
             num_layers=4,  # stub: production uses 30-layer ESM-2
         )
@@ -419,11 +480,13 @@ class CodonOptimizer(nn.Module):
 
         # ── Decoder: Autoregressive TransformerDecoder ───────────────────────
         self.codon_embedding = nn.Embedding(VOCAB_SIZE, d_model)
-        self.pos_encoding    = nn.Embedding(8192, d_model)  # up to 8192 codons
+        self.pos_encoding = nn.Embedding(8192, d_model)  # up to 8192 codons
 
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d_model, nhead=n_heads,
-            dim_feedforward=dim_ff, dropout=dropout,
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=dim_ff,
+            dropout=dropout,
             batch_first=True,
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_dec_layers)
@@ -447,15 +510,15 @@ class CodonOptimizer(nn.Module):
         protein_tokens: (B, L_aa) integer amino acid token IDs
         Returns: (B, L_aa, d_model) contextual residue representations
         """
-        x = self.aa_embedding(protein_tokens)        # (B, L_aa, d_model)
-        x = self.protein_encoder(x)                  # (B, L_aa, d_model)
-        return self.esm_projection(x)                # (B, L_aa, d_model)
+        x = self.aa_embedding(protein_tokens)  # (B, L_aa, d_model)
+        x = self.protein_encoder(x)  # (B, L_aa, d_model)
+        return self.esm_projection(x)  # (B, L_aa, d_model)
 
     def decode_teacher_forced(
         self,
-        memory:        torch.Tensor,   # (B, L_aa, d_model) protein encoding
-        target_codons: torch.Tensor,   # (B, L_codon) ground truth codon tokens (training)
-        aa_sequence:   List[str],      # list of amino acid strings per batch
+        memory: torch.Tensor,  # (B, L_aa, d_model) protein encoding
+        target_codons: torch.Tensor,  # (B, L_codon) ground truth codon tokens (training)
+        aa_sequence: List[str],  # list of amino acid strings per batch
     ) -> torch.Tensor:  # (B, L_codon, 64) codon logits
         """
         Teacher-forced training: generate all positions in parallel using
@@ -471,8 +534,9 @@ class CodonOptimizer(nn.Module):
 
         # Positional encoding
         positions = torch.arange(L, device=device)
-        dec_emb   = (self.codon_embedding(dec_input)
-                     + self.pos_encoding(positions).unsqueeze(0))
+        dec_emb = self.codon_embedding(dec_input) + self.pos_encoding(
+            positions
+        ).unsqueeze(0)
 
         # Causal mask: position i cannot attend to j > i
         causal_mask = nn.Transformer.generate_square_subsequent_mask(L, device=device)
@@ -488,7 +552,9 @@ class CodonOptimizer(nn.Module):
 
         # Apply synonymous masking at each position
         for b in range(B):
-            aa_str = aa_sequence[b] if isinstance(aa_sequence[b], str) else aa_sequence[0]
+            aa_str = (
+                aa_sequence[b] if isinstance(aa_sequence[b], str) else aa_sequence[0]
+            )
             for pos, aa in enumerate(aa_str[:L]):
                 syn_mask = get_synonymous_mask(aa, device)
                 logits[b, pos, ~syn_mask] = -1e9
@@ -499,10 +565,10 @@ class CodonOptimizer(nn.Module):
     def generate(
         self,
         protein_tokens: torch.Tensor,  # (B, L_aa)
-        aa_sequence:    List[str],     # amino acid strings
-        temperature:    float = 1.0,
-        use_beam:       bool  = False,
-        beam_width:     int   = 5,
+        aa_sequence: List[str],  # amino acid strings
+        temperature: float = 1.0,
+        use_beam: bool = False,
+        beam_width: int = 5,
     ) -> Tuple[torch.Tensor, float]:
         """
         Autoregressive generation (inference): generate codon by codon.
@@ -513,13 +579,13 @@ class CodonOptimizer(nn.Module):
             generated_tokens: (B, L_codon)
             estimated_cai: float (Codon Adaptation Index)
         """
-        B       = protein_tokens.shape[0]
-        device  = protein_tokens.device
-        aa_str  = aa_sequence[0] if isinstance(aa_sequence, list) else aa_sequence
-        L       = len(aa_str)
+        B = protein_tokens.shape[0]
+        device = protein_tokens.device
+        aa_str = aa_sequence[0] if isinstance(aa_sequence, list) else aa_sequence
+        L = len(aa_str)
 
         # Encode protein
-        memory = self.encode_protein(protein_tokens)   # (B, L_aa, d_model)
+        memory = self.encode_protein(protein_tokens)  # (B, L_aa, d_model)
 
         # Initialize with BOS
         generated = torch.full((B, 1), BOS_TOKEN, dtype=torch.long, device=device)
@@ -530,15 +596,18 @@ class CodonOptimizer(nn.Module):
         # Greedy / temperature sampling
         for pos, aa in enumerate(aa_str):
             positions = torch.arange(generated.shape[1], device=device)
-            dec_emb   = (self.codon_embedding(generated)
-                         + self.pos_encoding(positions).unsqueeze(0))
+            dec_emb = self.codon_embedding(generated) + self.pos_encoding(
+                positions
+            ).unsqueeze(0)
 
             # Causal mask: don't attend to future positions
             L_dec = generated.shape[1]
-            causal = nn.Transformer.generate_square_subsequent_mask(L_dec, device=device)
+            causal = nn.Transformer.generate_square_subsequent_mask(
+                L_dec, device=device
+            )
 
             dec_out = self.decoder(tgt=dec_emb, memory=memory, tgt_mask=causal)
-            logits  = self.codon_head(dec_out[:, -1, :])   # (B, 64) — last position only
+            logits = self.codon_head(dec_out[:, -1, :])  # (B, 64) — last position only
 
             # Hard synonymous constraint
             syn_mask = get_synonymous_mask(aa, device)
@@ -548,7 +617,7 @@ class CodonOptimizer(nn.Module):
                 logits = logits / temperature
 
             if temperature > 0:
-                probs      = F.softmax(logits, dim=-1)
+                probs = F.softmax(logits, dim=-1)
                 next_codon = torch.multinomial(probs, num_samples=1)
             else:
                 next_codon = logits.argmax(dim=-1, keepdim=True)
@@ -565,10 +634,10 @@ class CodonOptimizer(nn.Module):
 
     def _beam_search(
         self,
-        memory:     torch.Tensor,  # (1, L_aa, d_model) — beam search for single sequence
-        aa_str:     str,
+        memory: torch.Tensor,  # (1, L_aa, d_model) — beam search for single sequence
+        aa_str: str,
         beam_width: int,
-        device:     torch.device,
+        device: torch.device,
     ) -> Tuple[torch.Tensor, float]:
         """
         Beam search decoding: explores beam_width parallel hypotheses.
@@ -585,27 +654,29 @@ class CodonOptimizer(nn.Module):
 
             for score, seq in beams:
                 positions = torch.arange(seq.shape[1], device=device)
-                dec_emb   = (self.codon_embedding(seq)
-                             + self.pos_encoding(positions).unsqueeze(0))
+                dec_emb = self.codon_embedding(seq) + self.pos_encoding(
+                    positions
+                ).unsqueeze(0)
                 L_dec = seq.shape[1]
-                causal = nn.Transformer.generate_square_subsequent_mask(L_dec, device=device)
-
-                dec_out = self.decoder(
-                    tgt=dec_emb, memory=memory[:1],
-                    tgt_mask=causal
+                causal = nn.Transformer.generate_square_subsequent_mask(
+                    L_dec, device=device
                 )
+
+                dec_out = self.decoder(tgt=dec_emb, memory=memory[:1], tgt_mask=causal)
                 logits = self.codon_head(dec_out[0, -1, :])  # (64,)
 
                 # Synonymous mask
-                syn_mask      = get_synonymous_mask(aa, device)
+                syn_mask = get_synonymous_mask(aa, device)
                 logits[~syn_mask] = -1e9
 
                 log_probs = F.log_softmax(logits, dim=-1)
 
                 # Expand top-k options
-                topk_log_probs, topk_indices = log_probs.topk(min(beam_width, syn_mask.sum()))
+                topk_log_probs, topk_indices = log_probs.topk(
+                    min(beam_width, syn_mask.sum())
+                )
                 for lp, idx in zip(topk_log_probs, topk_indices):
-                    new_seq   = torch.cat([seq, idx.view(1, 1)], dim=1)
+                    new_seq = torch.cat([seq, idx.view(1, 1)], dim=1)
                     new_score = score + lp.item()
                     all_candidates.append((new_score, new_seq))
 
@@ -615,14 +686,14 @@ class CodonOptimizer(nn.Module):
 
         best_score, best_seq = beams[0]
         output = best_seq[:, 1:]  # remove BOS
-        cai    = compute_cai(output[0]).item()
+        cai = compute_cai(output[0]).item()
         return output, cai
 
     def forward(
         self,
         protein_tokens: torch.Tensor,  # (B, L_aa)
-        target_codons:  torch.Tensor,  # (B, L_codon) for teacher forcing
-        aa_sequence:    List[str],
+        target_codons: torch.Tensor,  # (B, L_codon) for teacher forcing
+        aa_sequence: List[str],
     ) -> Dict[str, torch.Tensor]:
         """Training forward pass."""
         memory = self.encode_protein(protein_tokens)
@@ -632,8 +703,8 @@ class CodonOptimizer(nn.Module):
         predicted_expression = self.expression_predictor(target_codons)
 
         return {
-            'logits':      logits,               # (B, L, 64) for cross-entropy
-            'expression':  predicted_expression, # (B,) for critic loss
+            "logits": logits,  # (B, L, 64) for cross-entropy
+            "expression": predicted_expression,  # (B,) for critic loss
         }
 
 
@@ -641,11 +712,12 @@ class CodonOptimizer(nn.Module):
 # TRAINING LOSS (peer-reviewed multi-objective)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def codon_optimizer_loss(
-    logits:              torch.Tensor,  # (B, L, 64) predicted codon logits
-    target_codons:       torch.Tensor,  # (B, L) ground truth codon tokens
-    predicted_expression: torch.Tensor, # (B,) critic expression prediction
-    target_expression:   Optional[torch.Tensor] = None,  # (B,) measured yield
+    logits: torch.Tensor,  # (B, L, 64) predicted codon logits
+    target_codons: torch.Tensor,  # (B, L) ground truth codon tokens
+    predicted_expression: torch.Tensor,  # (B,) critic expression prediction
+    target_expression: Optional[torch.Tensor] = None,  # (B,) measured yield
     lambdas: Optional[Dict[str, float]] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
@@ -658,7 +730,7 @@ def codon_optimizer_loss(
       + λ_expr   × L_expression  (biological critic loss)
     """
     if lambdas is None:
-        lambdas = {'cai': 0.3, 'gc': 0.2, 'upa': 0.15, 'expr': 0.5}
+        lambdas = {"cai": 0.3, "gc": 0.2, "upa": 0.15, "expr": 0.5}
 
     B, L, vocab = logits.shape
 
@@ -670,14 +742,12 @@ def codon_optimizer_loss(
 
     # ── Differentiable CAI reward ─────────────────────────────────────────────
     # We want CAI to be HIGH (≥ 0.96), so minimize -CAI
-    cai_per_seq = torch.stack([
-        compute_cai_from_logits(logits[b]) for b in range(B)
-    ])
+    cai_per_seq = torch.stack([compute_cai_from_logits(logits[b]) for b in range(B)])
     L_CAI = -cai_per_seq.mean()
 
     # ── GC content penalty ────────────────────────────────────────────────────
     gc_per_seq = torch.stack([gc_from_logits(logits[b]) for b in range(B)])
-    L_GC       = ((gc_per_seq - 0.62) ** 2).mean()  # target GC = 62%
+    L_GC = ((gc_per_seq - 0.62) ** 2).mean()  # target GC = 62%
 
     # ── UpA dinucleotide penalty ──────────────────────────────────────────────
     L_UpA = torch.stack([upa_penalty(logits[b]) for b in range(B)]).mean()
@@ -690,19 +760,21 @@ def codon_optimizer_loss(
         L_expr = -predicted_expression.mean()
 
     # ── Combine ───────────────────────────────────────────────────────────────
-    total = (L_CE
-           + lambdas['cai']  * L_CAI
-           + lambdas['gc']   * L_GC
-           + lambdas['upa']  * L_UpA
-           + lambdas['expr'] * L_expr)
+    total = (
+        L_CE
+        + lambdas["cai"] * L_CAI
+        + lambdas["gc"] * L_GC
+        + lambdas["upa"] * L_UpA
+        + lambdas["expr"] * L_expr
+    )
 
     metrics = {
-        'total':      total.item(),
-        'ce':         L_CE.item(),
-        'cai':        -L_CAI.item(),           # report as positive CAI value
-        'gc':         gc_per_seq.mean().item(),
-        'upa':        L_UpA.item(),
-        'expression': predicted_expression.mean().item(),
+        "total": total.item(),
+        "ce": L_CE.item(),
+        "cai": -L_CAI.item(),  # report as positive CAI value
+        "gc": gc_per_seq.mean().item(),
+        "upa": L_UpA.item(),
+        "expression": predicted_expression.mean().item(),
     }
 
     return total, metrics
@@ -712,21 +784,22 @@ def codon_optimizer_loss(
 # SLIDING WINDOW RULE-BASED OPTIMIZER (Fath et al. algorithm)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def sliding_window_optimize(
     aa_sequence: str,
     window_size: int = 15,
-    n_iter:      int = 3,
+    n_iter: int = 3,
 ) -> Tuple[str, Dict[str, float]]:
     """
     Reference implementation of the Fath et al. GeneOptimizer sliding window.
-    
+
     This is the rule-based baseline that the AI model should beat.
     For each window of amino acids:
         1. Enumerate all synonymous codon combinations
         2. Score by 9-parameter quality function
         3. Fix the best combination
         4. Slide window forward by 1 codon
-    
+
     Returns:
         optimized_dna: codon-optimized DNA sequence
         metrics: quality metrics for the optimized sequence
@@ -735,39 +808,39 @@ def sliding_window_optimize(
 
     def quality(window_dna: str, context_dna: str, pos: int) -> float:
         """9-parameter quality function."""
-        rna    = window_dna.replace('T', 'U')
-        score  = 0.0
+        rna = window_dna.replace("T", "U")
+        score = 0.0
 
         # (i) Codon choice — CAI
-        codons = [window_dna[i:i+3] for i in range(0, len(window_dna), 3)]
-        cai    = sum(HUMAN_CODON_FREQ.get(c, 0.1) for c in codons) / len(codons)
+        codons = [window_dna[i : i + 3] for i in range(0, len(window_dna), 3)]
+        cai = sum(HUMAN_CODON_FREQ.get(c, 0.1) for c in codons) / len(codons)
         score += 3.0 * cai
 
         # (ii) GC content — target 58-65%
-        gc = (window_dna.count('G') + window_dna.count('C')) / len(window_dna)
-        score -= 2.0 * max(0, abs(gc - 0.615) - 0.035) * 10   # penalty outside [58%,65%]
+        gc = (window_dna.count("G") + window_dna.count("C")) / len(window_dna)
+        score -= 2.0 * max(0, abs(gc - 0.615) - 0.035) * 10  # penalty outside [58%,65%]
 
         # (iii) UpA avoidance (in RNA)
-        upa_count = len(re.findall(r'[ACGU]A', rna))
-        score    -= 1.5 * upa_count
+        upa_count = len(re.findall(r"[ACGU]A", rna))
+        score -= 1.5 * upa_count
 
         # (iv) AU-rich elements
-        are_count = len(re.findall(r'AUUUA', rna))
-        score    -= 3.0 * are_count
+        are_count = len(re.findall(r"AUUUA", rna))
+        score -= 3.0 * are_count
 
         # (v) Cryptic splice sites
-        if re.search(r'GT[ACGT]{4,8}AG', window_dna):
+        if re.search(r"GT[ACGT]{4,8}AG", window_dna):
             score -= 5.0
 
         # (vi) Poly-A signal
-        if re.search(r'AATAAA|ATTAAA', window_dna):
+        if re.search(r"AATAAA|ATTAAA", window_dna):
             score -= 5.0
 
         # (vii) Direct repeats (check against context)
-        full = context_dna[:pos*3] + window_dna
+        full = context_dna[: pos * 3] + window_dna
         for k in range(6, min(16, len(window_dna))):
             pattern = window_dna[:k]
-            if full[:-len(window_dna)].count(pattern) > 0:
+            if full[: -len(window_dna)].count(pattern) > 0:
                 score -= 2.0
                 break
 
@@ -777,45 +850,46 @@ def sliding_window_optimize(
             score -= 2.0 * (gc - 0.70) * 10
 
         # (ix) Internal IRES (simplified motif)
-        if re.search(r'GGA[CT]{2}', window_dna):
+        if re.search(r"GGA[CT]{2}", window_dna):
             score -= 4.0
 
         return score
 
     # Initialize with most-frequent human codons
     def best_codon(aa: str) -> str:
-        options = CODON_TABLE.get(aa, ['NNN'])
+        options = CODON_TABLE.get(aa, ["NNN"])
         return max(options, key=lambda c: HUMAN_CODON_FREQ.get(c, 0.0))
 
-    current_dna = ''.join(best_codon(aa) for aa in aa_sequence)
+    current_dna = "".join(best_codon(aa) for aa in aa_sequence)
 
     for iteration in range(n_iter):
         for start in range(len(aa_sequence)):
-            end        = min(start + window_size, len(aa_sequence))
-            window_aa  = aa_sequence[start:end]
-            options    = [CODON_TABLE.get(aa, ['NNN']) for aa in window_aa]
-            best_score = -float('inf')
+            end = min(start + window_size, len(aa_sequence))
+            window_aa = aa_sequence[start:end]
+            options = [CODON_TABLE.get(aa, ["NNN"]) for aa in window_aa]
+            best_score = -float("inf")
             best_combo = None
 
             for combo in itertools.product(*options):
-                candidate = ''.join(combo)
-                s         = quality(candidate, current_dna, start)
+                candidate = "".join(combo)
+                s = quality(candidate, current_dna, start)
                 if s > best_score:
                     best_score = s
                     best_combo = candidate
 
             if best_combo is not None:
-                current_dna = (current_dna[:start*3]
-                               + best_combo
-                               + current_dna[end*3:])
+                current_dna = (
+                    current_dna[: start * 3] + best_combo + current_dna[end * 3 :]
+                )
 
     # Compute final metrics
     tokens = tokenize_dna(current_dna)
     final_metrics = {
-        'cai':        compute_cai(tokens).item(),
-        'gc_content': (current_dna.count('G') + current_dna.count('C')) / len(current_dna),
-        'n_bad_motifs': count_bad_motifs(current_dna),
-        'length_bp':  len(current_dna),
+        "cai": compute_cai(tokens).item(),
+        "gc_content": (current_dna.count("G") + current_dna.count("C"))
+        / len(current_dna),
+        "n_bad_motifs": count_bad_motifs(current_dna),
+        "length_bp": len(current_dna),
     }
 
     return current_dna, final_metrics
@@ -825,14 +899,15 @@ def sliding_window_optimize(
 # FULL OPTIMIZATION PIPELINE
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def optimize_nrps_for_mammalian_expression(
-    aa_sequence:        str,
-    model:              Optional[CodonOptimizer] = None,
+    aa_sequence: str,
+    model: Optional[CodonOptimizer] = None,
     use_sliding_window: bool = True,
-    temperature:        float = 0.8,
-    beam_search:        bool = True,
-    beam_width:         int  = 5,
-    verbose:            bool = True,
+    temperature: float = 0.8,
+    beam_search: bool = True,
+    beam_width: int = 5,
+    verbose: bool = True,
 ) -> Dict:
     """
     Full optimization pipeline for an NRPS module amino acid sequence.
@@ -860,7 +935,9 @@ def optimize_nrps_for_mammalian_expression(
             'protein_check':   translated AA sequence (should match input)
             'mrna_notes':      notes about mRNA delivery modifications
     """
-    device = next(model.parameters()).device if model is not None else torch.device('cpu')
+    device = (
+        next(model.parameters()).device if model is not None else torch.device("cpu")
+    )
 
     if verbose:
         print(f"Optimizing {len(aa_sequence)}-AA NRPS module...")
@@ -870,9 +947,11 @@ def optimize_nrps_for_mammalian_expression(
     if use_sliding_window:
         dna_sw, metrics_sw = sliding_window_optimize(aa_sequence)
         if verbose:
-            print(f"  Sliding window: CAI={metrics_sw['cai']:.3f}, "
-                  f"GC={metrics_sw['gc_content']:.3f}, "
-                  f"bad motifs={metrics_sw['n_bad_motifs']}")
+            print(
+                f"  Sliding window: CAI={metrics_sw['cai']:.3f}, "
+                f"GC={metrics_sw['gc_content']:.3f}, "
+                f"bad motifs={metrics_sw['n_bad_motifs']}"
+            )
     else:
         dna_sw = None
 
@@ -897,31 +976,37 @@ def optimize_nrps_for_mammalian_expression(
             print(f"  AI model:       CAI={cai:.3f}")
     else:
         optimized_dna = dna_sw
-        cai = metrics_sw['cai'] if dna_sw is not None else 0.0
+        cai = metrics_sw["cai"] if dna_sw is not None else 0.0
 
     # Step 3: Verify and compute final metrics
     protein_check = translate_dna(optimized_dna)
-    verified      = protein_check == aa_sequence
+    verified = protein_check == aa_sequence
 
-    tokens      = tokenize_dna(optimized_dna)
-    gc_content  = (optimized_dna.count('G') + optimized_dna.count('C')) / len(optimized_dna)
-    n_bad       = count_bad_motifs(optimized_dna)
+    tokens = tokenize_dna(optimized_dna)
+    gc_content = (optimized_dna.count("G") + optimized_dna.count("C")) / len(
+        optimized_dna
+    )
+    n_bad = count_bad_motifs(optimized_dna)
 
     if verbose:
         print(f"  Final CAI:  {cai:.3f} {'✓' if cai >= 0.96 else '✗ (target ≥ 0.96)'}")
-        print(f"  GC content: {gc_content:.3f} {'✓' if 0.58<=gc_content<=0.65 else '✗ (target 0.58-0.65)'}")
+        print(
+            f"  GC content: {gc_content:.3f} {'✓' if 0.58<=gc_content<=0.65 else '✗ (target 0.58-0.65)'}"
+        )
         print(f"  Bad motifs: {n_bad} {'✓' if n_bad==0 else '✗'}")
-        print(f"  Translation check: {'✓ PASS' if verified else '✗ FAIL — CRITICAL ERROR'}")
+        print(
+            f"  Translation check: {'✓ PASS' if verified else '✗ FAIL — CRITICAL ERROR'}"
+        )
 
     return {
-        'dna_sequence':   optimized_dna,
-        'cai':            cai,
-        'gc_content':     gc_content,
-        'n_bad_motifs':   n_bad,
-        'length_bp':      len(optimized_dna),
-        'protein_check':  protein_check,
-        'verified':       verified,
-        'mrna_notes': (
+        "dna_sequence": optimized_dna,
+        "cai": cai,
+        "gc_content": gc_content,
+        "n_bad_motifs": n_bad,
+        "length_bp": len(optimized_dna),
+        "protein_check": protein_check,
+        "verified": verified,
+        "mrna_notes": (
             "For mRNA delivery: specify N1-methylpseudouridine (N1mΨ) substitution "
             "at synthesis (Trilink/Aldevron). Add 5' cap (ARCA or CleanCap). "
             "Poly-A tail ≥100 nt. Optimize 5'UTR (recommend human β-globin 5'UTR). "
@@ -934,7 +1019,7 @@ def optimize_nrps_for_mammalian_expression(
 # EXAMPLE USAGE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("=" * 65)
     print("PSC CodonOptimizer — NRPS Module Codon Optimization")
     print("=" * 65)
@@ -946,21 +1031,21 @@ if __name__ == '__main__':
 
     print(f"\n[Rule-based only] Fath et al. sliding window:")
     result = optimize_nrps_for_mammalian_expression(
-        aa_sequence        = example_aa,
-        model              = None,
-        use_sliding_window = True,
-        verbose            = True,
+        aa_sequence=example_aa,
+        model=None,
+        use_sliding_window=True,
+        verbose=True,
     )
     print(f"\n  Optimized DNA (first 60 bp): {result['dna_sequence'][:60]}...")
 
     print(f"\n[AI model] CodonOptimizer (untrained stub):")
-    model  = CodonOptimizer(d_model=128, n_heads=4, n_dec_layers=3)
+    model = CodonOptimizer(d_model=128, n_heads=4, n_dec_layers=3)
     result = optimize_nrps_for_mammalian_expression(
-        aa_sequence = example_aa,
-        model       = model,
-        beam_search = True,
-        beam_width  = 3,
-        verbose     = True,
+        aa_sequence=example_aa,
+        model=model,
+        beam_search=True,
+        beam_width=3,
+        verbose=True,
     )
 
     print(f"\nVocabulary: {len(ALL_CODONS)} codons")
