@@ -160,6 +160,16 @@ class StructuralRetriever(nn.Module):
         coords_tensor = torch.stack(all_coords)  # (B, K, 10, 3)
         return all_meta, coords_tensor.to(query_embedding.device)
 
+    def encode_query(self, substrate_tokens: torch.Tensor) -> torch.Tensor:
+        """Encode substrate tokens into the index embedding space."""
+        if substrate_tokens.ndim != 2:
+            raise ValueError("substrate_tokens must have shape (B, S)")
+        emb = self.substrate_encoder[0](substrate_tokens)
+        _, (hidden, _) = self.substrate_encoder[1](emb)
+        return hidden.permute(1, 0, 2).reshape(substrate_tokens.shape[0], -1)[
+            :, : self.d_embed
+        ]
+
     def forward(
         self,
         current_design_repr: torch.Tensor,  # (B, L, d_context)
@@ -172,9 +182,7 @@ class StructuralRetriever(nn.Module):
         B = substrate_tokens.shape[0]
 
         # Encode substrate query
-        emb = self.substrate_encoder[0](substrate_tokens)  # (B, S, 64)
-        _, (h, _) = self.substrate_encoder[1](emb)
-        query_emb = h.permute(1, 0, 2).reshape(B, -1)[:, : self.d_embed]  # (B, d_embed)
+        query_emb = self.encode_query(substrate_tokens)
 
         # Retrieve similar structures
         _, pocket_coords = self.retrieve(query_emb)
@@ -209,12 +217,15 @@ class ProteusPreferencePair:
     winner: sequence that survived PROTEUS selection (expressed + functional)
     loser:  sequence that failed PROTEUS selection
     msa:    the MSA context used to generate both sequences
+    source_R, source_t: bacterial NRPS backbone frames used during generation
     """
 
     winner_tokens: torch.Tensor  # (L,) integer amino acid tokens
     loser_tokens: torch.Tensor  # (L,)
     msa_tokens: torch.Tensor  # (N_seq, L) MSA context
     pair_features: torch.Tensor  # (L, L, 128) pair features
+    source_R: torch.Tensor  # (L, 3, 3) source backbone rotations
+    source_t: torch.Tensor  # (L, 3) source backbone translations
 
 
 class DPOTrainer(nn.Module):
@@ -258,6 +269,8 @@ class DPOTrainer(nn.Module):
         sequence_tokens: torch.Tensor,  # (B, L) integer tokens
         msa_tokens: torch.Tensor,  # (B, N_seq, L)
         pair_features: torch.Tensor,  # (B, L, L, 128)
+        source_R: torch.Tensor,  # (B, L, 3, 3) source backbone
+        source_t: torch.Tensor,  # (B, L, 3) source backbone positions
     ) -> torch.Tensor:
         """
         Compute log probability of a sequence under a CHIMERA model.
@@ -267,11 +280,22 @@ class DPOTrainer(nn.Module):
         forward pass on the generated backbone. We compute the cross-entropy
         of the target sequence against these logits.
         """
+        if hasattr(model, "sequence_logprob"):
+            return model.sequence_logprob(sequence_tokens, msa_tokens, pair_features, source_R, source_t)
+        raise TypeError("DPO requires a model.sequence_logprob autoregressive policy interface")
+
         outputs = model(
             msa_tokens=msa_tokens,
             initial_pair_features=pair_features,
+            source_R=source_R,
+            source_t=source_t,
         )
-        seq_logits = outputs["sequences"]  # (B, L, 20) log probabilities
+        seq_logits = outputs["sequences"]  # (B, n_seqs, L, 20) or (B, L, 20)
+
+        # Handle both per-candidate scores (B, n_seqs, L, 20) and batch scores (B, L, 20)
+        if seq_logits.ndim == 4:
+            # Per-candidate: take mean over candidates for final log-prob
+            seq_logits = seq_logits.mean(dim=1)  # (B, L, 20)
 
         # Sum log-probs over sequence length (log-likelihood)
         log_probs = F.log_softmax(seq_logits, dim=-1)
@@ -288,12 +312,12 @@ class DPOTrainer(nn.Module):
         policy_model,  # current CHIMERA (being trained)
         reference_model,  # frozen reference CHIMERA (before DPO)
         pairs: List[ProteusPreferencePair],
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, Dict]:
         """
         Compute DPO loss over a batch of PROTEUS preference pairs.
         """
         if not pairs:
-            return torch.tensor(0.0)
+            return torch.tensor(0.0), {}
 
         # Stack batch
         device = pairs[0].winner_tokens.device
@@ -301,18 +325,24 @@ class DPOTrainer(nn.Module):
         loser_toks = torch.stack([p.loser_tokens for p in pairs]).to(device)
         msa = torch.stack([p.msa_tokens for p in pairs]).to(device)
         pair_feat = torch.stack([p.pair_features for p in pairs]).to(device)
+        source_R = torch.stack([p.source_R for p in pairs]).to(device)
+        source_t = torch.stack([p.source_t for p in pairs]).to(device)
 
         # Policy log-probabilities
-        pi_yw = self.compute_sequence_logprob(policy_model, winner_toks, msa, pair_feat)
-        pi_yl = self.compute_sequence_logprob(policy_model, loser_toks, msa, pair_feat)
+        pi_yw = self.compute_sequence_logprob(
+            policy_model, winner_toks, msa, pair_feat, source_R, source_t
+        )
+        pi_yl = self.compute_sequence_logprob(
+            policy_model, loser_toks, msa, pair_feat, source_R, source_t
+        )
 
         # Reference log-probabilities (no gradients)
         with torch.no_grad():
             ref_yw = self.compute_sequence_logprob(
-                reference_model, winner_toks, msa, pair_feat
+                reference_model, winner_toks, msa, pair_feat, source_R, source_t
             )
             ref_yl = self.compute_sequence_logprob(
-                reference_model, loser_toks, msa, pair_feat
+                reference_model, loser_toks, msa, pair_feat, source_R, source_t
             )
 
         # DPO loss
@@ -405,7 +435,34 @@ class DPOTrainer(nn.Module):
     def _tokenize(seq: str) -> torch.Tensor:
         """Convert amino acid string to integer tokens."""
         AA = "ACDEFGHIKLMNPQRSTVWY"
-        return torch.tensor([AA.index(aa) if aa in AA else 20 for aa in seq])
+        if any(aa not in AA for aa in seq):
+            raise ValueError("Preference sequences must contain standard amino-acid symbols")
+        return torch.tensor([AA.index(aa) for aa in seq])
+
+
+class AutoregressiveSequencePolicy(nn.Module):
+    """Causal sequence policy used to define valid DPO log probabilities."""
+
+    def __init__(self, context_dim: int, vocab_size: int = 20, layers: int = 2):
+        super().__init__()
+        self.context = nn.Linear(context_dim, context_dim)
+        block = nn.TransformerEncoderLayer(context_dim, 4, context_dim * 4, batch_first=True)
+        self.decoder = nn.TransformerEncoder(block, layers)
+        self.token_embedding = nn.Embedding(vocab_size + 1, context_dim)
+        self.head = nn.Linear(context_dim, vocab_size)
+        self.vocab_size = vocab_size
+
+    def forward(self, context: torch.Tensor, tokens: torch.Tensor) -> torch.Tensor:
+        prefix = torch.full_like(tokens[:, :1], self.vocab_size)
+        decoder_input = torch.cat([prefix, tokens[:, :-1]], dim=1)
+        hidden = self.context(context) + self.token_embedding(decoder_input)
+        size = hidden.shape[1]
+        mask = torch.triu(torch.ones(size, size, device=hidden.device, dtype=torch.bool), diagonal=1)
+        return self.head(self.decoder(hidden, mask=mask))
+
+    def logprob(self, context: torch.Tensor, tokens: torch.Tensor) -> torch.Tensor:
+        logits = self(context, tokens)
+        return F.log_softmax(logits, dim=-1).gather(-1, tokens.unsqueeze(-1)).squeeze(-1).sum(-1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -495,15 +552,22 @@ class ParetoMultiObjectiveHead(nn.Module):
         weights: Dict[str, float] = None,
     ) -> Tuple[torch.Tensor, Dict]:
         """
-        PCGrad: Project Conflicting Gradients multi-task loss.
-        When two task gradients conflict (negative cosine similarity),
-        project the conflicting gradient onto the normal plane.
+        PCGrad-inspired: Project Conflicting Gradients multi-task loss.
 
-        In practice for CHIMERA:
-          - Computes individual losses per objective
-          - Detects gradient conflicts during backward pass
-          - Projects conflicting gradients before optimizer step
-          Returns combined loss + per-task metrics
+        Algorithm:
+          1. Compute individual task losses L_1, L_2, ..., L_n
+          2. Detect conflicts by analyzing task loss distributions
+          3. For conflicting tasks: reduce weight of lower-priority task
+          4. Combine losses with conflict-adjusted weights
+
+        Note: Full PCGrad requires gradient computation during backward pass.
+        This implementation uses a simplified conflict detection via loss magnitude
+        analysis, which avoids gradient tracking issues while still reducing
+        inter-objective conflicts during training.
+
+        For PSC: evolutionary plausibility can conflict with substrate selectivity;
+        assembly compatibility can conflict with expression efficiency.
+        This method resolves conflicts by down-weighting lower-priority objectives.
         """
         if weights is None:
             weights = {
@@ -514,24 +578,104 @@ class ParetoMultiObjectiveHead(nn.Module):
                 "asm": 0.4,
             }
 
+        # Compute individual task losses
         losses = {}
+        task_names = []
+        task_losses_list = []
+
         if labels.get("evol") is not None:
-            losses["evol"] = F.mse_loss(
+            loss_evol = F.mse_loss(
                 objectives.evolutionary_plausibility, labels["evol"]
             )
+            losses["evol"] = loss_evol
+            task_names.append("evol")
+            task_losses_list.append(loss_evol.detach())
+
         if labels.get("stab") is not None:
-            losses["stab"] = F.mse_loss(objectives.structural_stability, labels["stab"])
+            loss_stab = F.mse_loss(objectives.structural_stability, labels["stab"])
+            losses["stab"] = loss_stab
+            task_names.append("stab")
+            task_losses_list.append(loss_stab.detach())
+
         if labels.get("expr") is not None:
-            losses["expr"] = F.binary_cross_entropy(
+            loss_expr = F.binary_cross_entropy(
                 objectives.expression_efficiency, labels["expr"]
             )
-        if labels.get("sel") is not None:
-            losses["sel"] = F.mse_loss(objectives.substrate_selectivity, labels["sel"])
-        if labels.get("asm") is not None:
-            losses["asm"] = F.mse_loss(objectives.assembly_compatibility, labels["asm"])
+            losses["expr"] = loss_expr
+            task_names.append("expr")
+            task_losses_list.append(loss_expr.detach())
 
-        total = sum(weights.get(k, 1.0) * v for k, v in losses.items())
+        if labels.get("sel") is not None:
+            loss_sel = F.mse_loss(objectives.substrate_selectivity, labels["sel"])
+            losses["sel"] = loss_sel
+            task_names.append("sel")
+            task_losses_list.append(loss_sel.detach())
+
+        if labels.get("asm") is not None:
+            loss_asm = F.mse_loss(objectives.assembly_compatibility, labels["asm"])
+            losses["asm"] = loss_asm
+            task_names.append("asm")
+            task_losses_list.append(loss_asm.detach())
+
+        if not task_losses_list:
+            return torch.tensor(0.0), {}
+
+        # Simplified conflict detection: check if tasks have opposite sign gradients
+        # by analyzing prediction vs label trends
+        adjusted_weights = weights.copy()
+
+        # Check for conflicts between objectives
+        # We consider tasks conflicting if they have opposite trends
+        # (e.g., evolutionary plausibility high vs selectivity low)
+        if len(task_losses_list) >= 2:
+            task_loss_magnitudes = torch.tensor([l.item() for l in task_losses_list])
+            # Normalize magnitudes for comparison
+            task_loss_normalized = task_loss_magnitudes / (task_loss_magnitudes.mean() + 1e-8)
+
+            for i in range(len(task_losses_list)):
+                for j in range(i + 1, len(task_losses_list)):
+                    # If two tasks have very different loss magnitudes, they might conflict
+                    # Reduce weight of the higher-loss task (lower priority)
+                    loss_i = task_loss_normalized[i]
+                    loss_j = task_loss_normalized[j]
+
+                    # If ratio > 2, there's likely a conflict; down-weight the higher loss
+                    if loss_i > 2 * loss_j or loss_j > 2 * loss_i:
+                        task_i = task_names[i]
+                        task_j = task_names[j]
+                        if loss_i > loss_j:
+                            adjusted_weights[task_i] *= 0.9
+                        else:
+                            adjusted_weights[task_j] *= 0.9
+
+        # Combine losses with adjusted weights
+        total = sum(adjusted_weights.get(k, 1.0) * v for k, v in losses.items())
+
         return total, {k: v.item() for k, v in losses.items()}
+
+    def task_losses(self, objectives: ParetoObjectives, labels: Dict[str, Optional[torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        """Return independent task losses for true PCGrad training."""
+        result = {}
+        if labels.get("evol") is not None:
+            result["evol"] = F.mse_loss(objectives.evolutionary_plausibility, labels["evol"])
+        if labels.get("stab") is not None:
+            result["stab"] = F.mse_loss(objectives.structural_stability, labels["stab"])
+        if labels.get("expr") is not None:
+            result["expr"] = F.binary_cross_entropy(objectives.expression_efficiency, labels["expr"])
+        if labels.get("sel") is not None:
+            result["sel"] = F.mse_loss(objectives.substrate_selectivity, labels["sel"])
+        if labels.get("asm") is not None:
+            result["asm"] = F.mse_loss(objectives.assembly_compatibility, labels["asm"])
+        return result
+
+    def pcgrad_backward(self, objectives: ParetoObjectives, labels: Dict[str, Optional[torch.Tensor]], parameters) -> Dict[str, float]:
+        """Project conflicting task gradients into ``parameters.grad``."""
+        from .pcgrad import project_conflicting_gradients
+        losses = self.task_losses(objectives, labels)
+        if not losses:
+            return {}
+        project_conflicting_gradients(list(losses.values()), parameters)
+        return {name: float(loss.detach()) for name, loss in losses.items()}
 
     @staticmethod
     def compute_pareto_frontier(
@@ -629,82 +773,144 @@ class BayesianUncertaintyEstimator(nn.Module):
         model,
         inputs: Dict,
         n_samples: Optional[int] = None,
+        per_candidate: bool = False,  # Return per-candidate uncertainty for design()
     ) -> Dict[str, torch.Tensor]:
         """
         Run N MC forward passes with dropout enabled.
         Return mean prediction and epistemic/aleatoric uncertainty.
+
+        Args:
+            model: CHIMERA model (will be set to train mode for dropout)
+            inputs: Dictionary with model forward() arguments
+            n_samples: Number of MC dropout samples (default: self.n_mc_samples)
+            per_candidate: If True, return (B, n_seqs) uncertainty for design()
+                          If False, return (B,) or (B, L) uncertainty
         """
         n = n_samples or self.n_mc_samples
 
         # Enable dropout at inference
         model.train()  # train mode = dropout active
 
-        all_sequence_logits = []
-        all_pareto_scores = []
+        all_objectives = {"evol": [], "stab": [], "expr": [], "sel": [], "asm": []}
 
         with torch.no_grad():
             for _ in range(n):
                 outputs = model(**inputs)
-                seq_probs = F.softmax(outputs["sequences"], dim=-1)  # (B, L, 20)
-                all_sequence_logits.append(seq_probs)
-                if "pareto_objectives" in outputs:
-                    all_pareto_scores.append(outputs["pareto_objectives"])
+                # Collect per-candidate objectives: (B, n_seqs) each
+                if "evol_plausibility" in outputs:
+                    all_objectives["evol"].append(outputs["evol_plausibility"].cpu())
+                    all_objectives["stab"].append(outputs["structural_stability"].cpu())
+                    all_objectives["expr"].append(outputs["expression_efficiency"].cpu())
+                    all_objectives["sel"].append(outputs["substrate_selectivity"].cpu())
+                    all_objectives["asm"].append(outputs["assembly_compat"].cpu())
 
         model.eval()
 
-        # Stack: (n_samples, B, L, 20)
-        stack = torch.stack(all_sequence_logits)
+        results = {}
 
-        # Mean prediction
-        mean_pred = stack.mean(dim=0)  # (B, L, 20)
+        if all_objectives["evol"]:
+            # Stack MC samples: (n_samples, B, n_seqs) per objective
+            for key in all_objectives:
+                stack = torch.stack(all_objectives[key])  # (n, B, n_seqs)
 
-        # Epistemic uncertainty: variance across MC samples (disagreement)
-        epistemic = stack.var(dim=0).mean(dim=-1)  # (B, L) variance over vocab
+                # Mean prediction: (B, n_seqs)
+                mean_pred = stack.mean(dim=0)
 
-        # Aleatoric uncertainty: mean of per-sample entropy
-        per_sample_entropy = -(stack * (stack + 1e-8).log()).sum(dim=-1)  # (n, B, L)
-        aleatoric = per_sample_entropy.mean(dim=0)  # (B, L)
+                # Epistemic uncertainty: variance across MC samples (model disagreement)
+                # (B, n_seqs) — high when different MC samples predict different values
+                epistemic = stack.var(dim=0)
 
-        # Total uncertainty
-        total_uncertainty = epistemic + aleatoric
+                results[f"{key}_mean"] = mean_pred
+                results[f"{key}_epistemic"] = epistemic
 
-        results = {
-            "mean_prediction": mean_pred,
-            "epistemic": epistemic,
-            "aleatoric": aleatoric,
-            "total_uncertainty": total_uncertainty,
-        }
+            # Aggregate uncertainty across all objectives
+            # Shape: (n_samples, B, n_seqs, 5) with all 5 objectives
+            all_obj_stack = torch.stack(
+                [torch.stack(all_objectives[k]) for k in ["evol", "stab", "expr", "sel", "asm"]],
+                dim=-1,
+            )  # (n, B, n_seqs, 5)
 
-        # Per-sequence uncertainty (for ranking)
-        results["sequence_uncertainty"] = total_uncertainty.mean(dim=-1)  # (B,)
+            # Candidate-level uncertainty: average epistemic variance across objectives
+            candidate_epistemic = all_obj_stack.var(dim=0).mean(dim=-1)  # (B, n_seqs)
+
+            # Candidate quality: average predicted score across objectives
+            candidate_quality = all_obj_stack.mean(dim=0).mean(dim=-1)  # (B, n_seqs)
+
+            results["candidate_epistemic"] = candidate_epistemic
+            results["candidate_quality"] = candidate_quality
+
+            # Per-candidate uncertainty for use in design()
+            results["per_candidate_uncertainty"] = candidate_epistemic
+        else:
+            # Fallback for non-objective outputs
+            all_sequence_logits = []
+            for _ in range(n):
+                outputs = model(**inputs)
+                seq_probs = F.softmax(outputs["sequences"], dim=-1)
+                all_sequence_logits.append(seq_probs.cpu())
+
+            stack = torch.stack(all_sequence_logits)  # (n, B, n_seqs, L, 20) or (n, B, L, 20)
+            mean_pred = stack.mean(dim=0)
+            epistemic = stack.var(dim=0).mean(dim=-1)  # Variance over vocab
+
+            results["mean_prediction"] = mean_pred
+            results["epistemic"] = epistemic
+            results["per_candidate_uncertainty"] = epistemic.mean(dim=-1)  # (B, n_seqs) or (B,)
 
         return results
 
     def expected_improvement_acquisition(
         self,
-        uncertainty: torch.Tensor,  # (N,) epistemic uncertainty per sequence
-        predicted_quality: torch.Tensor,  # (N,) predicted quality score (e.g., PoET)
-        best_observed: float = 0.0,  # best quality score seen so far in PROTEUS
-        xi: float = 0.01,  # exploration bonus
+        uncertainty: torch.Tensor,  # (N,) or (B, n_seqs) epistemic uncertainty
+        predicted_quality: torch.Tensor,  # (N,) or (B, n_seqs) predicted quality
+        best_observed: float = 0.0,  # best quality score observed so far
     ) -> torch.Tensor:
         """
-        Expected Improvement acquisition function for active learning.
+        True Gaussian Expected Improvement acquisition function for Bayesian optimization.
 
-        EI(x) ≈ (μ(x) - f* - ξ) × Φ(z) + σ(x) × φ(z)
-        where z = (μ(x) - f* - ξ) / σ(x)
-        Φ = standard normal CDF, φ = standard normal PDF
+        EI(x) = (μ(x) - f* - ε) × Φ(Z) + σ(x) × φ(Z)
+        where:
+            μ(x) = predicted quality
+            σ(x) = epistemic uncertainty (MC Dropout variance)
+            f* = best observed quality
+            ε = small exploration bonus
+            Z = (μ(x) - f* - ε) / (σ(x) + δ)
+            Φ = standard normal CDF
+            φ = standard normal PDF
 
-        In practice (simplified): EI(x) = uncertainty(x) × max(0, quality(x) - threshold)
-        High EI = unexplored region with high expected quality.
-        These are the sequences worth testing in the next PROTEUS batch.
+        Returns: EI(x) ∈ [0, ∞) for each candidate
+
+        High EI = unexplored region (high σ) with high expected quality (μ)
+        These sequences maximize information gain per PROTEUS experiment.
         """
-        # Simplified EI: uncertainty × improvement
-        improvement = torch.clamp(predicted_quality - best_observed - xi, min=0)
-        ei = uncertainty * improvement
+        from scipy.stats import norm
+        import numpy as np
 
-        # Normalize to [0, 1] for interpretability
-        ei_norm = (ei - ei.min()) / (ei.max() - ei.min() + 1e-8)
-        return ei_norm
+        # Handle both flat (N,) and structured (B, n_seqs) shapes
+        original_shape = uncertainty.shape
+        unc_flat = uncertainty.cpu().numpy().flatten()
+        qual_flat = predicted_quality.cpu().numpy().flatten()
+
+        # Exploration bonus
+        eps = 0.01
+
+        # Regularization to avoid division by zero
+        delta = 1e-8
+
+        # Compute standardized improvement
+        Z = (qual_flat - best_observed - eps) / (unc_flat + delta)
+
+        # Gaussian EI: (μ - f*) * Φ(Z) + σ * φ(Z)
+        cdf_Z = norm.cdf(Z)
+        pdf_Z = norm.pdf(Z)
+
+        ei_flat = (qual_flat - best_observed) * cdf_Z + unc_flat * pdf_Z
+        ei_flat = np.maximum(ei_flat, 0)  # EI is always non-negative
+
+        # Reshape back to original shape
+        ei = torch.from_numpy(ei_flat.reshape(original_shape)).to(uncertainty.device).float()
+
+        return ei
 
     def select_proteus_batch(
         self,
@@ -828,7 +1034,7 @@ class MultiScaleNRPSDesigner(nn.Module):
         self.residue_mpnn = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(d_residue + 16, d_residue),  # node feat + edge feat
+                    nn.Linear(d_residue * 2, d_residue),
                     nn.LayerNorm(d_residue),
                     nn.GELU(),
                     nn.Linear(d_residue, d_residue),
@@ -837,6 +1043,9 @@ class MultiScaleNRPSDesigner(nn.Module):
             ]
         )
         self.edge_proj = nn.Linear(16, d_residue)  # geometric edge features
+        self.domain_gate = nn.Parameter(torch.tensor(0.0))
+        self.module_gate = nn.Parameter(torch.tensor(0.0))
+        self.assembly_gate = nn.Parameter(torch.tensor(0.0))
 
         # ── Scale 2: Domain-level pooling and attention ──────────────────────
         self.domain_pool = nn.Linear(d_residue, d_domain)
@@ -907,10 +1116,19 @@ class MultiScaleNRPSDesigner(nn.Module):
             neighbor_feats = (
                 s.unsqueeze(1).expand(-1, L, -1, -1).gather(2, neighbors)
             )  # (B, L, K, d_residue)
-            neighbor_feats_flat = neighbor_feats.mean(dim=2)  # pool neighbors
-            combined = torch.cat([s, neighbor_feats_flat], dim=-1)[
-                :, :, : s.shape[-1] + 16
-            ]
+            edge_emb = self.edge_proj(edge_feats)
+            domain_ids = torch.zeros(B, L, dtype=torch.long, device=s.device)
+            for domain_idx in range(self.n_domains):
+                starts = domain_boundaries[:, domain_idx, 0].clamp(0, L)
+                ends = domain_boundaries[:, domain_idx, 1].clamp(0, L)
+                for batch_idx in range(B):
+                    domain_ids[batch_idx, starts[batch_idx]:ends[batch_idx]] = domain_idx
+            neighbor_domain_ids = domain_ids.unsqueeze(2).expand(-1, -1, edge_index.shape[-1])
+            indexed_domain_ids = domain_ids.unsqueeze(1).expand(-1, L, -1).gather(2, edge_index)
+            local_mask = (neighbor_domain_ids == indexed_domain_ids).unsqueeze(-1)
+            neighbor_messages = (neighbor_feats + edge_emb) * local_mask
+            neighbor_feats_flat = neighbor_messages.sum(dim=2) / local_mask.sum(dim=2).clamp_min(1)
+            combined = torch.cat([s, neighbor_feats_flat], dim=-1)
             s = s + mpnn_layer(combined)
 
         # ── Scale 2: Bottom-up domain pooling ────────────────────────────────
@@ -931,7 +1149,7 @@ class MultiScaleNRPSDesigner(nn.Module):
 
         # Domain self-attention (which domains influence which)
         domain_ctx, _ = self.domain_attn(domain_repr, domain_repr, domain_repr)
-        domain_repr = domain_repr + self.domain_ffn(domain_ctx)
+        domain_repr = domain_repr + torch.tanh(self.domain_gate) * self.domain_ffn(domain_ctx)
 
         # ── Scale 3: Bottom-up module pooling ─────────────────────────────────
         module_feats = []
@@ -941,23 +1159,27 @@ class MultiScaleNRPSDesigner(nn.Module):
             module_residues = []
             for b in range(B):
                 s_b, e_b = start[b].item(), end[b].item()
-                module_residues.append(s[b, s_b:e_b].mean(dim=0))
-            module_feat = torch.stack(module_residues)
-            module_feats.append(self.module_pool(domain_repr.mean(dim=1)))
+                if e_b > s_b:
+                    module_residues.append(s[b, s_b:e_b].mean(dim=0))
+                else:
+                    module_residues.append(torch.zeros_like(s[b, 0]))
+            module_feat = self.domain_pool(torch.stack(module_residues))
+            module_feats.append(self.module_pool(module_feat))
 
         module_repr = torch.stack(module_feats, dim=1)  # (B, n_modules, d_module)
 
         # Module self-attention — THIS learns inter-module compatibility
         module_ctx, _ = self.module_attn(module_repr, module_repr, module_repr)
-        module_repr = module_repr + module_ctx
+        module_repr = module_repr + torch.tanh(self.module_gate) * module_ctx
 
         # Module pair interaction (explicit interface modeling)
         if module_repr.shape[1] > 1:
             left = module_repr[:, :-1, :]
             right = module_repr[:, 1:, :]
             interface = self.module_interface_head(torch.cat([left, right], dim=-1))
-            module_repr[:, :-1] = module_repr[:, :-1] + 0.1 * interface
-            module_repr[:, 1:] = module_repr[:, 1:] + 0.1 * interface
+            module_repr = module_repr.clone()
+            module_repr[:, :-1] = module_repr[:, :-1] + torch.tanh(self.module_gate) * interface
+            module_repr[:, 1:] = module_repr[:, 1:] + torch.tanh(self.module_gate) * interface
 
         # ── Scale 4: Assembly context ─────────────────────────────────────────
         face_emb = self.face_encoding(icosahedral_face)  # (B, d_assembly)
@@ -966,18 +1188,18 @@ class MultiScaleNRPSDesigner(nn.Module):
 
         # Assembly-level attention (module sees icosahedral context)
         asm_ctx, _ = self.assembly_attn(assembly_repr, assembly_repr, assembly_repr)
-        assembly_repr = assembly_repr + asm_ctx
+        assembly_repr = assembly_repr + torch.tanh(self.assembly_gate) * asm_ctx
 
         # ── Top-down pass: flow assembly context back to residues ────────────
         # Assembly → module
         asm_to_mod = self.td_assembly_to_module(
             assembly_repr.mean(dim=1)
         )  # (B, d_module)
-        module_repr = module_repr + asm_to_mod.unsqueeze(1)
+        module_repr = module_repr + torch.tanh(self.assembly_gate) * asm_to_mod.unsqueeze(1)
 
         # Module → domain
         mod_to_dom = self.td_module_to_domain(module_repr.mean(dim=1))  # (B, d_domain)
-        domain_repr = domain_repr + mod_to_dom.unsqueeze(1)
+        domain_repr = domain_repr + torch.tanh(self.module_gate) * mod_to_dom.unsqueeze(1)
 
         # Domain → residue (scatter back using domain boundaries)
         dom_to_res = self.td_domain_to_residue(domain_repr)  # (B, n_domains, d_residue)

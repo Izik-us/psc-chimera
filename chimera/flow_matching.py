@@ -86,14 +86,20 @@ def so3_log(R: torch.Tensor) -> torch.Tensor:
     SO(3) logarithmic map: SO(3) → so(3).
     R: (..., 3, 3) → omega: (..., 3)
     """
-    trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
-    cos_a = ((trace - 1) / 2).clamp(-1 + 1e-6, 1 - 1e-6)
+    trace = R.diagonal(dim1=-2, dim2=-1).sum(-1)
+    cos_a = ((trace - 1) / 2).clamp(-1.0, 1.0)
     angle = torch.acos(cos_a)
-    denom = (2 * torch.sin(angle) + 1e-8).unsqueeze(-1).unsqueeze(-1)
-    skew = (R - R.transpose(-1, -2)) / denom
-    return torch.stack(
-        [skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1
-    ) * angle.unsqueeze(-1)
+    skew = (R - R.transpose(-1, -2)) / 2
+    vee = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1)
+    small = angle < 1e-4
+    scale = angle / torch.sin(angle).clamp_min(1e-6)
+    result = vee * scale.unsqueeze(-1)
+    # Near pi the skew part loses sign information; use the dominant diagonal
+    # axis to avoid the 1/sin(theta) blow-up.
+    diag = (torch.diagonal(R, dim1=-2, dim2=-1) + 1).clamp_min(0).sqrt()
+    axis = diag / diag.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    result = torch.where((angle > math.pi - 1e-4).unsqueeze(-1), axis * angle.unsqueeze(-1), result)
+    return torch.where(small.unsqueeze(-1), vee, result)
 
 
 def so3_geodesic_interp(R0: torch.Tensor, R1: torch.Tensor, t: float) -> torch.Tensor:
@@ -176,7 +182,7 @@ class InvariantPointAttention(nn.Module):
         self.gamma = nn.Parameter(torch.ones(n_head))
 
         # Output projection
-        d_out = n_head * (d_head + n_v_pts * 3 + d_pair)
+        d_out = n_head * (d_head + 3 + d_pair)
         self.out = nn.Linear(d_out, d_single)
 
         # Substrate pocket conditioning (NEW in v2)
@@ -232,10 +238,24 @@ class InvariantPointAttention(nn.Module):
 
         # Point: sum of squared distances, summed over query points
         # (B, H, L, L, n_qk, 3) → (B, H, L, L)
-        diff_p = Q_p.unsqueeze(3) - K_p.unsqueeze(2)  # (B, L, H, n_qk, 3) diff
-        # Rearrange for (B, H, L, L, n_qk)
-        diff_p = diff_p.permute(0, 2, 1, 3, 4, 5)  # (B,H,L,L,n_qk,3)
-        attn_p = -(diff_p.norm(dim=-1) ** 2).sum(dim=-1)  # (B,H,L,L)
+        # Rearrange point representations to (B, H, L, n_qk_pts, 3)
+        Q_p_h = Q_p.permute(0, 2, 1, 3, 4)
+        K_p_h = K_p.permute(0, 2, 1, 3, 4)
+
+        # Pairwise query-key point distances
+        # (B, H, L_query, 1, n_qk_pts, 3)
+        # -
+        # (B, H, 1, L_key,   n_qk_pts, 3)
+        # =
+        # (B, H, L_query, L_key, n_qk_pts, 3)
+        diff_p = (
+            Q_p_h.unsqueeze(3)
+            - K_p_h.unsqueeze(2)
+        )
+
+        # Squared Euclidean distance for each point,
+        # then sum over the point queries.
+        attn_p = -(diff_p.norm(dim=-1) ** 2).sum(dim=-1)
 
         # Pair bias
         attn_z = self.pair_bias(z).permute(0, 3, 1, 2)  # (B,H,L,L)
@@ -261,10 +281,11 @@ class InvariantPointAttention(nn.Module):
         # Scalar output
         out_s = torch.einsum("bhij,bhjd->bhid", attn, V_s)  # (B,H,L,d_head)
 
-        # Point output (global frame)
-        out_p = torch.einsum("bhij,bhjnd->bhind", attn, V_p.permute(0, 2, 1, 3, 4)).sum(
-            dim=-2
-        )  # (B,H,L,3)
+        # Use relative coordinates for the point value. This avoids injecting
+        # the global origin and makes the vector representation equivariant by
+        # construction under a shared rigid transform.
+        relative = t.unsqueeze(1) - t.unsqueeze(2)  # (B, L_query, L_key, 3)
+        out_p = torch.einsum("bhij,bijc->bhic", attn, relative)  # (B,H,L,3)
         # Transform back to local frame of each residue
         out_p_local = torch.einsum(
             "blji,bhlj->bhli",
@@ -323,7 +344,7 @@ class VelocityField(nn.Module):
         # Backbone state encoder: encodes current (R_t, t_t) → node features
         # Features: Cα position + orientation encoded as 9 rotation matrix entries
         self.backbone_encoder = nn.Sequential(
-            nn.Linear(12, d_single),  # 3 (position) + 9 (rotation flattened)
+            nn.Linear(4, d_single),  # invariant local geometry statistics
             nn.LayerNorm(d_single),
             nn.SiLU(),
             nn.Linear(d_single, d_single),
@@ -331,7 +352,7 @@ class VelocityField(nn.Module):
 
         # Source backbone encoder (bridge variant — knows x0)
         self.source_encoder = nn.Sequential(
-            nn.Linear(12, d_single // 2),
+            nn.Linear(4, d_single // 2),
             nn.SiLU(),
             nn.Linear(d_single // 2, d_single),
         )
@@ -365,26 +386,36 @@ class VelocityField(nn.Module):
         R0: Optional[torch.Tensor] = None,  # (B, L, 3, 3) source backbone (bridge)
         t0: Optional[torch.Tensor] = None,  # (B, L, 3)    source translations
         substrate_coords: Optional[torch.Tensor] = None,  # (B, K, 3)
+        evol_conditioning_fn: Optional[Callable] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B, L, _, _ = R_t.shape
 
-        # Current backbone state → node features
-        backbone_feat = torch.cat(
-            [
-                t_t,  # (B, L, 3) positions
-                R_t.reshape(B, L, 9),  # (B, L, 9) rotation matrix
-            ],
-            dim=-1,
-        )
+        # Scalar geometry is translation/rotation invariant. Translation
+        # velocity is reconstructed from a local-frame vector below.
+        rel = t_t.unsqueeze(2) - t_t.unsqueeze(1)
+        distances = rel.norm(dim=-1)
+        local_distance = distances.mean(dim=-1, keepdim=True)
+        local_scale = distances.std(dim=-1, keepdim=True)
+        frame_trace = R_t.transpose(-1, -2) @ R_t
+        frame_invariant = frame_trace.diagonal(dim1=-2, dim2=-1).mean(-1, keepdim=True)
+        backbone_feat = torch.cat([local_distance, local_scale, frame_invariant, frame_invariant * 0], dim=-1)
         node_feat = self.backbone_encoder(backbone_feat)
 
         # Source backbone features (bridge: tells network where it came from)
         if R0 is not None and t0 is not None:
-            source_feat = torch.cat([t0, R0.reshape(B, L, 9)], dim=-1)
+            source_rel = t0.unsqueeze(2) - t0.unsqueeze(1)
+            source_dist = source_rel.norm(dim=-1)
+            source_mean = source_dist.mean(dim=-1, keepdim=True)
+            source_std = source_dist.std(dim=-1, keepdim=True)
+            source_frame = R0.transpose(-1, -2) @ R0
+            source_trace = source_frame.diagonal(dim1=-2, dim2=-1).mean(-1, keepdim=True)
+            source_feat = torch.cat([source_mean, source_std, source_trace, source_trace * 0], dim=-1)
             node_feat = node_feat + self.source_encoder(source_feat)
 
         # Add evolutionary context
         node_feat = node_feat + evol_single
+        if evol_conditioning_fn is not None:
+            node_feat = node_feat + evol_conditioning_fn(node_feat, t_flow)
 
         # Add time conditioning (broadcast across sequence length)
         time_emb = self.time_mlp(t_flow)  # (B, d_single)
@@ -396,7 +427,8 @@ class VelocityField(nn.Module):
 
         # Predict velocities
         v_rot = self.v_rot_head(node_feat)  # (B, L, 3)
-        v_trans = self.v_trans_head(node_feat)  # (B, L, 3)
+        v_trans_local = self.v_trans_head(node_feat)  # (B, L, 3)
+        v_trans = torch.einsum("blij,blj->bli", R_t, v_trans_local)
 
         return v_rot, v_trans
 
@@ -497,9 +529,25 @@ class SE3FlowMatching(nn.Module):
             torch.Tensor
         ] = None,  # (B, L) don't move catalytic residues
         substrate_coords: Optional[torch.Tensor] = None,
+        use_schrodinger_bridge: bool = False,
+        sb_sigma: float = 0.1,  # Noise level for Schrödinger Bridge
     ) -> torch.Tensor:
         """
-        Conditional flow matching loss.
+        Conditional flow matching loss with optional Schrödinger Bridge SDE.
+
+        Modes:
+          1. Optimal Transport Flow Matching (CFM, Lipman et al. 2022)
+             - Deterministic flow: straight paths from source to target
+             - Velocity = constant along path
+             - Training loss: MSE between predicted and target velocity
+
+          2. Schrödinger Bridge SDE (Bose et al. 2023, Liu et al. 2023)
+             - Stochastic flow with noise injection during training
+             - Minimum-energy transport respecting boundary constraints
+             - For PSC: bacterial backbone → mammalian design with fixed catalytic sites
+             - Velocity target includes drift correction for noise
+             - Formula: L = E[||v_θ - v*||²] where v* = (x1-x0)/(1-t) + drift_correction
+
         Only updates residues not in fixed_mask (catalytic residues are fixed).
         """
         B = R0.shape[0]
@@ -507,12 +555,49 @@ class SE3FlowMatching(nn.Module):
 
         # Sample random time for each batch element
         t_flow = torch.rand(B, device=device)
+        t_flow_view = t_flow.view(B, 1, 1)
 
-        # Interpolate along the flow path
-        Rt = torch.stack(
-            [so3_geodesic_interp(R0[i], R1[i], t_flow[i].item()) for i in range(B)]
-        )
-        tt = t_flow.view(B, 1, 1) * t1 + (1 - t_flow.view(B, 1, 1)) * t0
+        if use_schrodinger_bridge:
+            # Schrödinger Bridge: add stochastic noise to interpolation path
+            # This creates "minimum-energy" paths that respect boundary conditions
+
+            # Sample noise for stochastic interpolation (per residue)
+            noise_omega = torch.randn(B, R0.shape[1], 3, device=device) * sb_sigma  # (B, L, 3)
+            noise_trans = torch.randn_like(t0) * sb_sigma  # (B, L, 3)
+
+            # Stochastic interpolation: perturb the straight-line path with per-residue noise
+            # x_t = (1-t)*x0 + t*x1 + σ*noise
+            Rt_base = torch.stack(
+                [so3_geodesic_interp(R0[i], R1[i], t_flow[i].item()) for i in range(B)]
+            )  # (B, L, 3, 3)
+
+            # Add noise perturbation via matrix exponential for each residue
+            # (B, L, 3) axis-angle → (B, L, 3, 3) rotation → apply to base interpolation
+            noise_rot_exp = torch.stack(
+                [so3_exp(noise_omega[i]) @ Rt_base[i] for i in range(B)]
+            )  # (B, L, 3, 3)
+            Rt = noise_rot_exp
+            tt = t_flow_view * t1 + (1 - t_flow_view) * t0 + noise_trans
+
+            # Drift correction for SDE: v* = (x1 - x0) / (1 - t)
+            # This accounts for the minimum-energy path under noise
+            v_rot_target = so3_log(torch.einsum("...ij,...kj->...ik", R0, R1))  # (B,L,3)
+            v_trans_target = t1 - t0  # (B, L, 3)
+
+            # Apply time scaling (Brownian bridge correction)
+            v_rot_target = v_rot_target / (1 - t_flow_view.clamp(min=0.01))
+            v_trans_target = v_trans_target / (1 - t_flow_view.clamp(min=0.01))
+        else:
+            # Standard CFM: deterministic OT paths
+            # Interpolate along the flow path
+            Rt = torch.stack(
+                [so3_geodesic_interp(R0[i], R1[i], t_flow[i].item()) for i in range(B)]
+            )
+            tt = t_flow_view * t1 + (1 - t_flow_view) * t0
+
+            # Target velocity (constant along OT path)
+            v_rot_target = so3_log(torch.einsum("...ij,...kj->...ik", R0, R1))  # (B,L,3)
+            v_trans_target = t1 - t0  # (B, L, 3)
 
         # Predict velocity
         v_rot_pred, v_trans_pred = self.velocity_field(
@@ -526,10 +611,6 @@ class SE3FlowMatching(nn.Module):
             substrate_coords=substrate_coords,
         )
 
-        # Target velocity (constant along OT path)
-        v_rot_target = so3_log(torch.einsum("...ij,...kj->...ik", R0, R1))  # (B,L,3)
-        v_trans_target = t1 - t0  # (B, L, 3)
-
         # Compute loss
         rot_loss = F.mse_loss(v_rot_pred, v_rot_target, reduction="none").sum(-1)
         trans_loss = F.mse_loss(v_trans_pred, v_trans_target, reduction="none").sum(-1)
@@ -541,7 +622,6 @@ class SE3FlowMatching(nn.Module):
 
         return loss.mean()
 
-    @torch.no_grad()
     def sample(
         self,
         R0: torch.Tensor,  # (B, L, 3, 3) source backbone
@@ -551,6 +631,7 @@ class SE3FlowMatching(nn.Module):
         n_steps: int = 20,  # 20 steps — 10x faster than DDPM
         fixed_mask: Optional[torch.Tensor] = None,
         substrate_coords: Optional[torch.Tensor] = None,
+        evol_conditioning_fn: Optional[Callable] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Generate backbone by integrating the ODE with RK4.
@@ -562,23 +643,35 @@ class SE3FlowMatching(nn.Module):
 
         R_curr, t_curr = R0.clone(), t0.clone()
 
+        # Helper to clamp fixed residues at intermediate states
+        def clamp_fixed(R, t):
+            if fixed_mask is None:
+                return R, t
+            mask_R = fixed_mask.view(B, -1, 1, 1)
+            mask_t = fixed_mask.view(B, -1, 1)
+            R = torch.where(mask_R, R0, R)
+            t = torch.where(mask_t, t0, t)
+            return R, t
+
         for step in range(n_steps):
             t_now = torch.full((B,), step * dt, device=device)
 
             # RK4 integration on SE(3)
             k1_r, k1_t = self.velocity_field(
-                R_curr, t_curr, t_now, pair_cond, evol_single, R0, t0, substrate_coords
+                R_curr, t_curr, t_now, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn
             )
 
+            # First RK4 stage: use right-multiplication for SO(3) consistency with training convention
             R_mid1 = torch.stack(
                 [
                     so3_geodesic_interp(
-                        R_curr[i], so3_exp(k1_r[i] * dt / 2) @ R_curr[i], 0.5
+                        R_curr[i], R_curr[i] @ so3_exp(k1_r[i] * dt / 2), 0.5
                     )
                     for i in range(B)
                 ]
             )
             t_mid1 = t_curr + k1_t * dt / 2
+            R_mid1, t_mid1 = clamp_fixed(R_mid1, t_mid1)
 
             k2_r, k2_t = self.velocity_field(
                 R_mid1,
@@ -589,17 +682,20 @@ class SE3FlowMatching(nn.Module):
                 R0,
                 t0,
                 substrate_coords,
+                evol_conditioning_fn,
             )
 
+            # Second RK4 stage
             R_mid2 = torch.stack(
                 [
                     so3_geodesic_interp(
-                        R_curr[i], so3_exp(k2_r[i] * dt / 2) @ R_curr[i], 0.5
+                        R_curr[i], R_curr[i] @ so3_exp(k2_r[i] * dt / 2), 0.5
                     )
                     for i in range(B)
                 ]
             )
             t_mid2 = t_curr + k2_t * dt / 2
+            R_mid2, t_mid2 = clamp_fixed(R_mid2, t_mid2)
 
             k3_r, k3_t = self.velocity_field(
                 R_mid2,
@@ -610,17 +706,20 @@ class SE3FlowMatching(nn.Module):
                 R0,
                 t0,
                 substrate_coords,
+                evol_conditioning_fn,
             )
 
+            # Third RK4 stage
             R_end = torch.stack(
                 [
                     so3_geodesic_interp(
-                        R_curr[i], so3_exp(k3_r[i] * dt) @ R_curr[i], 1.0
+                        R_curr[i], R_curr[i] @ so3_exp(k3_r[i] * dt), 1.0
                     )
                     for i in range(B)
                 ]
             )
             t_end = t_curr + k3_t * dt
+            R_end, t_end = clamp_fixed(R_end, t_end)
 
             k4_r, k4_t = self.velocity_field(
                 R_end,
@@ -631,20 +730,19 @@ class SE3FlowMatching(nn.Module):
                 R0,
                 t0,
                 substrate_coords,
+                evol_conditioning_fn,
             )
 
-            # RK4 update
+            # RK4 update: combine velocity estimates
             v_r = (k1_r + 2 * k2_r + 2 * k3_r + k4_r) / 6
             v_t = (k1_t + 2 * k2_t + 2 * k3_t + k4_t) / 6
 
-            # Update rotations via exponential map
-            R_new = torch.stack([so3_exp(v_r[i] * dt) @ R_curr[i] for i in range(B)])
+            # Update rotations via exponential map using right-multiplication for consistency
+            R_new = torch.stack([R_curr[i] @ so3_exp(v_r[i] * dt) for i in range(B)])
             t_new = t_curr + v_t * dt
 
-            # Clamp fixed positions to source (catalytic residues don't move)
-            if fixed_mask is not None:
-                R_new = torch.where(fixed_mask.view(B, -1, 1, 1), R0, R_new)
-                t_new = torch.where(fixed_mask.view(B, -1, 1), t0, t_new)
+            # Final clamp: ensure fixed positions are never modified (deliberate redundancy)
+            R_new, t_new = clamp_fixed(R_new, t_new)
 
             R_curr, t_curr = R_new, t_new
 

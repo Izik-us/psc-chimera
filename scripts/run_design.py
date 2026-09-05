@@ -44,6 +44,9 @@ def parse_args():
     p.add_argument(
         "--no-rag", action="store_true", help="Disable structural retrieval RAG"
     )
+    p.add_argument(
+        "--demo", action="store_true", help="Use synthetic inputs; do not use output as a biological design"
+    )
     return p.parse_args()
 
 
@@ -64,6 +67,7 @@ def main():
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from chimera.chimera_v2 import CHIMERAv2, NRPSConstraints
+    from chimera.structure_utils import load_backbone_pdb, load_msa
 
     # Load model
     model = CHIMERAv2.from_pretrained(
@@ -75,14 +79,10 @@ def main():
     # Load source backbone (bacterial NRPS)
     if args.source_pdb:
         print(f"Loading source backbone from {args.source_pdb}")
-        # Parse PDB → extract N/CA/C/O → convert to SE(3) frames
-        # (Full implementation: use biotite or biopython)
-        raise NotImplementedError(
-            "PDB parsing not yet implemented. "
-            "Provide source_R and source_t tensors directly for now."
-        )
+        source_R, source_t = load_backbone_pdb(args.source_pdb)
     else:
-        # Use random initialization (for testing without a PDB)
+        if not args.demo:
+            raise ValueError("--source-pdb is required outside --demo mode")
         print("No source PDB provided — using identity frames (for testing)")
         L = 600  # default A-domain length
         source_R = torch.eye(3).view(1, 1, 3, 3).expand(1, L, -1, -1).to(device)
@@ -91,9 +91,13 @@ def main():
     # Load or create MSA
     if args.msa_file:
         print(f"Loading MSA from {args.msa_file}")
-        # Parse MSA file → tokenize
-        raise NotImplementedError("MSA loading: implement based on your file format")
+        msa_tokens = load_msa(args.msa_file).to(device)
+        L = msa_tokens.shape[-1]
+        if source_t.shape[-2] != L:
+            raise ValueError("PDB residue count and MSA alignment length must match")
     else:
+        if not args.demo:
+            raise ValueError("--msa-file is required outside --demo mode")
         print("No MSA file provided — using random tokens (for testing)")
         L, N_seq = 600, 32
         msa_tokens = torch.randint(0, 23, (1, N_seq, L), device=device)
@@ -103,11 +107,13 @@ def main():
     results = model.design(
         nrps_msa=msa_tokens,
         source_backbone=(source_R, source_t),
-        initial_pair_features=torch.zeros(1, L, L, 32, device=device),
+        initial_pair_features=torch.zeros(1, L, L, model.evoformer.d_pair, device=device),
         target_substrate=args.substrate,
         n_designs=args.n_designs,
         n_pareto_samples=args.n_pareto,
         device=str(device),
+        flow_steps=args.flow_steps,
+        use_rag=not args.no_rag,
     )
 
     # Save results

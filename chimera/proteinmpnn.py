@@ -48,7 +48,10 @@ def get_protein_graph(
 
     # Self-loop distance = inf (exclude self)
     dist_no_self = dist + torch.eye(L, device=device).unsqueeze(0) * 1e9
-    _, top_k_idx = dist_no_self.topk(k_neighbors, dim=-1, largest=False)
+    # Clamp k to L-1 so short sequences (L < k_neighbors+1) don't crash topk
+    # (audit issue #18).
+    k = max(1, min(k_neighbors, L - 1))
+    _, top_k_idx = dist_no_self.topk(k, dim=-1, largest=False)
 
     # Geometric edge features (ProteinMPNN convention)
     features = _compute_edge_features(t_coords, R_frames, top_k_idx)

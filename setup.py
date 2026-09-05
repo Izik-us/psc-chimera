@@ -28,7 +28,6 @@ setup(
     entry_points={
         "console_scripts": [
             "chimera-design=scripts.run_design:main",
-            "chimera-codon=scripts.run_codon_optimizer:main",
         ],
     },
 )

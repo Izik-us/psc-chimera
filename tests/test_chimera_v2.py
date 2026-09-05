@@ -15,13 +15,18 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from chimera.chimera_v2 import CHIMERAv2, NRPSConstraints
-from chimera.flow_matching import SE3FlowMatching, so3_exp, so3_log, se3_interp
+from chimera.flow_matching import SE3FlowMatching, VelocityField, so3_exp, so3_log, se3_interp
+from chimera.evoformer import EvoFormer
+from chimera.geometry import validate_backbone
+from data.dataset import ChimeraJSONLDataset
 from chimera.multi_objective import (
     ParetoMultiObjectiveHead,
     BayesianUncertaintyEstimator,
     MultiScaleNRPSDesigner,
     DPOTrainer,
+    AutoregressiveSequencePolicy,
 )
+from chimera.pcgrad import project_conflicting_gradients
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -75,6 +80,12 @@ def chimera_model(small_config):
 
 class TestSO3Math:
 
+    def test_evoformer_outer_product_path_runs(self):
+        model = EvoFormer(n_blocks=1, c_msa=32, c_z=16, c_s=24, vocab_size=23)
+        single, pair = model(torch.randint(0, 23, (1, 3, 8)))
+        assert single.shape == (1, 8, 24)
+        assert pair.shape == (1, 8, 8, 16)
+
     def test_so3_exp_returns_rotation_matrix(self):
         """exp map should return matrices with det=1 and R^T R = I."""
         omega = torch.randn(4, 3) * 0.5
@@ -112,6 +123,20 @@ class TestSO3Math:
 
 
 class TestFlowMatching:
+
+    def test_velocity_field_is_se3_covariant(self):
+        torch.manual_seed(4)
+        model = VelocityField(d_single=64, d_pair=32, n_blocks=1, n_head=8).eval()
+        R = so3_exp(torch.randn(1, 5, 3) * 0.2)
+        t = torch.randn(1, 5, 3)
+        Q = so3_exp(torch.randn(1, 3) * 0.4)[0]
+        pair = torch.randn(1, 5, 5, 32)
+        single = torch.randn(1, 5, 64)
+        v_rot, v_trans = model(R, t, torch.tensor([0.4]), pair, single)
+        rotated_rot, rotated_trans = model(Q @ R, torch.einsum("ij,blj->bli", Q, t), torch.tensor([0.4]), pair, single)
+        assert (v_rot - rotated_rot).abs().max() < 1e-5
+        expected = torch.einsum("ij,blj->bli", Q, v_trans)
+        assert (expected - rotated_trans).abs().max() < 1e-5
 
     def test_flow_matching_loss_shape(self):
         B, L = 2, 30
@@ -161,6 +186,30 @@ class TestFlowMatching:
 
         # Fixed positions should be exactly R0, t0
         assert (t_out[:, :5] - t0[:, :5]).abs().max() < 1e-5
+        assert (R_out[:, :5] - R0[:, :5]).abs().max() < 1e-5
+
+    def test_backbone_geometry_report_rejects_clashes(self):
+        coords = torch.zeros(1, 4, 4, 3)
+        report = validate_backbone(coords)
+        assert report.clash_count > 0
+        assert not report.valid
+
+
+class TestTrainingData:
+
+    def test_jsonl_dataset_schema(self, tmp_path):
+        import json
+        path = tmp_path / "train.jsonl"
+        record = {
+            "msa_tokens": [[0, 1, 2]],
+            "source_R": [[[1, 0, 0], [0, 1, 0], [0, 0, 1]] for _ in range(3)],
+            "source_t": [[0, 0, 0] for _ in range(3)],
+            "target_R": [[[1, 0, 0], [0, 1, 0], [0, 0, 1]] for _ in range(3)],
+            "target_t": [[0, 0, 0] for _ in range(3)],
+        }
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        item = ChimeraJSONLDataset(path)[0]
+        assert item["msa_tokens"].shape == (1, 3)
 
 
 # ── Multi-Scale Designer Tests ────────────────────────────────────────────────
@@ -328,10 +377,11 @@ class TestCHIMERAv2Integration:
                 n_flow_steps=3,
                 n_mpnn_seqs=2,
             )
-        assert outputs["sequences"].shape[0] == B
+        n_seqs = 2
+        assert outputs["sequences"].shape == (B, n_seqs, L, 20)
         assert outputs["backbone_coords"].shape == (B, L, 4, 3)
-        assert outputs["evol_plausibility"].shape == (B,)
-        assert outputs["assembly_compat"].shape == (B,)
+        assert outputs["evol_plausibility"].shape == (B, n_seqs)
+        assert outputs["assembly_compat"].shape == (B, n_seqs)
 
     def test_save_load_connectors(self, chimera_model, tmp_path):
         """Save connector weights, reload, verify forward pass still works."""
@@ -351,6 +401,23 @@ class TestCHIMERAv2Integration:
 
 class TestDPO:
 
+    def test_autoregressive_policy_uses_prefix(self):
+        policy = AutoregressiveSequencePolicy(context_dim=32)
+        context = torch.randn(1, 6, 32)
+        first = torch.tensor([[0, 1, 2, 3, 4, 5]])
+        second = first.clone()
+        second[0, 1] = 6
+        first_logprob = policy.logprob(context, first)
+        second_logprob = policy.logprob(context, second)
+        assert not torch.equal(first_logprob, second_logprob)
+
+    def test_pcgrad_projects_conflict(self):
+        parameter = torch.nn.Parameter(torch.tensor([1.0]))
+        losses = [(parameter - 2).pow(2).sum(), (parameter + 2).pow(2).sum()]
+        project_conflicting_gradients(losses, [parameter])
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
+
     def test_dpo_loss_winner_higher_than_loser(self):
         """After enough DPO steps, winner should have higher log-prob than loser."""
         # This is a smoke test — just checks loss is computable, not convergence
@@ -365,6 +432,8 @@ class TestDPO:
             loser_tokens=torch.randint(0, 20, (L,)),
             msa_tokens=torch.randint(0, 23, (4, L)),
             pair_features=torch.randn(L, L, 32),
+            source_R=torch.eye(3).unsqueeze(0).expand(L, -1, -1),
+            source_t=torch.randn(L, 3),
         )
         # Just test it doesn't crash with mock model
         # (full DPO test requires actual CHIMERA forward pass — tagged as slow)
