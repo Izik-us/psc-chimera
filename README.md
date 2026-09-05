@@ -11,6 +11,13 @@
 
 *Stage 1 computational design engine of the Pharmacosynthetic Constructor (PSC) Engineering Pipeline*
 
+> **Implementation status:** This repository is a research prototype. The local
+> EvoFormer, flow, and ProteinMPNN classes are shape-compatible approximations,
+> not the OpenFold, RFdiffusion, or dauparas/ProteinMPNN models. Their external
+> checkpoints cannot be loaded into these classes. The CLI now refuses missing
+> biological inputs unless `--demo` is explicitly requested. Do not interpret
+> demo or uncalibrated proxy scores as validated biological designs.
+
 [Overview](#overview) • [What CHIMERA Engineers](#what-chimera-engineers) • [Architecture](#architecture) • [Quick Start](#quick-start) • [Installation](#installation) • [Pipeline](#psc-pipeline) • [Roadmap](#roadmap)
 
 </div>
@@ -25,7 +32,10 @@ The **Pharmacosynthetic Constructor (PSC)** is a theoretical biomedical engineer
 
 Layer 1 is an engineered NRPS/PKS hybrid assembly line operating inside mammalian cells. Building it requires designing not just one enzyme domain but an entire coordinated molecular factory: every domain in the assembly line, every junction between modules, every novel catalytic insert, and the full multi-module architecture that strings them together into a continuous synthesis pathway.
 
-CHIMERA solves the 30-year unsolved problem of NRPS mammalian expression and module incompatibility by bridging bacterial NRPS chemistry toward mammalian-functional designs through SE(3) OT-Flow Matching, evolutionary context from animal NRPS homologs, and iterative learning from PROTEUS experimental results.
+CHIMERA is intended to study the engineering problems of NRPS mammalian
+expression and module compatibility. It does not yet solve those problems:
+the mammalian target dataset, calibrated biological evaluators, and wet-lab
+validation remain future work.
 
 ---
 
@@ -126,9 +136,9 @@ including A, T, C, TE, E, Cy, Mt domain sequences
 
 | Component | Params | Status |
 |-----------|--------|--------|
-| EvoFormer (48 blocks) | ~700M | Frozen |
-| Flow matching backbone | ~50M | Frozen |
-| ProteinMPNN base | ~10M | Frozen |
+| EvoFormer approximation | small local model | Frozen by default |
+| SE(3) flow approximation | local model | Frozen by default |
+| ProteinMPNN approximation | small local model | Frozen by default |
 | **Connectors + heads** | **~12M** | **Trainable** |
 
 ---
@@ -218,11 +228,15 @@ cd psc-chimera
 pip install -e .
 ```
 
-### 2. Download pretrained weights
+### 2. Optional external weights
 
 ```bash
 bash scripts/download_weights.sh
 ```
+
+The downloaded RFdiffusion and ProteinMPNN checkpoints are not loadable by the
+local approximation classes. Use them only after installing and configuring
+the corresponding upstream backends and adapters.
 
 ### 3. Install external dependencies (production)
 

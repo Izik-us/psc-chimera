@@ -56,10 +56,12 @@ References:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import argparse
 import re
 import math
+import pickle
 import subprocess
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, Sequence
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CODON TABLE AND VOCABULARY
@@ -197,13 +199,29 @@ HUMAN_CODON_FREQ: Dict[str, float] = {
 }
 
 
+def relative_adaptiveness(codon: str) -> float:
+    """Return codon frequency normalized within its synonymous amino-acid set."""
+    amino_acid = next(aa for aa, codons in CODON_TABLE.items() if codon in codons)
+    maximum = max(HUMAN_CODON_FREQ.get(synonym, 0.1) for synonym in CODON_TABLE[amino_acid])
+    return HUMAN_CODON_FREQ.get(codon, 0.1) / maximum
+
+
 def get_synonymous_mask(amino_acid: str, device: torch.device) -> torch.Tensor:
     """
     Returns a 64-dim boolean tensor with True at valid synonymous codon positions.
     This is the hard constraint: non-synonymous codons are masked to -inf.
+
+    Raises ValueError for unknown amino acids (no silent all-false mask that
+    would later produce uniform logits over invalid codons — audit issue #16).
     """
+    codons = CODON_TABLE.get(amino_acid)
+    if not codons:
+        raise ValueError(
+            f"Unknown amino acid residue '{amino_acid}'. Expected one of "
+            f"{''.join(sorted(CODON_TABLE))} (standard 20 + stop)."
+        )
     mask = torch.zeros(len(ALL_CODONS), dtype=torch.bool, device=device)
-    for codon in CODON_TABLE.get(amino_acid, []):
+    for codon in codons:
         if codon in CODON_TO_IDX:
             mask[CODON_TO_IDX[codon]] = True
     return mask
@@ -220,7 +238,13 @@ def tokenize_dna(dna: str) -> torch.Tensor:
     """Convert DNA coding sequence (codons) to integer token tensor."""
     assert len(dna) % 3 == 0, "DNA length must be divisible by 3"
     codons = [dna[i : i + 3] for i in range(0, len(dna), 3)]
-    return torch.tensor([CODON_TO_IDX.get(c, 0) for c in codons], dtype=torch.long)
+    # Unknown codons (e.g. 'NNN') must not silently map to token 0 (audit #16).
+    unknown = [c for c in codons if c not in CODON_TO_IDX]
+    if unknown:
+        raise ValueError(
+            f"tokenize_dna: {len(unknown)} unknown codon(s): {sorted(set(unknown))[:5]}..."
+        )
+    return torch.tensor([CODON_TO_IDX[c] for c in codons], dtype=torch.long)
 
 
 def detokenize_dna(tokens: torch.Tensor) -> str:
@@ -250,7 +274,7 @@ def compute_cai(codon_tokens: torch.Tensor) -> torch.Tensor:
     Bacterial NRPS genes typically have CAI < 0.60 in human cells.
     """
     freq_tensor = torch.tensor(
-        [HUMAN_CODON_FREQ.get(ALL_CODONS[i], 0.1) for i in range(len(ALL_CODONS))],
+        [relative_adaptiveness(ALL_CODONS[i]) for i in range(len(ALL_CODONS))],
         dtype=torch.float32,
         device=codon_tokens.device,
     )
@@ -266,7 +290,7 @@ def compute_cai_from_logits(logits: torch.Tensor) -> torch.Tensor:
     logits: (L, 64) codon logits
     """
     freq_tensor = torch.tensor(
-        [HUMAN_CODON_FREQ.get(ALL_CODONS[i], 0.1) for i in range(len(ALL_CODONS))],
+        [relative_adaptiveness(ALL_CODONS[i]) for i in range(len(ALL_CODONS))],
         dtype=torch.float32,
         device=logits.device,
     )  # (64,)
@@ -304,12 +328,11 @@ def gc_from_logits(logits: torch.Tensor) -> torch.Tensor:
 
 def upa_penalty(logits: torch.Tensor) -> torch.Tensor:
     """
-    UpA dinucleotide penalty.
-    UpA (where X=any nucleotide) are preferred RNase cleavage sites.
-    This penalizes codons that END in a nucleotide adjacent to codons that START with A.
+    UpA dinucleotide penalty. UpA = U (T in DNA) followed by A across codon boundary.
+    Penalizes T|A junctions which are RNase-sensitive. Previous AA|A version was incorrect.
     """
-    ends_with_non_A = torch.tensor(
-        [0.0 if ALL_CODONS[i][-1] != "A" else 1.0 for i in range(len(ALL_CODONS))],
+    ends_with_U = torch.tensor(
+        [1.0 if ALL_CODONS[i][-1] == "T" else 0.0 for i in range(len(ALL_CODONS))],
         dtype=torch.float32,
         device=logits.device,
     )
@@ -319,22 +342,52 @@ def upa_penalty(logits: torch.Tensor) -> torch.Tensor:
         device=logits.device,
     )
     probs = F.softmax(logits, dim=-1)  # (L, 64)
-    ends = (probs * ends_with_non_A).sum(-1)[:-1]  # (L-1,)
+    ends = (probs * ends_with_U).sum(-1)[:-1]  # (L-1,)
     starts = (probs * starts_with_A).sum(-1)[1:]  # (L-1,) shifted
     return (ends * starts).sum()
+
+
+def motif_penalty_from_logits(logits: torch.Tensor) -> torch.Tensor:
+    """Differentiable penalty for common DNA/RNA instability motifs."""
+    probs = F.softmax(logits, dim=-1)
+    codon_bases = torch.tensor(
+        [[[1.0 if base == nucleotide else 0.0 for nucleotide in "ACGT"] for base in codon]
+         for codon in ALL_CODONS],
+        dtype=probs.dtype,
+        device=logits.device,
+    )
+    nucleotide_probs = torch.einsum("lc,cnk->lnk", probs, codon_bases).reshape(-1, 4)
+
+    def pattern_probability(pattern: str) -> torch.Tensor:
+        indices = ["ACGT".index(base) for base in pattern]
+        probabilities = [
+            nucleotide_probs[offset : offset + len(pattern), indices].prod()
+            for offset in range(len(nucleotide_probs) - len(pattern) + 1)
+        ]
+        return torch.stack(probabilities).sum()
+
+    upa = pattern_probability("TA")
+    poly_a = pattern_probability("AATAAA") + pattern_probability("ATTAAA")
+    au_rich = pattern_probability("ATTTAT")
+    return upa + 2.0 * poly_a + au_rich
 
 
 def count_bad_motifs(dna_seq: str) -> int:
     """
     Count occurrences of all Fath et al. bad sequence motifs.
     Used for reporting and hard post-processing.
+    Note: splice motif GT...AG is a crude filter, not a full splice predictor;
+    RNA secondary structure ΔG is approximated via GC proxy (ViennaRNA recommended for production).
     """
     rna = dna_seq.replace("T", "U")
     count = 0
     count += len(re.findall(r"AATAAA|ATTAAA", dna_seq))  # (vi) poly-A signals
     count += len(re.findall(r"AUUUA|UAUUUAU", rna))  # (iv) AU-rich elements
-    count += len(re.findall(r"GT[ACGT]{4,6}AG", dna_seq))  # (v)  cryptic splice
-    count += dna_seq.count("CG") // 10  # approximate CpG check
+    count += len(re.findall(r"GT[ACGT]{4,6}AG", dna_seq))  # (v) crude cryptic splice filter
+    # UpA: only UA (TA in DNA) is RNase-sensitive; previous [ACGU]A over-counted
+    count += len(re.findall(r"UA", rna))
+    # CpG: report actual CG count (context-dependent; not divided by 10)
+    count += dna_seq.count("CG")
     return count
 
 
@@ -382,7 +435,7 @@ class ExpressionPredictor(nn.Module):
             d_model=d_model,
             nhead=n_heads,
             dim_feedforward=d_model * 4,
-            dropout=0.1,
+            dropout=0.17,
             batch_first=True,
         )
         self.global_transformer = nn.TransformerEncoder(
@@ -412,7 +465,12 @@ class ExpressionPredictor(nn.Module):
         codon_tokens: (B, L) integer codon token IDs
         Returns: (B,) predicted expression yield in [0, 1]
         """
-        x = self.codon_embed(codon_tokens)  # (B, L, d_model)
+        if codon_tokens.dim() == 3:
+            # Soft codon distributions keep the critic connected to decoder
+            # logits during training while retaining the same embedding space.
+            x = torch.matmul(codon_tokens, self.codon_embed.weight[: len(ALL_CODONS)])
+        else:
+            x = self.codon_embed(codon_tokens)  # (B, L, d_model)
 
         # Local: CNN features
         x_t = x.transpose(1, 2)  # (B, d_model, L) for Conv1d
@@ -456,9 +514,41 @@ class CodonOptimizer(nn.Module):
         dim_ff: int = 1024,
         dropout: float = 0.1,
         esm_model_name: str = "esm2_t30_150M_UR50D",
+        esm_model_path: Optional[str] = None,
     ):
         super().__init__()
         self.d_model = d_model
+        self.esm_model_name = esm_model_name
+        self.esm_model_path = esm_model_path
+        self.esm_model = None
+        self.esm_alphabet = None
+        self.esm_batch_converter = None
+
+        if esm_model_path is not None:
+            try:
+                import esm
+            except ImportError as exc:
+                raise RuntimeError(
+                    "esm_model_path was provided, but fair-esm is not installed"
+                ) from exc
+            try:
+                self.esm_model, self.esm_alphabet = esm.pretrained.load_model_and_alphabet_local(
+                    esm_model_path
+                )
+            except (pickle.UnpicklingError, RuntimeError) as exc:
+                if "Weights only load failed" not in str(exc):
+                    raise
+                torch.serialization.add_safe_globals([argparse.Namespace])
+                self.esm_model, self.esm_alphabet = esm.pretrained.load_model_and_alphabet_local(
+                    esm_model_path
+                )
+            self.esm_batch_converter = self.esm_alphabet.get_batch_converter()
+            for parameter in self.esm_model.parameters():
+                parameter.requires_grad = False
+            self.esm_model.eval()
+            esm_dim = int(getattr(self.esm_model, "embed_dim", 640))
+        else:
+            esm_dim = d_model
 
         # ── Encoder: ESM-2 150M (mostly frozen) ─────────────────────────────
         # In production: from transformers import EsmModel
@@ -476,7 +566,7 @@ class CodonOptimizer(nn.Module):
         )
         # Projection from ESM hidden dim (640) → d_model
         # (identity in stub since we initialize to d_model directly)
-        self.esm_projection = nn.Linear(d_model, d_model)
+        self.esm_projection = nn.Linear(esm_dim, d_model)
 
         # ── Decoder: Autoregressive TransformerDecoder ───────────────────────
         self.codon_embedding = nn.Embedding(VOCAB_SIZE, d_model)
@@ -497,6 +587,15 @@ class CodonOptimizer(nn.Module):
         # ── Biological critic (separate, pre-trained independently) ──────────
         self.expression_predictor = ExpressionPredictor(d_model=128)
 
+        # ESM mode bypasses the lightweight fallback encoder entirely. Keep
+        # its parameters for checkpoint compatibility, but exclude them from
+        # gradient updates when local ESM2 is active.
+        if self.esm_model is not None:
+            for parameter in self.aa_embedding.parameters():
+                parameter.requires_grad = False
+            for parameter in self.protein_encoder.parameters():
+                parameter.requires_grad = False
+
         self._init_weights()
 
     def _init_weights(self):
@@ -504,14 +603,52 @@ class CodonOptimizer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p, gain=0.1)
 
-    def encode_protein(self, protein_tokens: torch.Tensor) -> torch.Tensor:
+    @classmethod
+    def from_checkpoint(
+        cls,
+        path: str,
+        map_location: str | torch.device = "cpu",
+        **overrides,
+    ) -> "CodonOptimizer":
+        """Load a trained optimizer checkpoint with its saved architecture."""
+        checkpoint = torch.load(path, map_location=map_location)
+        config = dict(checkpoint.get("config", {})) if isinstance(checkpoint, dict) else {}
+        config.update(overrides)
+        model = cls(**config)
+        state = checkpoint.get("model", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        model.load_state_dict(state, strict=True)
+        return model
+
+    def encode_protein(
+        self,
+        protein_tokens: torch.Tensor,
+        protein_sequences: Optional[Sequence[str]] = None,
+    ) -> torch.Tensor:
         """
         Encode protein sequence via ESM-2 (or stub encoder).
         protein_tokens: (B, L_aa) integer amino acid token IDs
         Returns: (B, L_aa, d_model) contextual residue representations
         """
-        x = self.aa_embedding(protein_tokens)  # (B, L_aa, d_model)
-        x = self.protein_encoder(x)  # (B, L_aa, d_model)
+        if self.esm_model is not None:
+            if protein_sequences is None:
+                protein_sequences = [
+                    "".join(
+                        AA_VOCAB[token]
+                        if 0 <= int(token) < len(AA_VOCAB)
+                        else "X"
+                        for token in row
+                    )
+                    for row in protein_tokens.detach().cpu()
+                ]
+            batch = [(str(index), sequence) for index, sequence in enumerate(protein_sequences)]
+            _, _, esm_tokens = self.esm_batch_converter(batch)
+            esm_tokens = esm_tokens.to(protein_tokens.device)
+            with torch.no_grad():
+                result = self.esm_model(esm_tokens, repr_layers=[30], return_contacts=False)
+            x = result["representations"][30][:, 1:-1]
+        else:
+            x = self.aa_embedding(protein_tokens)  # (B, L_aa, d_model)
+            x = self.protein_encoder(x)  # (B, L_aa, d_model)
         return self.esm_projection(x)  # (B, L_aa, d_model)
 
     def decode_teacher_forced(
@@ -569,11 +706,18 @@ class CodonOptimizer(nn.Module):
         temperature: float = 1.0,
         use_beam: bool = False,
         beam_width: int = 5,
+        warm_start_tokens: Optional[torch.Tensor] = None,  # (B, L_codon) fresh DNA warm start
     ) -> Tuple[torch.Tensor, float]:
         """
         Autoregressive generation (inference): generate codon by codon.
         Each new codon sees all previously generated codons via decoder history.
         Hard synonymous constraint applied at every step.
+
+        Args:
+            warm_start_tokens: optional sliding-window (Fath et al.) result used
+                to SEED the decoder history. The model then refines the warm
+                start codon-by-codon instead of starting from BOS — this
+                implements the advertised AI warm-start (audit issue #17).
 
         Returns:
             generated_tokens: (B, L_codon)
@@ -581,11 +725,16 @@ class CodonOptimizer(nn.Module):
         """
         B = protein_tokens.shape[0]
         device = protein_tokens.device
-        aa_str = aa_sequence[0] if isinstance(aa_sequence, list) else aa_sequence
+        if isinstance(aa_sequence, list):
+            aa_sequence = aa_sequence if len(aa_sequence) > 1 else aa_sequence[0]
+        if isinstance(aa_sequence, list):
+            aa_str = "".join(aa_sequence)
+        else:
+            aa_str = aa_sequence
         L = len(aa_str)
 
         # Encode protein
-        memory = self.encode_protein(protein_tokens)  # (B, L_aa, d_model)
+        memory = self.encode_protein(protein_tokens, [aa_str] * B)  # (B, L_aa, d_model)
 
         # Initialize with BOS
         generated = torch.full((B, 1), BOS_TOKEN, dtype=torch.long, device=device)
@@ -594,41 +743,79 @@ class CodonOptimizer(nn.Module):
             return self._beam_search(memory, aa_str, beam_width, device)
 
         # Greedy / temperature sampling
-        for pos, aa in enumerate(aa_str):
-            positions = torch.arange(generated.shape[1], device=device)
-            dec_emb = self.codon_embedding(generated) + self.pos_encoding(
-                positions
-            ).unsqueeze(0)
-
-            # Causal mask: don't attend to future positions
-            L_dec = generated.shape[1]
-            causal = nn.Transformer.generate_square_subsequent_mask(
-                L_dec, device=device
-            )
-
-            dec_out = self.decoder(tgt=dec_emb, memory=memory, tgt_mask=causal)
-            logits = self.codon_head(dec_out[:, -1, :])  # (B, 64) — last position only
-
-            # Hard synonymous constraint
-            syn_mask = get_synonymous_mask(aa, device)
-            logits[:, ~syn_mask] = -1e9
-
-            if temperature != 1.0:
-                logits = logits / temperature
-
-            if temperature > 0:
-                probs = F.softmax(logits, dim=-1)
-                next_codon = torch.multinomial(probs, num_samples=1)
+        all_cais = []
+        for b in range(B):
+            # Warm start seeds the decoder history: BOS + sliding-window result.
+            # Each position is then REVISED in place while the decoder sees the
+            # FULL sequence (causal mask keeps earlier revisions + later warm-start
+            # codons as context) — this wires the previously-dead warm_start_tokens
+            # into actual conditioning (audit issue #17).
+            if warm_start_tokens is not None:
+                ws = warm_start_tokens[b : b + 1].to(device)  # (1, L_codon)
+                if ws.shape[1] > L:
+                    ws = ws[:, :L]
+                generated_b = torch.cat(
+                    [generated[b : b + 1], ws], dim=1
+                )  # (1, 1 + L)
+                warm_mode = generated_b.shape[1] == L + 1
             else:
-                next_codon = logits.argmax(dim=-1, keepdim=True)
+                generated_b = generated[b : b + 1]  # (1, 1)
+                warm_mode = False
 
-            generated = torch.cat([generated, next_codon], dim=1)
+            for pos, aa in enumerate(aa_str):
+                positions = torch.arange(generated_b.shape[1], device=device)
+                dec_emb = self.codon_embedding(generated_b) + self.pos_encoding(
+                    positions
+                ).unsqueeze(0)
 
-        # Remove BOS token
-        output_tokens = generated[:, 1:]  # (B, L)
+                # Causal mask
+                L_dec = generated_b.shape[1]
+                causal = nn.Transformer.generate_square_subsequent_mask(
+                    L_dec, device=device
+                )
 
-        # Compute CAI for the generated sequence
-        cai = compute_cai(output_tokens[0]).item()
+                dec_out = self.decoder(tgt=dec_emb, memory=memory[b : b + 1], tgt_mask=causal)
+                if warm_mode:
+                    # Query the logits AT this position (pos+1 skips BOS) and
+                    # replace the warm-start codon in place; the decoder still
+                    # sees the entire sequence as context.
+                    logits = self.codon_head(dec_out[:, pos + 1, :])  # (1, 64)
+                else:
+                    logits = self.codon_head(dec_out[:, -1, :])  # (1, 64)
+
+                # Hard synonymous constraint
+                syn_mask = get_synonymous_mask(aa, device)
+                logits[:, ~syn_mask] = -1e9
+
+                if temperature > 0.0 and temperature != 1.0:
+                    logits = logits / temperature
+
+                if temperature > 0:
+                    probs = F.softmax(logits, dim=-1)
+                    next_codon = torch.multinomial(probs, num_samples=1)
+                else:
+                    next_codon = logits.argmax(dim=-1, keepdim=True)
+
+                if warm_mode:
+                    # In-place revision at position pos+1
+                    generated_b = torch.cat(
+                        [
+                            generated_b[:, : pos + 1],
+                            next_codon,
+                            generated_b[:, pos + 2 :],
+                        ],
+                        dim=1,
+                    )
+                else:
+                    # Cold start: append each new codon
+                    generated_b = torch.cat([generated_b, next_codon], dim=1)
+
+            output_tokens_b = generated_b[:, 1:]
+            all_cais.append(compute_cai(output_tokens_b[0]).item())
+            if b == 0:
+                output_tokens = output_tokens_b
+
+        cai = sum(all_cais) / len(all_cais) if all_cais else 0.0
 
         return output_tokens, cai
 
@@ -696,11 +883,12 @@ class CodonOptimizer(nn.Module):
         aa_sequence: List[str],
     ) -> Dict[str, torch.Tensor]:
         """Training forward pass."""
-        memory = self.encode_protein(protein_tokens)
+        memory = self.encode_protein(protein_tokens, aa_sequence)
         logits = self.decode_teacher_forced(memory, target_codons, aa_sequence)
 
-        # Expression critic prediction
-        predicted_expression = self.expression_predictor(target_codons)
+        # Score the decoder's soft codon distribution, keeping critic gradients
+        # connected to the generated sequence rather than the target sequence.
+        predicted_expression = self.expression_predictor(F.softmax(logits, dim=-1))
 
         return {
             "logits": logits,  # (B, L, 64) for cross-entropy
@@ -730,7 +918,7 @@ def codon_optimizer_loss(
       + λ_expr   × L_expression  (biological critic loss)
     """
     if lambdas is None:
-        lambdas = {"cai": 0.3, "gc": 0.2, "upa": 0.15, "expr": 0.5}
+        lambdas = {"cai": 0.3, "gc": 0.4, "upa": 0.15, "motif": 0.3, "expr": 0.5}
 
     B, L, vocab = logits.shape
 
@@ -752,6 +940,9 @@ def codon_optimizer_loss(
     # ── UpA dinucleotide penalty ──────────────────────────────────────────────
     L_UpA = torch.stack([upa_penalty(logits[b]) for b in range(B)]).mean()
 
+    # ── Differentiable motif avoidance ──────────────────────────────────────
+    L_motif = torch.stack([motif_penalty_from_logits(logits[b]) for b in range(B)]).mean()
+
     # ── Expression critic loss ────────────────────────────────────────────────
     if target_expression is not None:
         L_expr = F.mse_loss(predicted_expression, target_expression)
@@ -765,6 +956,7 @@ def codon_optimizer_loss(
         + lambdas["cai"] * L_CAI
         + lambdas["gc"] * L_GC
         + lambdas["upa"] * L_UpA
+        + lambdas["motif"] * L_motif
         + lambdas["expr"] * L_expr
     )
 
@@ -774,6 +966,7 @@ def codon_optimizer_loss(
         "cai": -L_CAI.item(),  # report as positive CAI value
         "gc": gc_per_seq.mean().item(),
         "upa": L_UpA.item(),
+        "motif": L_motif.item(),
         "expression": predicted_expression.mean().item(),
     }
 
@@ -789,105 +982,284 @@ def sliding_window_optimize(
     aa_sequence: str,
     window_size: int = 15,
     n_iter: int = 3,
+    beam_width: int = 32,
 ) -> Tuple[str, Dict[str, float]]:
     """
-    Reference implementation of the Fath et al. GeneOptimizer sliding window.
+    Reference implementation of the Fath et al.-inspired GeneOptimizer
+    sliding-window baseline.
 
-    This is the rule-based baseline that the AI model should beat.
     For each window of amino acids:
-        1. Enumerate all synonymous codon combinations
-        2. Score by 9-parameter quality function
-        3. Fix the best combination
-        4. Slide window forward by 1 codon
+        1. Generate synonymous codon candidates using bounded beam search.
+        2. Score candidates using the 9-parameter quality function.
+        3. Fix the best-scoring combination.
+        4. Slide the window forward by one codon.
+
+    A bounded beam search is used instead of exhaustive enumeration because
+    the synonymous codon search space grows exponentially with window size.
+
+    Args:
+        aa_sequence: Amino-acid sequence to optimize.
+        window_size: Number of amino acids optimized per sliding window.
+        n_iter: Number of passes over the sequence.
+        beam_width: Maximum number of partial candidates retained during
+            codon search.
 
     Returns:
-        optimized_dna: codon-optimized DNA sequence
-        metrics: quality metrics for the optimized sequence
+        optimized_dna: Codon-optimized DNA sequence.
+        metrics: Final quality metrics.
     """
-    import itertools
+
+    if not aa_sequence:
+        return "", {
+            "cai": 0.0,
+            "gc_content": 0.0,
+            "n_bad_motifs": 0,
+            "length_bp": 0,
+        }
+
+    if window_size <= 0:
+        raise ValueError("window_size must be > 0")
+
+    if n_iter <= 0:
+        raise ValueError("n_iter must be > 0")
+
+    if beam_width <= 0:
+        raise ValueError("beam_width must be > 0")
 
     def quality(window_dna: str, context_dna: str, pos: int) -> float:
-        """9-parameter quality function."""
+        """
+
+        Nine-parameter local sequence quality function.
+
+        The scoring criteria are kept equivalent to the original
+        implementation, but expensive regex operations are avoided where
+        straightforward string operations are sufficient.
+        """
+
+        if not window_dna:
+            return -float("inf")
+
         rna = window_dna.replace("T", "U")
         score = 0.0
 
+        # ---------------------------------------------------------------
         # (i) Codon choice — CAI
-        codons = [window_dna[i : i + 3] for i in range(0, len(window_dna), 3)]
-        cai = sum(HUMAN_CODON_FREQ.get(c, 0.1) for c in codons) / len(codons)
+        # ---------------------------------------------------------------
+        codons = [
+            window_dna[i : i + 3]
+            for i in range(0, len(window_dna), 3)
+        ]
+
+        cai = (
+            sum(HUMAN_CODON_FREQ.get(c, 0.1) for c in codons)
+            / len(codons)
+        )
+
         score += 3.0 * cai
 
-        # (ii) GC content — target 58-65%
-        gc = (window_dna.count("G") + window_dna.count("C")) / len(window_dna)
-        score -= 2.0 * max(0, abs(gc - 0.615) - 0.035) * 10  # penalty outside [58%,65%]
+        # ---------------------------------------------------------------
+        # (ii) GC content — target 58–65%
+        # ---------------------------------------------------------------
+        gc = (
+            window_dna.count("G") + window_dna.count("C")
+        ) / len(window_dna)
 
-        # (iii) UpA avoidance (in RNA)
-        upa_count = len(re.findall(r"[ACGU]A", rna))
+        score -= (
+            2.0
+            * max(0.0, abs(gc - 0.615) - 0.035)
+            * 10.0
+        )
+
+        # (iii) UpA avoidance — only UA (UpA) is the RNase target; [ACGU]A over-counted
+        upa_count = rna.count("UA")
         score -= 1.5 * upa_count
 
+        # ---------------------------------------------------------------
         # (iv) AU-rich elements
-        are_count = len(re.findall(r"AUUUA", rna))
+        # ---------------------------------------------------------------
+        are_count = rna.count("AUUUA")
         score -= 3.0 * are_count
 
+        # ---------------------------------------------------------------
         # (v) Cryptic splice sites
+        #
+        # GT + 4–8 nt + AG
+        # ---------------------------------------------------------------
         if re.search(r"GT[ACGT]{4,8}AG", window_dna):
             score -= 5.0
 
-        # (vi) Poly-A signal
-        if re.search(r"AATAAA|ATTAAA", window_dna):
+        # ---------------------------------------------------------------
+        # (vi) Poly-A signals
+        # ---------------------------------------------------------------
+        if (
+            "AATAAA" in window_dna
+            or "ATTAAA" in window_dna
+        ):
             score -= 5.0
 
-        # (vii) Direct repeats (check against context)
-        full = context_dna[: pos * 3] + window_dna
-        for k in range(6, min(16, len(window_dna))):
-            pattern = window_dna[:k]
-            if full[: -len(window_dna)].count(pattern) > 0:
-                score -= 2.0
-                break
+        # ---------------------------------------------------------------
+        # (vii) Direct repeats against context
+        # ---------------------------------------------------------------
+        prefix = context_dna[: pos * 3]
 
-        # (viii) RNA secondary structure (ΔG proxy via GC content)
-        # High GC = stable hairpins = bad for translation; penalize very high GC
+        if prefix:
+            max_k = min(16, len(window_dna))
+
+            for k in range(6, max_k):
+                pattern = window_dna[:k]
+
+                if pattern in prefix:
+                    score -= 2.0
+                    break
+
+        # ---------------------------------------------------------------
+        # (viii) RNA secondary structure proxy
+        # ---------------------------------------------------------------
         if gc > 0.70:
-            score -= 2.0 * (gc - 0.70) * 10
+            score -= 2.0 * (gc - 0.70) * 10.0
 
-        # (ix) Internal IRES (simplified motif)
+        # ---------------------------------------------------------------
+        # (ix) Internal IRES motif
+        # ---------------------------------------------------------------
         if re.search(r"GGA[CT]{2}", window_dna):
             score -= 4.0
 
         return score
 
-    # Initialize with most-frequent human codons
+    # -------------------------------------------------------------------
+    # Most-frequent human codon initialization
+    # -------------------------------------------------------------------
     def best_codon(aa: str) -> str:
-        options = CODON_TABLE.get(aa, ["NNN"])
-        return max(options, key=lambda c: HUMAN_CODON_FREQ.get(c, 0.0))
+        options = CODON_TABLE.get(aa)
 
-    current_dna = "".join(best_codon(aa) for aa in aa_sequence)
+        if not options:
+            raise ValueError(
+                f"Unknown amino acid '{aa}' in sequence."
+            )
 
+        return max(
+            options,
+            key=lambda c: HUMAN_CODON_FREQ.get(c, 0.0),
+        )
+
+    current_dna = "".join(
+        best_codon(aa)
+        for aa in aa_sequence
+    )
+
+    # -------------------------------------------------------------------
+    # Bounded beam search for each sliding window
+    # -------------------------------------------------------------------
     for iteration in range(n_iter):
+
         for start in range(len(aa_sequence)):
-            end = min(start + window_size, len(aa_sequence))
+
+            end = min(
+                start + window_size,
+                len(aa_sequence),
+            )
+
             window_aa = aa_sequence[start:end]
-            options = [CODON_TABLE.get(aa, ["NNN"]) for aa in window_aa]
-            best_score = -float("inf")
-            best_combo = None
 
-            for combo in itertools.product(*options):
-                candidate = "".join(combo)
-                s = quality(candidate, current_dna, start)
-                if s > best_score:
-                    best_score = s
-                    best_combo = candidate
+            options = []
 
-            if best_combo is not None:
-                current_dna = (
-                    current_dna[: start * 3] + best_combo + current_dna[end * 3 :]
+            for aa in window_aa:
+                codons = CODON_TABLE.get(aa)
+
+                if not codons:
+                    raise ValueError(
+                        f"Unknown amino acid '{aa}' in sequence."
+                    )
+
+                options.append(codons)
+
+            # -----------------------------------------------------------
+            # Beam state:
+            #
+            #     (partial_dna, score)
+            #
+            # We build the candidate one codon at a time.
+            # -----------------------------------------------------------
+            beam = [
+                ("", 0.0)
+            ]
+
+            for local_idx, codon_options in enumerate(options):
+
+                expanded = []
+
+                for partial_dna, _ in beam:
+
+                    for codon in codon_options:
+
+                        candidate = partial_dna + codon
+
+                        # Evaluate the partial candidate using the same
+                        # quality function. This gives the beam a signal
+                        # while constructing the sequence.
+                        score = quality(
+                            candidate,
+                            current_dna,
+                            start,
+                        )
+
+                        expanded.append(
+                            (candidate, score)
+                        )
+
+                # -------------------------------------------------------
+                # Keep only the highest-scoring candidates.
+                #
+                # Deduplication is useful because it prevents identical
+                # sequences from consuming beam slots.
+                # -------------------------------------------------------
+                expanded.sort(
+                    key=lambda x: x[1],
+                    reverse=True,
                 )
 
-    # Compute final metrics
+                seen = set()
+                beam = []
+
+                for candidate, score in expanded:
+
+                    if candidate in seen:
+                        continue
+
+                    seen.add(candidate)
+                    beam.append(
+                        (candidate, score)
+                    )
+
+                    if len(beam) >= beam_width:
+                        break
+
+            # -----------------------------------------------------------
+            # Select best completed window candidate.
+            # -----------------------------------------------------------
+            if beam:
+                best_combo, best_score = max(
+                    beam,
+                    key=lambda x: x[1],
+                )
+
+                current_dna = (
+                    current_dna[: start * 3]
+                    + best_combo
+                    + current_dna[end * 3 :]
+                )
+
+    # -------------------------------------------------------------------
+    # Final metrics
+    # -------------------------------------------------------------------
     tokens = tokenize_dna(current_dna)
+
     final_metrics = {
         "cai": compute_cai(tokens).item(),
-        "gc_content": (current_dna.count("G") + current_dna.count("C"))
-        / len(current_dna),
+        "gc_content": (
+            current_dna.count("G")
+            + current_dna.count("C")
+        ) / len(current_dna),
         "n_bad_motifs": count_bad_motifs(current_dna),
         "length_bp": len(current_dna),
     }
@@ -915,26 +1287,36 @@ def optimize_nrps_for_mammalian_expression(
     Strategy:
         1. Sliding window rule-based (Fath et al.) as initialization / baseline
         2. AI model refinement if model is provided
-        3. Post-processing: add N1mΨ flag, report metrics
+        3. Post-processing: add N1mPsi flag, report metrics
 
-    Args:
-        aa_sequence:        Amino acid sequence of NRPS module to optimize
-        model:              Trained CodonOptimizer (if None: rule-based only)
-        use_sliding_window: Use Fath et al. rule-based as warm start
-        temperature:        Sampling temperature for AI generation (lower = more deterministic)
-        beam_search:        Use beam search instead of sampling
-        beam_width:         Beam width (higher = better quality, slower)
-        verbose:            Print progress
-
-    Returns:
-        Dict with:
-            'dna_sequence':    optimized DNA string
-            'cai':             Codon Adaptation Index (target ≥ 0.96)
-            'gc_content':      GC fraction (target 0.58-0.65)
-            'n_bad_motifs':    count of bad motifs (target = 0)
-            'protein_check':   translated AA sequence (should match input)
-            'mrna_notes':      notes about mRNA delivery modifications
+    Returns a dictionary containing the optimized DNA, quality metrics, and
+    translation verification result.
     """
+
+    if not isinstance(aa_sequence, str):
+        raise TypeError("aa_sequence must be a string")
+    aa_sequence = "".join(aa_sequence.split()).upper()
+    if not aa_sequence:
+        return {
+            "dna_sequence": "",
+            "cai": 0.0,
+            "gc_content": 0.0,
+            "n_bad_motifs": 0,
+            "length_bp": 0,
+            "protein_check": "",
+            "verified": True,
+            "mrna_notes": "",
+        }
+    invalid = sorted(set(aa_sequence) - set(CODON_TABLE))
+    if invalid:
+        raise ValueError(
+            f"Unknown amino acid residue(s): {', '.join(invalid)}"
+        )
+    if model is None and not use_sliding_window:
+        raise ValueError(
+            "use_sliding_window=False requires a trained CodonOptimizer model"
+        )
+
     device = (
         next(model.parameters()).device if model is not None else torch.device("cpu")
     )
@@ -963,6 +1345,8 @@ def optimize_nrps_for_mammalian_expression(
         if dna_sw is not None:
             # Warm start: initialize decoder with sliding window result
             warm_start_tokens = tokenize_dna(dna_sw).unsqueeze(0).to(device)
+        else:
+            warm_start_tokens = None
 
         output_tokens, cai = model.generate(
             protein_tokens=protein_tokens,
@@ -970,6 +1354,7 @@ def optimize_nrps_for_mammalian_expression(
             temperature=temperature,
             use_beam=beam_search,
             beam_width=beam_width,
+            warm_start_tokens=warm_start_tokens,
         )
         optimized_dna = detokenize_dna(output_tokens[0])
         if verbose:

@@ -165,10 +165,15 @@ class InvariantPointAttention(nn.Module):
         scalar_logits = torch.einsum("bihc,bjhc->bhij", Q, K) / math.sqrt(self.c_hidden)
 
         # Point attention logits (squared distances)
+        # diff: (B, L, L, H, P, 3) — squared distance per query/key/head/point
         diff = Q_pts_global.unsqueeze(2) - K_pts_global.unsqueeze(1)
-        pt_logits = -(diff.pow(2).sum(-1)).sum(-1)  # (B, L, L, H)
-        w = F.softplus(self.head_weights).unsqueeze(0).unsqueeze(0)
-        pt_logits = (w * pt_logits).permute(0, 3, 1, 2)  # (B, H, L, L)
+        d2 = diff.pow(2).sum(-1)  # (B, L, L, H, P)
+        # Per-head/per-point learned weights must multiply the (H, P) tensor
+        # BEFORE summing over points — summing first collapses P and makes the
+        # (H, P) weight broadcast fail (audit issue #3).
+        w = F.softplus(self.head_weights)  # (H, P)
+        pt_logits = -(d2 * w.unsqueeze(0).unsqueeze(0)).sum(-1)  # (B, L, L, H)
+        pt_logits = pt_logits.permute(0, 3, 1, 2)  # (B, H, L, L)
 
         # Pair bias from EvoFormer pair_repr (THE KEY CONNECTOR)
         pair_bias = self.pair_bias(z_n).permute(0, 3, 1, 2)  # (B, H, L, L)
@@ -342,10 +347,8 @@ class SE3Denoiser(nn.Module):
         # Node feature initialization from noisy frames
         node_features = torch.cat(
             [
-                t_noisy.mean(-1, keepdim=True).expand(
-                    -1, -1, 2
-                ),  # rough position encoding
-                torch.zeros(B, L, 2, device=t_noisy.device),
+                t_noisy.mean(-1, keepdim=True),  # rough position encoding
+                torch.zeros(B, L, 1, device=t_noisy.device),
             ],
             dim=-1,
         )

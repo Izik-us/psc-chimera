@@ -177,16 +177,8 @@ class OuterProductMean(nn.Module):
         b = self.proj2(msa_n)  # (B, N_seq, L, c_hidden)
 
         # Outer product over hidden dim, mean over N_seq
-        # out_ij = mean_s( a_si ⊗ b_sj )
-        a = a.permute(0, 2, 1, 3)  # (B, L, N_seq, c_h)
-        b = b.permute(0, 3, 1, 2)  # (B, c_h, L, N_seq)
-        outer = torch.einsum("blsd,dml->blmd", a, b.transpose(1, 3))
-        # (B, L, L, c_h, c_h) — too large; use einsum instead
-        outer = (
-            torch.einsum("bsid,bsje->bijd", a, self.proj2(msa_n).permute(0, 2, 1, 3))
-            / N_seq
-        )
-        # outer: (B, L, L, c_hidden*c_hidden) — reshape and project
+        # out_ij = mean_s( a_si ⊗ b_sj )  — shape (B, L, L, c_hidden*c_hidden)
+        outer = torch.einsum("bsid,bsje->bijde", a, b) / N_seq
         outer = outer.reshape(batch, L, L, -1)
         return self.out(outer)
 
