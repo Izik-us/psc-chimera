@@ -106,6 +106,8 @@ VOCAB_SIZE = len(ALL_CODONS) + 3  # 67
 # Amino acid vocabulary (standard + unknown)
 AA_VOCAB = "ACDEFGHIKLMNPQRSTVWY"
 AA_TO_IDX = {aa: i for i, aa in enumerate(AA_VOCAB)}
+AA_PAD_TOKEN = len(AA_VOCAB)
+NUM_AA_TOKENS = len(AA_VOCAB) + 1
 CODON_TO_AA: Dict[str, str] = {
     codon: amino_acid
     for amino_acid, codons in CODON_TABLE.items()
@@ -233,14 +235,37 @@ def get_synonymous_mask(amino_acid: str, device: torch.device) -> torch.Tensor:
     return mask
 
 
-def tokenize_protein(seq: str) -> torch.Tensor:
-    """Convert amino acid string to integer token tensor."""
-    return torch.tensor(
-        [AA_TO_IDX.get(aa, len(AA_VOCAB) - 1) for aa in seq], dtype=torch.long
+def tokenize_protein(
+    sequence: str,
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """
+    Tokenize a canonical protein sequence.
+
+    Unknown, ambiguous, stop, or non-canonical residues are rejected.
+    """
+    sequence = sequence.upper()
+
+    if not sequence:
+        raise ValueError("Protein sequence cannot be empty.")
+
+    invalid = sorted(set(sequence) - set(AA_VOCAB))
+    if invalid:
+        raise ValueError(
+            f"Invalid protein residues: {invalid}. "
+            f"Only canonical amino acids {AA_VOCAB} are supported."
+        )
+
+    tokens = torch.tensor(
+        [AA_TO_IDX[aa] for aa in sequence],
+        dtype=torch.long,
+        device=device,
     )
 
+    return tokens
 
-def tokenize_dna(dna: str) -> torch.Tensor:
+
+def tokenize_dna(dna: str, device: Optional[torch.device] = None) -> torch.Tensor:
     """Convert DNA coding sequence (codons) to integer token tensor."""
     assert len(dna) % 3 == 0, "DNA length must be divisible by 3"
     codons = [dna[i : i + 3] for i in range(0, len(dna), 3)]
@@ -447,6 +472,49 @@ def count_bad_motifs(dna_seq: str) -> int:
     count += dna_seq.count("CG")
     return count
 
+class MaskedConvBlock(nn.Module):
+    """
+    1D convolution that explicitly restores the padding invariant.
+
+    Invariant:
+        padding positions == exactly zero
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        kernel_size: int,
+    ):
+        super().__init__()
+
+        self.conv = nn.Conv1d(
+            d_model,
+            d_model,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            bias=False,
+        )
+
+        self.activation = nn.ReLU()
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        padding_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        mask = padding_mask.unsqueeze(1)
+        x = self.conv(x)
+        x = x.masked_fill(mask,0.0)
+        x = self.activation(x)
+
+        # x: [B, C, L]
+        x = x.masked_fill(
+            mask,
+            0.0,
+        )
+
+        return x 
+    
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EXPRESSION PREDICTOR (Biological Critic)
@@ -475,16 +543,19 @@ class ExpressionPredictor(nn.Module):
         self.codon_embed = nn.Embedding(VOCAB_SIZE, d_model)
 
         # Local feature extraction: CNN stack (captures short motifs)
-        self.local_cnn = nn.Sequential(
-            # k=3: trinucleotide context (one codon)
-            nn.Conv1d(d_model, d_model, kernel_size=3, padding=1),
-            nn.ReLU(),
-            # k=5: codon pair effects
-            nn.Conv1d(d_model, d_model, kernel_size=5, padding=2),
-            nn.ReLU(),
-            # k=9: splice site context (~3 codons)
-            nn.Conv1d(d_model, d_model, kernel_size=9, padding=4),
-            nn.ReLU(),
+        self.local_cnn_3 = MaskedConvBlock(
+            d_model,
+            kernel_size=3,
+        )
+
+        self.local_cnn_5 = MaskedConvBlock(
+            d_model,
+            kernel_size=5,
+        )
+
+        self.local_cnn_9 = MaskedConvBlock(
+            d_model,
+            kernel_size=9,
         )
 
         # Global feature extraction: Transformer (captures long-range structure)
@@ -496,7 +567,7 @@ class ExpressionPredictor(nn.Module):
             batch_first=True,
         )
         self.global_transformer = nn.TransformerEncoder(
-            encoder_layer, num_layers=n_layers
+            encoder_layer, num_layers=n_layers, enable_nested_tensor=False
         )
 
         # Fusion: combine local (CNN) + global (Transformer) features
@@ -508,8 +579,6 @@ class ExpressionPredictor(nn.Module):
 
         # Output head: predicted expression level (sigmoid → 0-1)
         self.yield_head = nn.Sequential(
-            nn.AdaptiveAvgPool1d(1),  # pool sequence dimension
-            nn.Flatten(),
             nn.Linear(d_model, 64),
             nn.GELU(),
             nn.Dropout(0.1),
@@ -517,51 +586,201 @@ class ExpressionPredictor(nn.Module):
             nn.Sigmoid(),
         )
 
-    def forward(self, codon_tokens: torch.Tensor) -> torch.Tensor:
-        """
-        codon_tokens: (B, L) integer codon token IDs
-        Returns: (B,) predicted expression yield in [0, 1]
-        """
+    def forward(
+        self,
+        codon_tokens: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+
+        if codon_tokens.dim() not in (2, 3):
+            raise ValueError(
+                "codon_tokens must have shape [B, L] or [B, L, 64]."
+            )
+
+        B, L = codon_tokens.shape[:2]
+
+        if padding_mask is None:
+            padding_mask = torch.zeros(
+                (B, L),
+                dtype=torch.bool,
+                device=codon_tokens.device,
+           )
+
+        if padding_mask.shape != (B, L):
+            raise ValueError(
+                f"padding_mask must have shape {(B, L)}, "
+                f"got {tuple(padding_mask.shape)}."
+            )
+
+        if padding_mask.dtype != torch.bool:
+            raise TypeError("padding_mask must be bool.")
+
+        # ---------------------------------------------------------
+        # Codon embedding
+        # ---------------------------------------------------------
+
         if codon_tokens.dim() == 3:
-            # Soft codon distributions keep the critic connected to decoder
-            # logits during training while retaining the same embedding space.
-            x = torch.matmul(codon_tokens, self.codon_embed.weight[: len(ALL_CODONS)])
+            if codon_tokens.shape[-1] != len(ALL_CODONS):
+                raise ValueError(
+                    f"Expected soft codon distributions with "
+                    f"{len(ALL_CODONS)} channels."
+                )
+
+            x = torch.matmul(
+                codon_tokens,
+                self.codon_embed.weight[:len(ALL_CODONS)],
+            )
+
         else:
-            x = self.codon_embed(codon_tokens)  # (B, L, d_model)
+            if torch.any(codon_tokens < 0):
+                raise ValueError("Codon token indices cannot be negative.")
 
-        # Local: CNN features
-        x_t = x.transpose(1, 2)  # (B, d_model, L) for Conv1d
-        local_feat = self.local_cnn(x_t).transpose(1, 2)  # (B, L, d_model)
+            if torch.any(codon_tokens >= len(ALL_CODONS)):
+                raise ValueError(
+                    "ExpressionPredictor received non-codon special tokens."
+                )
 
-        # Global: Transformer features
-        global_feat = self.global_transformer(x)  # (B, L, d_model)
+            x = self.codon_embed(codon_tokens)
 
-        # Fuse
+        # ---------------------------------------------------------
+        # Padding invariant #1
+        # ---------------------------------------------------------
+
+        x = x.masked_fill(
+            padding_mask.unsqueeze(-1),
+            0.0,
+        )
+
+        # ---------------------------------------------------------
+        # Local CNN pathway
+        # ---------------------------------------------------------
+
+        x_t = x.transpose(1, 2)
+
+        local_feat = self.local_cnn_3(
+            x_t,
+            padding_mask,
+        )
+
+        local_feat = self.local_cnn_5(
+            local_feat,
+            padding_mask,
+        )
+
+        local_feat = self.local_cnn_9(
+            local_feat,
+            padding_mask,
+        )
+
+        local_feat = local_feat.transpose(1, 2)
+
+        # Defensive remasking.
+        local_feat = local_feat.masked_fill(
+            padding_mask.unsqueeze(-1),
+            0.0,
+        )
+
+        # ---------------------------------------------------------
+        # Global Transformer pathway
+        # ---------------------------------------------------------
+
+        global_feat = self.global_transformer(
+            x,
+            src_key_padding_mask=padding_mask,
+        )
+
+        # Transformer outputs at padded query positions may still
+        # contain non-zero values, so restore the invariant.
+        global_feat = global_feat.masked_fill(
+            padding_mask.unsqueeze(-1),
+            0.0,
+        )
+
+        # ---------------------------------------------------------
+        # Fusion
+        # ---------------------------------------------------------
+
         fused = self.fusion(
-            torch.cat([local_feat, global_feat], dim=-1)
-        )  # (B, L, d_model)
+            torch.cat(
+                [local_feat, global_feat],
+                dim=-1,
+            )
+        )
 
-        return self.yield_head(fused.transpose(1, 2)).squeeze(-1)  # (B,)
+        fused = fused.masked_fill(
+            padding_mask.unsqueeze(-1),
+            0.0,
+        )
 
+        # ---------------------------------------------------------
+        # Masked mean pooling
+        # ---------------------------------------------------------
+
+        valid = (~padding_mask).unsqueeze(-1).to(
+            fused.dtype
+        )
+
+        valid_count = valid.sum(dim=1)
+
+        if torch.any(valid_count <= 0):
+            raise ValueError(
+                "ExpressionPredictor received an all-padding sequence."
+            )
+
+        pooled = (
+            (fused * valid).sum(dim=1)
+            / valid_count
+        )
+
+        return self.yield_head(pooled).squeeze(-1)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CODON OPTIMIZER — MAIN MODEL
 # ═══════════════════════════════════════════════════════════════════════════════
 
-
 class CodonOptimizer(nn.Module):
     """
-    Corrected autoregressive codon optimizer.
+    Autoregressive protein-conditioned codon optimizer.
 
-        Architecture (per peer review):
-        Protein → ESM-2 Encoder (150M) → Cross-Attention →
-        TransformerDecoder (autoregressive) → Codon constraints → DNA
-        ↓
-        ExpressionPredictor (critic) → Multi-objective loss
+    Architecture
+    ------------
+        Protein sequence
+              │
+              ▼
+        ESM-2 / fallback encoder
+              │
+              ▼
+        Protein memory
+              │
+              ├───────────────┐
+              │               │
+              ▼               │
+        TransformerDecoder ◄──┘
+              │
+              ▼
+        64-way codon logits
+              │
+              ▼
+        Hard synonymous constraint
+              │
+              ▼
+        Codon sequence / DNA
 
-    By default, hard synonymous masking guarantees that every generated codon
-    encodes the same amino acid. ``allow_nonsynonymous=True`` enables guided
-    protein redesign when paired with an external fitness objective.
+    A separate ExpressionPredictor acts as a differentiable biological critic.
+
+    Important invariants
+    --------------------
+    1. Protein padding is strict right-padding.
+    2. Codon padding is strict right-padding.
+    3. Biological sequence lengths come from aa_sequence.
+    4. Valid protein tokens are [0, 19].
+    5. Padded protein tokens must equal AA_PAD_TOKEN.
+    6. Valid codon tokens are [0, 63].
+    7. Padded codon tokens must equal PAD_TOKEN.
+    8. ESM representations and padding masks must agree with the protein input.
+    9. Synonymous masking is applied without in-place mutation of the logits
+       tensor used elsewhere in the graph.
+    10. Generation supports independent sequences within a batch.
     """
 
     def __init__(
@@ -574,12 +793,28 @@ class CodonOptimizer(nn.Module):
         esm_model_name: str = "esm2_t30_150M_UR50D",
         esm_model_path: Optional[str] = None,
         allow_nonsynonymous: bool = False,
+        max_codons: int = 8192,
     ):
         super().__init__()
+
+        # ---------------------------------------------------------------------
+        # Configuration
+        # ---------------------------------------------------------------------
+
         self.d_model = d_model
-        self.allow_nonsynonymous = allow_nonsynonymous
+        self.n_heads = n_heads
+        self.n_dec_layers = n_dec_layers
+        self.dim_ff = dim_ff
+        self.dropout = dropout
         self.esm_model_name = esm_model_name
         self.esm_model_path = esm_model_path
+        self.allow_nonsynonymous = allow_nonsynonymous
+        self.max_codons = max_codons
+
+        # ---------------------------------------------------------------------
+        # ESM-2
+        # ---------------------------------------------------------------------
+
         self.esm_model = None
         self.esm_alphabet = None
         self.esm_batch_converter = None
@@ -589,48 +824,102 @@ class CodonOptimizer(nn.Module):
                 import esm
             except ImportError as exc:
                 raise RuntimeError(
-                    "esm_model_path was provided, but fair-esm is not installed"
+                    "esm_model_path was provided, but fair-esm is not installed."
                 ) from exc
+
             try:
-                self.esm_model, self.esm_alphabet = esm.pretrained.load_model_and_alphabet_local(
+                (
+                    self.esm_model,
+                    self.esm_alphabet,
+                ) = esm.pretrained.load_model_and_alphabet_local(
                     esm_model_path
                 )
+
             except (pickle.UnpicklingError, RuntimeError) as exc:
                 if "Weights only load failed" not in str(exc):
                     raise
-                torch.serialization.add_safe_globals([argparse.Namespace])
-                self.esm_model, self.esm_alphabet = esm.pretrained.load_model_and_alphabet_local(
+
+                torch.serialization.add_safe_globals(
+                    [argparse.Namespace]
+                )
+
+                (
+                    self.esm_model,
+                    self.esm_alphabet,
+                ) = esm.pretrained.load_model_and_alphabet_local(
                     esm_model_path
                 )
-            self.esm_batch_converter = self.esm_alphabet.get_batch_converter()
+
+            self.esm_batch_converter = (
+                self.esm_alphabet.get_batch_converter()
+            )
+
+            # ESM is used as a frozen feature extractor.
             for parameter in self.esm_model.parameters():
                 parameter.requires_grad = False
+
             self.esm_model.eval()
-            esm_dim = int(getattr(self.esm_model, "embed_dim", 640))
+
+            esm_dim = int(
+                getattr(
+                    self.esm_model,
+                    "embed_dim",
+                    640,
+                )
+            )
+
         else:
             esm_dim = d_model
 
-        # ── Encoder: ESM-2 150M (mostly frozen) ─────────────────────────────
-        # In production: from transformers import EsmModel
-        # Here: learnable embedding as structural stand-in
-        self.aa_embedding = nn.Embedding(len(AA_VOCAB) + 1, d_model)
-        self.protein_encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=d_model,
-                nhead=n_heads,
-                dim_feedforward=dim_ff,
-                dropout=dropout,
-                batch_first=True,
-            ),
-            num_layers=4,  # stub: production uses 30-layer ESM-2
-        )
-        # Projection from ESM hidden dim (640) → d_model
-        # (identity in stub since we initialize to d_model directly)
-        self.esm_projection = nn.Linear(esm_dim, d_model)
+        # ---------------------------------------------------------------------
+        # Fallback protein encoder
+        #
+        # This exists so the architecture remains runnable without ESM.
+        # When ESM is supplied, these parameters are frozen and bypassed.
+        # ---------------------------------------------------------------------
 
-        # ── Decoder: Autoregressive TransformerDecoder ───────────────────────
-        self.codon_embedding = nn.Embedding(VOCAB_SIZE, d_model)
-        self.pos_encoding = nn.Embedding(8192, d_model)  # up to 8192 codons
+        self.aa_embedding = nn.Embedding(
+            NUM_AA_TOKENS,
+            d_model,
+            padding_idx=AA_PAD_TOKEN,
+        )
+
+        protein_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=dim_ff,
+            dropout=dropout,
+            batch_first=True,
+        )
+
+        self.protein_encoder = nn.TransformerEncoder(
+            protein_encoder_layer,
+            num_layers=4,
+            enable_nested_tensor=False,
+        )
+
+        # ---------------------------------------------------------------------
+        # ESM / protein representation projection
+        # ---------------------------------------------------------------------
+
+        self.esm_projection = nn.Linear(
+            esm_dim,
+            d_model,
+        )
+
+        # ---------------------------------------------------------------------
+        # Codon decoder
+        # ---------------------------------------------------------------------
+
+        self.codon_embedding = nn.Embedding(
+            VOCAB_SIZE,
+            d_model,
+        )
+
+        self.pos_encoding = nn.Embedding(
+            max_codons,
+            d_model,
+        )
 
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
@@ -639,29 +928,97 @@ class CodonOptimizer(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_dec_layers)
 
-        # ── Output head: 64-way logits over codon vocabulary ─────────────────
-        self.codon_head = nn.Linear(d_model, len(ALL_CODONS))
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer,
+            num_layers=n_dec_layers,
+        )
 
-        # ── Biological critic (separate, pre-trained independently) ──────────
-        self.expression_predictor = ExpressionPredictor(d_model=128)
+        # ---------------------------------------------------------------------
+        # Codon output head
+        # ---------------------------------------------------------------------
 
-        # ESM mode bypasses the lightweight fallback encoder entirely. Keep
-        # its parameters for checkpoint compatibility, but exclude them from
-        # gradient updates when local ESM2 is active.
+        self.codon_head = nn.Linear(
+            d_model,
+            len(ALL_CODONS),
+        )
+
+        # ---------------------------------------------------------------------
+        # Biological critic
+        # ---------------------------------------------------------------------
+
+        self.expression_predictor = ExpressionPredictor(
+            d_model=128,
+        )
+
+        # ---------------------------------------------------------------------
+        # If ESM is active, the lightweight fallback encoder is retained for
+        # checkpoint compatibility but must not participate in optimization.
+        # ---------------------------------------------------------------------
+
         if self.esm_model is not None:
             for parameter in self.aa_embedding.parameters():
                 parameter.requires_grad = False
+
             for parameter in self.protein_encoder.parameters():
                 parameter.requires_grad = False
 
+        # ---------------------------------------------------------------------
+        # Initialize ONLY newly-created trainable architecture.
+        #
+        # Critically, do NOT Xavier-initialize every parameter here.
+        # Doing that would destroy pretrained ESM weights.
+        # ---------------------------------------------------------------------
+
         self._init_weights()
 
+    # =========================================================================
+    # INITIALIZATION
+    # =========================================================================
+
     def _init_weights(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p, gain=0.1)
+        """
+        Initialize the model components created by CodonOptimizer.
+
+        Pretrained ESM parameters are deliberately excluded.
+        """
+
+        modules_to_initialize = [
+            self.esm_projection,
+            self.codon_embedding,
+            self.pos_encoding,
+            self.decoder,
+            self.codon_head,
+        ]
+
+        # Fallback encoder is only initialized when actually used.
+        if self.esm_model is None:
+            modules_to_initialize.extend(
+                [
+                    self.aa_embedding,
+                    self.protein_encoder,
+                ]
+            )
+
+        for module in modules_to_initialize:
+            for parameter in module.parameters():
+                if parameter.requires_grad and parameter.dim() > 1:
+                    nn.init.xavier_uniform_(
+                        parameter,
+                        gain=0.1,
+                    )
+
+        # Biases
+        for module in modules_to_initialize:
+            for parameter in module.parameters():
+                if parameter.requires_grad and parameter.dim() == 1:
+                    # Do not blindly overwrite LayerNorm scale parameters.
+                    # PyTorch's default initialization is already appropriate.
+                    pass
+
+    # =========================================================================
+    # CHECKPOINT LOADING
+    # =========================================================================
 
     @classmethod
     def from_checkpoint(
@@ -670,303 +1027,1595 @@ class CodonOptimizer(nn.Module):
         map_location: str | torch.device = "cpu",
         **overrides,
     ) -> "CodonOptimizer":
-        """Load a trained optimizer checkpoint with its saved architecture."""
-        checkpoint = torch.load(path, map_location=map_location)
-        config = dict(checkpoint.get("config", {})) if isinstance(checkpoint, dict) else {}
+        """
+        Load a trained CodonOptimizer checkpoint.
+
+        Expected checkpoint format:
+
+            {
+                "model": state_dict,
+                "config": {...}
+            }
+
+        A raw state_dict is also accepted.
+        """
+
+        checkpoint = torch.load(
+            path,
+            map_location=map_location,
+        )
+
+        if isinstance(checkpoint, dict):
+            config = dict(
+                checkpoint.get("config", {})
+            )
+        else:
+            config = {}
+
         config.update(overrides)
+
         model = cls(**config)
-        state = checkpoint.get("model", checkpoint) if isinstance(checkpoint, dict) else checkpoint
-        model.load_state_dict(state, strict=True)
+
+        if isinstance(checkpoint, dict):
+            state = checkpoint.get(
+                "model",
+                checkpoint,
+            )
+        else:
+            state = checkpoint
+
+        model.load_state_dict(
+            state,
+            strict=True,
+        )
+
         return model
+
+    # =========================================================================
+    # PADDING VALIDATION
+    # =========================================================================
+
+    @staticmethod
+    def _validate_right_padding_mask(
+        padding_mask: torch.Tensor,
+        sequence_lengths: torch.Tensor,
+        max_length: int,
+        name: str,
+    ) -> None:
+        """
+        Enforce strict right-padding.
+
+        Example:
+
+            sequence length = 4
+            max length      = 7
+
+            [False, False, False, False, True, True, True]
+        """
+
+        if padding_mask.dtype != torch.bool:
+            raise TypeError(
+                f"{name} must have dtype=torch.bool."
+            )
+
+        if padding_mask.dim() != 2:
+            raise ValueError(
+                f"{name} must have shape [B, L]."
+            )
+
+        if padding_mask.shape[1] != max_length:
+            raise ValueError(
+                f"{name} second dimension must equal "
+                f"{max_length}."
+            )
+
+        if sequence_lengths.dim() != 1:
+            raise ValueError(
+                "sequence_lengths must have shape [B]."
+            )
+
+        if sequence_lengths.shape[0] != padding_mask.shape[0]:
+            raise ValueError(
+                f"{name} batch dimension does not match "
+                "sequence_lengths."
+            )
+
+        if torch.any(sequence_lengths <= 0):
+            raise ValueError(
+                "All biological sequences must contain at least "
+                "one amino acid."
+            )
+
+        if torch.any(sequence_lengths > max_length):
+            raise ValueError(
+                f"A biological sequence is longer than {name}'s "
+                f"maximum length ({max_length})."
+            )
+
+        expected = (
+            torch.arange(
+                max_length,
+                device=padding_mask.device,
+            )
+            .unsqueeze(0)
+            >= sequence_lengths.to(
+                padding_mask.device
+            ).unsqueeze(1)
+        )
+
+        if not torch.equal(
+            padding_mask,
+            expected,
+        ):
+            raise ValueError(
+                f"{name} must be strict right-padding and must "
+                "exactly match biological sequence lengths."
+            )
+
+    # =========================================================================
+    # PROTEIN ENCODING
+    # =========================================================================
 
     def encode_protein(
         self,
         protein_tokens: torch.Tensor,
-        protein_sequences: Optional[Sequence[str]] = None,
+        protein_sequences: Optional[List[str]] = None,
+        protein_padding_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode protein sequences.
+
+        Returns
+        -------
+        memory:
+            [B, L_aa, d_model]
+
+        memory_padding_mask:
+            [B, L_aa], True at padded positions.
+        """
+
+        if protein_tokens.dim() != 2:
+            raise ValueError(
+                "protein_tokens must have shape [B, L_aa]."
+            )
+
+        B, L = protein_tokens.shape
+
+        if protein_tokens.dtype != torch.long:
+            raise TypeError(
+                "protein_tokens must have dtype=torch.long."
+            )
+
+        # ---------------------------------------------------------------------
+        # Determine biological lengths
+        # ---------------------------------------------------------------------
+
+        if protein_sequences is not None:
+            if len(protein_sequences) != B:
+                raise ValueError(
+                    "protein_sequences batch size does not match "
+                    "protein_tokens."
+                )
+
+            if not all(
+                isinstance(sequence, str)
+                for sequence in protein_sequences
+            ):
+                raise TypeError(
+                    "Every protein sequence must be a string."
+                )
+
+            sequence_lengths = torch.tensor(
+                [
+                    len(sequence)
+                    for sequence in protein_sequences
+                ],
+                dtype=torch.long,
+                device=protein_tokens.device,
+            )
+
+        elif protein_padding_mask is not None:
+            sequence_lengths = (
+                ~protein_padding_mask
+            ).sum(dim=1)
+
+        else:
+            raise ValueError(
+                "Either protein_sequences or "
+                "protein_padding_mask must be provided."
+            )
+
+        # ---------------------------------------------------------------------
+        # Canonical mask
+        # ---------------------------------------------------------------------
+
+        expected_mask = (
+            torch.arange(
+                L,
+                device=protein_tokens.device,
+            )
+            .unsqueeze(0)
+            >= sequence_lengths.unsqueeze(1)
+        )
+
+        if protein_padding_mask is None:
+            protein_padding_mask = expected_mask
+
+        else:
+            if protein_padding_mask.device != protein_tokens.device:
+                raise ValueError(
+                    "protein_padding_mask and protein_tokens "
+                    "must be on the same device."
+                )
+
+            if protein_padding_mask.shape != (B, L):
+                raise ValueError(
+                    f"protein_padding_mask must have shape {(B, L)}."
+                )
+
+            self._validate_right_padding_mask(
+                protein_padding_mask,
+                sequence_lengths,
+                L,
+                "protein_padding_mask",
+            )
+
+        # ---------------------------------------------------------------------
+        # Validate protein tokens
+        # ---------------------------------------------------------------------
+
+        valid_positions = ~protein_padding_mask
+        padded_positions = protein_padding_mask
+
+        if torch.any(
+            protein_tokens[valid_positions] < 0
+        ):
+            raise ValueError(
+                "Valid protein positions cannot contain negative "
+                "token IDs."
+            )
+
+        if torch.any(
+            protein_tokens[valid_positions]
+            >= len(AA_VOCAB)
+        ):
+            raise ValueError(
+                "Valid protein positions must contain canonical "
+                "amino-acid token IDs in [0, 19]."
+            )
+
+        if torch.any(
+            protein_tokens[padded_positions]
+            != AA_PAD_TOKEN
+        ):
+            raise ValueError(
+                "Padded protein positions must contain "
+                "AA_PAD_TOKEN."
+            )
+
+        # ---------------------------------------------------------------------
+        # ESM-2 path
+        # ---------------------------------------------------------------------
+
+        if self.esm_model is not None:
+
+            if protein_sequences is None:
+                raise ValueError(
+                    "protein_sequences are required when using ESM-2."
+                )
+
+            batch = [
+                (
+                    f"protein_{i}",
+                    sequence,
+                )
+                for i, sequence in enumerate(
+                    protein_sequences
+                )
+            ]
+
+            _, _, esm_tokens = (
+                self.esm_batch_converter(batch)
+            )
+
+            esm_tokens = esm_tokens.to(
+                protein_tokens.device
+            )
+
+            with torch.no_grad():
+                result = self.esm_model(
+                    esm_tokens,
+                    repr_layers=[30],
+                    return_contacts=False,
+                )
+
+            if 30 not in result["representations"]:
+                raise RuntimeError(
+                    "ESM-2 did not return representation layer 30."
+                )
+
+            x = result["representations"][30]
+
+            # Remove BOS and EOS.
+            x = x[:, 1:-1]
+
+            if x.shape[1] != L:
+                raise RuntimeError(
+                    "ESM representation length does not match "
+                    "protein token length."
+                )
+
+            esm_padding_mask = (
+                torch.arange(
+                    x.shape[1],
+                    device=x.device,
+                )
+                .unsqueeze(0)
+                >= sequence_lengths.to(
+                    x.device
+                ).unsqueeze(1)
+            )
+
+            if not torch.equal(
+                esm_padding_mask,
+                protein_padding_mask,
+            ):
+                raise ValueError(
+                    "ESM-derived padding mask disagrees with "
+                    "protein_padding_mask."
+                )
+
+            memory_padding_mask = esm_padding_mask
+
+        # ---------------------------------------------------------------------
+        # Fallback path
+        # ---------------------------------------------------------------------
+
+        else:
+
+            x = self.aa_embedding(
+                protein_tokens
+            )
+
+            x = self.protein_encoder(
+                x,
+                src_key_padding_mask=protein_padding_mask,
+            )
+
+            x = x.masked_fill(
+                protein_padding_mask.unsqueeze(-1),
+                0.0,
+            )
+
+            memory_padding_mask = protein_padding_mask
+
+        # ---------------------------------------------------------------------
+        # Projection
+        # ---------------------------------------------------------------------
+
+        memory = self.esm_projection(x)
+
+        memory = memory.masked_fill(
+            memory_padding_mask.unsqueeze(-1),
+            0.0,
+        )
+
+        return (
+            memory,
+            memory_padding_mask,
+        )
+
+    # =========================================================================
+    # SYNONYMOUS LOGIT MASKING
+    # =========================================================================
+
+    def _apply_synonymous_mask(
+        self,
+        logits: torch.Tensor,
+        aa_sequence: List[str],
     ) -> torch.Tensor:
         """
-        Encode protein sequence via ESM-2 (or stub encoder).
-        protein_tokens: (B, L_aa) integer amino acid token IDs
-        Returns: (B, L_aa, d_model) contextual residue representations
+        Apply hard synonymous-codon constraints.
+
+        Returns a cloned tensor so the original logits remain untouched.
         """
-        if self.esm_model is not None:
-            if protein_sequences is None:
-                protein_sequences = [
-                    "".join(
-                        AA_VOCAB[token]
-                        if 0 <= int(token) < len(AA_VOCAB)
-                        else "X"
-                        for token in row
+
+        if self.allow_nonsynonymous:
+            return logits
+
+        B, L, V = logits.shape
+
+        if V != len(ALL_CODONS):
+            raise RuntimeError(
+                "Codon head vocabulary size does not match "
+                "ALL_CODONS."
+            )
+
+        if len(aa_sequence) != B:
+            raise ValueError(
+                "aa_sequence batch size does not match logits."
+            )
+
+        masked_logits = logits.clone()
+
+        for b in range(B):
+
+            aa_str = aa_sequence[b]
+
+            if len(aa_str) > L:
+                raise ValueError(
+                    "Amino-acid sequence is longer than decoder "
+                    "sequence length."
+                )
+
+            for pos, aa in enumerate(aa_str):
+
+                syn_mask = get_synonymous_mask(
+                    aa,
+                    device=logits.device,
+                )
+
+                if syn_mask.shape != (len(ALL_CODONS),):
+                    raise RuntimeError(
+                        "get_synonymous_mask() returned an invalid shape."
                     )
-                    for row in protein_tokens.detach().cpu()
-                ]
-            batch = [(str(index), sequence) for index, sequence in enumerate(protein_sequences)]
-            _, _, esm_tokens = self.esm_batch_converter(batch)
-            esm_tokens = esm_tokens.to(protein_tokens.device)
-            with torch.no_grad():
-                result = self.esm_model(esm_tokens, repr_layers=[30], return_contacts=False)
-            x = result["representations"][30][:, 1:-1]
-        else:
-            x = self.aa_embedding(protein_tokens)  # (B, L_aa, d_model)
-            x = self.protein_encoder(x)  # (B, L_aa, d_model)
-        return self.esm_projection(x)  # (B, L_aa, d_model)
+
+                if not torch.any(syn_mask):
+                    raise ValueError(
+                        f"No synonymous codons exist for amino acid "
+                        f"{aa!r}."
+                    )
+
+                masked_logits[b, pos] = (
+                    masked_logits[b, pos].masked_fill(
+                        ~syn_mask,
+                        torch.finfo(
+                            logits.dtype
+                        ).min,
+                    )
+                )
+
+        return masked_logits
+
+    # =========================================================================
+    # TEACHER-FORCED DECODING
+    # =========================================================================
 
     def decode_teacher_forced(
         self,
-        memory: torch.Tensor,  # (B, L_aa, d_model) protein encoding
-        target_codons: torch.Tensor,  # (B, L_codon) ground truth codon tokens (training)
-        aa_sequence: List[str],  # list of amino acid strings per batch
-    ) -> torch.Tensor:  # (B, L_codon, 64) codon logits
+        memory: torch.Tensor,
+        target_codons: torch.Tensor,
+        aa_sequence: List[str],
+        target_padding_mask: Optional[torch.Tensor] = None,
+        memory_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
-        Teacher-forced training: generate all positions in parallel using
-        shifted target tokens as decoder input. Uses causal masking so
-        position i cannot attend to positions > i.
+        Teacher-forced autoregressive decoder.
+
+        Input:
+            target_codons = [c1, c2, c3, ...]
+
+        Decoder input:
+            [BOS, c1, c2, ...]
+
+        Position i therefore predicts ci while being causally
+        prevented from seeing future target codons.
         """
+
+        if target_codons.dim() != 2:
+            raise ValueError(
+                "target_codons must have shape [B, L]."
+            )
+
         B, L = target_codons.shape
         device = target_codons.device
 
-        # Prepend BOS token
-        bos = torch.full((B, 1), BOS_TOKEN, dtype=torch.long, device=device)
-        dec_input = torch.cat([bos, target_codons[:, :-1]], dim=1)  # (B, L)
+        if L > self.max_codons:
+            raise ValueError(
+                f"Target sequence length {L} exceeds "
+                f"max_codons={self.max_codons}."
+            )
 
+        if memory.shape[0] != B:
+            raise ValueError(
+                "memory batch size does not match target_codons."
+            )
+
+        # ---------------------------------------------------------------------
+        # Decoder input
+        # ---------------------------------------------------------------------
+
+        bos = torch.full(
+            (B, 1),
+            BOS_TOKEN,
+            dtype=torch.long,
+            device=device,
+        )
+
+        dec_input = torch.cat(
+            [
+                bos,
+                target_codons[:, :-1],
+            ],
+            dim=1,
+        )
+
+        # ---------------------------------------------------------------------
+        # Validate decoder tokens
+        # ---------------------------------------------------------------------
+
+        if torch.any(
+            dec_input < 0
+        ):
+            raise ValueError(
+                "Decoder input contains negative token IDs."
+            )
+
+        if torch.any(
+            dec_input >= VOCAB_SIZE
+        ):
+            raise ValueError(
+                "Decoder input contains token IDs outside VOCAB_SIZE."
+            )
+
+        # ---------------------------------------------------------------------
         # Positional encoding
-        positions = torch.arange(L, device=device)
-        dec_emb = self.codon_embedding(dec_input) + self.pos_encoding(
-            positions
-        ).unsqueeze(0)
+        # ---------------------------------------------------------------------
 
-        # Causal mask: position i cannot attend to j > i
-        causal_mask = nn.Transformer.generate_square_subsequent_mask(L, device=device)
+        positions = torch.arange(
+            L,
+            device=device,
+        )
 
-        # Decode: cross-attends to protein encoder output
+        dec_emb = (
+            self.codon_embedding(dec_input)
+            + self.pos_encoding(positions).unsqueeze(0)
+        )
+
+        # ---------------------------------------------------------------------
+        # Causal mask
+        # ---------------------------------------------------------------------
+
+        causal_mask = (
+            nn.Transformer.generate_square_subsequent_mask(
+                L,
+                device=device,
+            )
+        )
+
+        # ---------------------------------------------------------------------
+        # Transformer decoder
+        # ---------------------------------------------------------------------
+
         dec_out = self.decoder(
             tgt=dec_emb,
             memory=memory,
             tgt_mask=causal_mask,
-        )  # (B, L, d_model)
+            tgt_key_padding_mask=target_padding_mask,
+            memory_key_padding_mask=memory_padding_mask,
+        )
 
-        logits = self.codon_head(dec_out)  # (B, L, 64)
+        # ---------------------------------------------------------------------
+        # Restore strict padding invariant
+        # ---------------------------------------------------------------------
 
-        if not self.allow_nonsynonymous:
-            if len(aa_sequence) != B or not all(
-                isinstance(sequence, str) for sequence in aa_sequence
-            ):
-                raise ValueError(
-                    "aa_sequence must contain one amino-acid string per batch item"
-                )
-            for b in range(B):
-                aa_str = aa_sequence[b]
-                for pos, aa in enumerate(aa_str[:L]):
-                    syn_mask = get_synonymous_mask(aa, device)
-                    logits[b, pos, ~syn_mask] = -1e9
+        if target_padding_mask is not None:
+            dec_out = dec_out.masked_fill(
+                target_padding_mask.unsqueeze(-1),
+                0.0,
+            )
+
+        # ---------------------------------------------------------------------
+        # Codon logits
+        # ---------------------------------------------------------------------
+
+        logits = self.codon_head(
+            dec_out
+        )
+
+        # ---------------------------------------------------------------------
+        # Biological synonymous constraint
+        # ---------------------------------------------------------------------
+
+        logits = self._apply_synonymous_mask(
+            logits,
+            aa_sequence,
+        )
 
         return logits
+
+    # =========================================================================
+    # AUTOREGRESSIVE SINGLE-SEQUENCE DECODER
+    # =========================================================================
+
+    def _decode_next(
+        self,
+        generated: torch.Tensor,
+        memory: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute next-token logits for one or more sequences.
+
+        generated:
+            [B, T]
+
+        memory:
+            [B, L_aa, d_model]
+
+        returns:
+            [B, 64]
+        """
+
+        B, T = generated.shape
+
+        if T > self.max_codons:
+            raise ValueError(
+                "Generated sequence exceeds max_codons."
+            )
+
+        positions = torch.arange(
+            T,
+            device=generated.device,
+        )
+
+        dec_emb = (
+            self.codon_embedding(generated)
+            + self.pos_encoding(positions).unsqueeze(0)
+        )
+
+        causal_mask = (
+            nn.Transformer.generate_square_subsequent_mask(
+                T,
+                device=generated.device,
+            )
+        )
+
+        dec_out = self.decoder(
+            tgt=dec_emb,
+            memory=memory,
+            tgt_mask=causal_mask,
+        )
+
+        return self.codon_head(
+            dec_out[:, -1, :]
+        )
+
+    # =========================================================================
+    # AUTOREGRESSIVE GENERATION
+    # =========================================================================
 
     @torch.no_grad()
     def generate(
         self,
-        protein_tokens: torch.Tensor,  # (B, L_aa)
-        aa_sequence: List[str],  # amino acid strings
+        protein_tokens: torch.Tensor,
+        aa_sequence: List[str],
         temperature: float = 1.0,
         use_beam: bool = False,
         beam_width: int = 5,
-        warm_start_tokens: Optional[torch.Tensor] = None,  # (B, L_codon) fresh DNA warm start
+        warm_start_tokens: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, float]:
         """
-        Autoregressive generation (inference): generate codon by codon.
-        Each new codon sees all previously generated codons via decoder history.
-        Hard synonymous constraint applied at every step.
+        Generate codon sequences.
 
-        Args:
-            warm_start_tokens: optional sliding-window (Fath et al.) result used
-                to SEED the decoder history. The model then refines the warm
-                start codon-by-codon instead of starting from BOS — this
-                implements the advertised AI warm-start (audit issue #17).
+        Parameters
+        ----------
+        protein_tokens:
+            [B, L_aa]
 
-        Returns:
-            generated_tokens: (B, L_codon)
-            estimated_cai: float (Codon Adaptation Index)
+        aa_sequence:
+            List of B amino-acid strings.
+
+        temperature:
+            > 0: stochastic sampling.
+            = 0: greedy decoding.
+
+        use_beam:
+            Run beam search independently for every batch item.
+
+        beam_width:
+            Number of hypotheses retained by beam search.
+
+        warm_start_tokens:
+            Optional [B, L] codon sequence used as a genuine
+            autoregressive prefix.
+
+            Important:
+            The warm start is NOT treated as a sequence to be
+            magically rewritten in place. It becomes actual decoder
+            history, and generation continues from that history.
         """
-        B = protein_tokens.shape[0]
+
+        if protein_tokens.dim() != 2:
+            raise ValueError(
+                "protein_tokens must have shape [B, L_aa]."
+            )
+
+        B, L_aa = protein_tokens.shape
         device = protein_tokens.device
-        if isinstance(aa_sequence, list):
-            aa_sequence = aa_sequence if len(aa_sequence) > 1 else aa_sequence[0]
-        if isinstance(aa_sequence, list):
-            aa_str = "".join(aa_sequence)
-        else:
-            aa_str = aa_sequence
-        L = len(aa_str)
 
-        # Encode protein
-        memory = self.encode_protein(protein_tokens, [aa_str] * B)  # (B, L_aa, d_model)
+        if len(aa_sequence) != B:
+            raise ValueError(
+                "aa_sequence batch size does not match protein_tokens."
+            )
 
-        # Initialize with BOS
-        generated = torch.full((B, 1), BOS_TOKEN, dtype=torch.long, device=device)
+        if not all(
+            isinstance(sequence, str)
+            for sequence in aa_sequence
+        ):
+            raise TypeError(
+                "Every aa_sequence item must be a string."
+            )
+
+        lengths = [
+            len(sequence)
+            for sequence in aa_sequence
+        ]
+
+        if any(length <= 0 for length in lengths):
+            raise ValueError(
+                "Every amino-acid sequence must contain at least "
+                "one residue."
+            )
+
+        if any(length > L_aa for length in lengths):
+            raise ValueError(
+                "An amino-acid sequence is longer than protein_tokens."
+            )
+
+        if temperature < 0:
+            raise ValueError(
+                "temperature must be >= 0."
+            )
 
         if use_beam:
-            return self._beam_search(memory, aa_str, beam_width, device)
-
-        # Greedy / temperature sampling
-        all_cais = []
-        for b in range(B):
-            # Warm start seeds the decoder history: BOS + sliding-window result.
-            # Each position is then REVISED in place while the decoder sees the
-            # FULL sequence (causal mask keeps earlier revisions + later warm-start
-            # codons as context) — this wires the previously-dead warm_start_tokens
-            # into actual conditioning (audit issue #17).
-            if warm_start_tokens is not None:
-                ws = warm_start_tokens[b : b + 1].to(device)  # (1, L_codon)
-                if ws.shape[1] > L:
-                    ws = ws[:, :L]
-                generated_b = torch.cat(
-                    [generated[b : b + 1], ws], dim=1
-                )  # (1, 1 + L)
-                warm_mode = generated_b.shape[1] == L + 1
-            else:
-                generated_b = generated[b : b + 1]  # (1, 1)
-                warm_mode = False
-
-            for pos, aa in enumerate(aa_str):
-                positions = torch.arange(generated_b.shape[1], device=device)
-                dec_emb = self.codon_embedding(generated_b) + self.pos_encoding(
-                    positions
-                ).unsqueeze(0)
-
-                # Causal mask
-                L_dec = generated_b.shape[1]
-                causal = nn.Transformer.generate_square_subsequent_mask(
-                    L_dec, device=device
+            if beam_width < 1:
+                raise ValueError(
+                    "beam_width must be >= 1."
                 )
 
-                dec_out = self.decoder(tgt=dec_emb, memory=memory[b : b + 1], tgt_mask=causal)
-                if warm_mode:
-                    # Query the logits AT this position (pos+1 skips BOS) and
-                    # replace the warm-start codon in place; the decoder still
-                    # sees the entire sequence as context.
-                    logits = self.codon_head(dec_out[:, pos + 1, :])  # (1, 64)
-                else:
-                    logits = self.codon_head(dec_out[:, -1, :])  # (1, 64)
+        # ---------------------------------------------------------------------
+        # Encode all proteins once.
+        # ---------------------------------------------------------------------
 
-                # Preserve the input protein unless mutation mode is enabled.
-                if not self.allow_nonsynonymous:
-                    syn_mask = get_synonymous_mask(aa, device)
-                    logits[:, ~syn_mask] = -1e9
+        protein_padding_mask = (
+            torch.arange(
+                L_aa,
+                device=device,
+            )
+            .unsqueeze(0)
+            >= torch.tensor(
+                lengths,
+                dtype=torch.long,
+                device=device,
+            ).unsqueeze(1)
+        )
 
-                if temperature > 0.0 and temperature != 1.0:
-                    logits = logits / temperature
+        memory, memory_padding_mask = self.encode_protein(
+            protein_tokens,
+            protein_sequences=aa_sequence,
+            protein_padding_mask=protein_padding_mask,
+        )
 
-                if temperature > 0:
-                    probs = F.softmax(logits, dim=-1)
-                    next_codon = torch.multinomial(probs, num_samples=1)
-                else:
-                    next_codon = logits.argmax(dim=-1, keepdim=True)
+        # ---------------------------------------------------------------------
+        # Beam search
+        # ---------------------------------------------------------------------
 
-                if warm_mode:
-                    # In-place revision at position pos+1
-                    generated_b = torch.cat(
+        if use_beam:
+
+            outputs = []
+            cais = []
+
+            for b in range(B):
+
+                warm_start_b = None
+
+                if warm_start_tokens is not None:
+                    warm_start_b = warm_start_tokens[
+                        b:b + 1
+                    ].to(device)
+
+                output_b = self._beam_search(
+                    memory=memory[b:b + 1],
+                    aa_str=aa_sequence[b],
+                    beam_width=beam_width,
+                    device=device,
+                    warm_start_tokens=warm_start_b,
+                )
+
+                outputs.append(
+                    output_b
+                )
+
+                cais.append(
+                    compute_cai(
+                        output_b[0]
+                    ).item()
+                )
+
+            max_length = max(
+                output.shape[1]
+                for output in outputs
+            )
+
+            padded_outputs = torch.full(
+                (B, max_length),
+                PAD_TOKEN,
+                dtype=torch.long,
+                device=device,
+            )
+
+            for b, output in enumerate(outputs):
+                padded_outputs[
+                    b,
+                    :output.shape[1],
+                ] = output[0]
+
+            return (
+                padded_outputs,
+                float(sum(cais) / len(cais)),
+            )
+
+        # ---------------------------------------------------------------------
+        # Greedy / sampling generation
+        # ---------------------------------------------------------------------
+
+        generated_sequences = []
+
+        cai_values = []
+
+        for b in range(B):
+
+            aa_str = aa_sequence[b]
+            L = len(aa_str)
+
+            # -------------------------------------------------------------
+            # Optional warm start
+            # -------------------------------------------------------------
+
+            if warm_start_tokens is not None:
+
+                if warm_start_tokens.dim() != 2:
+                    raise ValueError(
+                        "warm_start_tokens must have shape [B, L]."
+                    )
+
+                if warm_start_tokens.shape[0] != B:
+                    raise ValueError(
+                        "warm_start_tokens batch size does not "
+                        "match protein_tokens."
+                    )
+
+                warm = warm_start_tokens[
+                    b:b + 1
+                ].to(device)
+
+                if warm.shape[1] > L:
+                    raise ValueError(
+                        "warm_start_tokens cannot be longer than "
+                        "the target amino-acid sequence."
+                    )
+
+                warm_length = warm.shape[1]
+
+                if warm_length > 0:
+
+                    # Validate warm-start codons.
+                    if torch.any(
+                        warm < 0
+                    ) or torch.any(
+                        warm >= len(ALL_CODONS)
+                    ):
+                        raise ValueError(
+                            "warm_start_tokens contains invalid codon IDs."
+                        )
+
+                    # Validate synonymous identity.
+                    for pos in range(warm_length):
+
+                        if not self.allow_nonsynonymous:
+
+                            syn_mask = get_synonymous_mask(
+                                aa_str[pos],
+                                device=device,
+                            )
+
+                            codon_id = warm[
+                                0,
+                                pos,
+                            ]
+
+                            if not syn_mask[
+                                codon_id
+                            ]:
+                                raise ValueError(
+                                    f"warm_start_tokens contains codon "
+                                    f"{int(codon_id)} at position {pos}, "
+                                    f"which is not synonymous with "
+                                    f"{aa_str[pos]}."
+                                )
+
+                    generated = torch.cat(
                         [
-                            generated_b[:, : pos + 1],
-                            next_codon,
-                            generated_b[:, pos + 2 :],
+                            torch.full(
+                                (1, 1),
+                                BOS_TOKEN,
+                                dtype=torch.long,
+                                device=device,
+                            ),
+                            warm,
                         ],
                         dim=1,
                     )
+
                 else:
-                    # Cold start: append each new codon
-                    generated_b = torch.cat([generated_b, next_codon], dim=1)
+                    generated = torch.full(
+                        (1, 1),
+                        BOS_TOKEN,
+                        dtype=torch.long,
+                        device=device,
+                    )
 
-            output_tokens_b = generated_b[:, 1:]
-            all_cais.append(compute_cai(output_tokens_b[0]).item())
-            if b == 0:
-                output_tokens = output_tokens_b
+            else:
+                generated = torch.full(
+                    (1, 1),
+                    BOS_TOKEN,
+                    dtype=torch.long,
+                    device=device,
+                )
 
-        cai = sum(all_cais) / len(all_cais) if all_cais else 0.0
+                warm_length = 0
+
+            # -------------------------------------------------------------
+            # Generate remaining positions.
+            #
+            # If a warm start contains k codons, positions 0..k-1 are
+            # already fixed. We generate k..L-1.
+            # -------------------------------------------------------------
+
+            for pos in range(
+                warm_length,
+                L,
+            ):
+
+                logits = self._decode_next(
+                    generated,
+                    memory[b:b + 1],
+                )
+
+                if not self.allow_nonsynonymous:
+
+                    syn_mask = get_synonymous_mask(
+                        aa_str[pos],
+                        device=device,
+                    )
+
+                    logits = logits.masked_fill(
+                        ~syn_mask.unsqueeze(0),
+                        torch.finfo(
+                            logits.dtype
+                        ).min,
+                    )
+
+                # ---------------------------------------------------------
+                # Temperature / sampling
+                # ---------------------------------------------------------
+
+                if temperature == 0.0:
+
+                    next_codon = logits.argmax(
+                        dim=-1,
+                        keepdim=True,
+                    )
+
+                else:
+
+                    scaled_logits = (
+                        logits / temperature
+                    )
+
+                    probabilities = F.softmax(
+                        scaled_logits,
+                        dim=-1,
+                    )
+
+                    next_codon = torch.multinomial(
+                        probabilities,
+                        num_samples=1,
+                    )
+
+                generated = torch.cat(
+                    [
+                        generated,
+                        next_codon,
+                    ],
+                    dim=1,
+                )
+
+            # Remove BOS.
+            output = generated[:, 1:]
+
+            if output.shape[1] != L:
+                raise RuntimeError(
+                    "Generated codon sequence length does not "
+                    "match amino-acid sequence length."
+                )
+
+            generated_sequences.append(
+                output
+            )
+
+            cai_values.append(
+                compute_cai(
+                    output[0]
+                ).item()
+            )
+
+        # ---------------------------------------------------------------------
+        # Pad batch to common length.
+        # ---------------------------------------------------------------------
+
+        max_length = max(
+            output.shape[1]
+            for output in generated_sequences
+        )
+
+        output_tokens = torch.full(
+            (B, max_length),
+            PAD_TOKEN,
+            dtype=torch.long,
+            device=device,
+        )
+
+        for b, output in enumerate(
+            generated_sequences
+        ):
+            output_tokens[
+                b,
+                :output.shape[1],
+            ] = output[0]
+
+        cai = (
+            float(sum(cai_values) / len(cai_values))
+            if cai_values
+            else 0.0
+        )
 
         return output_tokens, cai
 
+    # =========================================================================
+    # BEAM SEARCH
+    # =========================================================================
+
+    @torch.no_grad()
     def _beam_search(
         self,
-        memory: torch.Tensor,  # (1, L_aa, d_model) — beam search for single sequence
+        memory: torch.Tensor,
         aa_str: str,
         beam_width: int,
         device: torch.device,
-    ) -> Tuple[torch.Tensor, float]:
+        warm_start_tokens: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
-        Beam search decoding: explores beam_width parallel hypotheses.
-        Better than greedy for sequences where early codon choices affect
-        long-range RNA secondary structure.
+        Beam search for ONE protein sequence.
+
+        Returns
+        -------
+        Tensor:
+            [1, L] codon IDs.
         """
+
+        if beam_width < 1:
+            raise ValueError(
+                "beam_width must be >= 1."
+            )
+
         L = len(aa_str)
-        # Initialize beams: each beam is (accumulated_log_prob, token_sequence)
-        beams = [(0.0, torch.full((1, 1), BOS_TOKEN, dtype=torch.long, device=device))]
-        memory_exp = memory.expand(beam_width, -1, -1)
 
-        for pos, aa in enumerate(aa_str):
-            all_candidates = []
+        # ---------------------------------------------------------------------
+        # Initialize decoder prefix.
+        # ---------------------------------------------------------------------
 
-            for score, seq in beams:
-                positions = torch.arange(seq.shape[1], device=device)
-                dec_emb = self.codon_embedding(seq) + self.pos_encoding(
-                    positions
-                ).unsqueeze(0)
-                L_dec = seq.shape[1]
-                causal = nn.Transformer.generate_square_subsequent_mask(
-                    L_dec, device=device
+        bos = torch.full(
+            (1, 1),
+            BOS_TOKEN,
+            dtype=torch.long,
+            device=device,
+        )
+
+        if warm_start_tokens is not None:
+
+            if warm_start_tokens.dim() != 2:
+                raise ValueError(
+                    "warm_start_tokens must have shape [1, L]."
                 )
 
-                dec_out = self.decoder(tgt=dec_emb, memory=memory[:1], tgt_mask=causal)
-                logits = self.codon_head(dec_out[0, -1, :])  # (64,)
+            if warm_start_tokens.shape[0] != 1:
+                raise ValueError(
+                    "_beam_search expects one sequence."
+                )
 
-                # Synonymous mask
+            warm = warm_start_tokens.to(device)
+
+            if warm.shape[1] > L:
+                raise ValueError(
+                    "warm_start_tokens is longer than aa_str."
+                )
+
+            for pos in range(
+                warm.shape[1]
+            ):
+
+                codon = warm[
+                    0,
+                    pos,
+                ]
+
+                if codon < 0 or codon >= len(ALL_CODONS):
+                    raise ValueError(
+                        "warm_start_tokens contains invalid codon IDs."
+                    )
+
                 if not self.allow_nonsynonymous:
-                    syn_mask = get_synonymous_mask(aa, device)
-                    logits[~syn_mask] = -1e9
 
-                log_probs = F.log_softmax(logits, dim=-1)
+                    syn_mask = get_synonymous_mask(
+                        aa_str[pos],
+                        device=device,
+                    )
 
-                # Expand top-k options
-                candidate_count = (
-                    int(syn_mask.sum().item())
-                    if not self.allow_nonsynonymous
-                    else len(ALL_CODONS)
+                    if not syn_mask[codon]:
+                        raise ValueError(
+                            f"Warm-start codon at position {pos} "
+                            f"is not synonymous with {aa_str[pos]}."
+                        )
+
+            prefix = torch.cat(
+                [
+                    bos,
+                    warm,
+                ],
+                dim=1,
+            )
+
+            start_pos = warm.shape[1]
+
+        else:
+
+            prefix = bos
+            start_pos = 0
+
+        # ---------------------------------------------------------------------
+        # Each beam:
+        #
+        # score, sequence
+        # ---------------------------------------------------------------------
+
+        beams = [
+            (
+                0.0,
+                prefix,
+            )
+        ]
+
+        # ---------------------------------------------------------------------
+        # Expand until complete.
+        # ---------------------------------------------------------------------
+
+        for pos in range(
+            start_pos,
+            L,
+        ):
+
+            candidates = []
+
+            for score, sequence in beams:
+
+                logits = self._decode_next(
+                    sequence,
+                    memory,
+                )[0]
+
+                if not self.allow_nonsynonymous:
+
+                    syn_mask = get_synonymous_mask(
+                        aa_str[pos],
+                        device=device,
+                    )
+
+                    logits = logits.masked_fill(
+                        ~syn_mask,
+                        torch.finfo(
+                            logits.dtype
+                        ).min,
+                    )
+
+                    valid_count = int(
+                        syn_mask.sum().item()
+                    )
+
+                else:
+
+                    valid_count = len(
+                        ALL_CODONS
+                    )
+
+                log_probs = F.log_softmax(
+                    logits,
+                    dim=-1,
                 )
-                topk_log_probs, topk_indices = log_probs.topk(
-                    min(beam_width, candidate_count)
+
+                k = min(
+                    beam_width,
+                    valid_count,
                 )
-                for lp, idx in zip(topk_log_probs, topk_indices):
-                    new_seq = torch.cat([seq, idx.view(1, 1)], dim=1)
-                    new_score = score + lp.item()
-                    all_candidates.append((new_score, new_seq))
 
-            # Keep top beam_width candidates
-            all_candidates.sort(key=lambda x: x[0], reverse=True)
-            beams = all_candidates[:beam_width]
+                top_log_probs, top_indices = (
+                    torch.topk(
+                        log_probs,
+                        k=k,
+                    )
+                )
 
-        best_score, best_seq = beams[0]
-        output = best_seq[:, 1:]  # remove BOS
-        cai = compute_cai(output[0]).item()
-        return output, cai
+                for lp, idx in zip(
+                    top_log_probs,
+                    top_indices,
+                ):
+
+                    new_sequence = torch.cat(
+                        [
+                            sequence,
+                            idx.view(1, 1),
+                        ],
+                        dim=1,
+                    )
+
+                    candidates.append(
+                        (
+                            score + lp.item(),
+                            new_sequence,
+                        )
+                    )
+
+            if not candidates:
+                raise RuntimeError(
+                    "Beam search produced no valid candidates."
+                )
+
+            candidates.sort(
+                key=lambda item: item[0],
+                reverse=True,
+            )
+
+            beams = candidates[
+                :beam_width
+            ]
+
+        # ---------------------------------------------------------------------
+        # Best hypothesis
+        # ---------------------------------------------------------------------
+
+        _, best_sequence = beams[0]
+
+        output = best_sequence[
+            :,
+            1:,
+        ]
+
+        if output.shape[1] != L:
+            raise RuntimeError(
+                "Beam search output length does not match "
+                "amino-acid sequence length."
+            )
+
+        return output
+
+    # =========================================================================
+    # TRAINING FORWARD PASS
+    # =========================================================================
 
     def forward(
         self,
-        protein_tokens: torch.Tensor,  # (B, L_aa)
-        target_codons: torch.Tensor,  # (B, L_codon) for teacher forcing
+        protein_tokens: torch.Tensor,
+        target_codons: torch.Tensor,
         aa_sequence: List[str],
+        protein_padding_mask: Optional[torch.Tensor] = None,
+        codon_padding_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """Training forward pass."""
-        memory = self.encode_protein(protein_tokens, aa_sequence)
-        logits = self.decode_teacher_forced(memory, target_codons, aa_sequence)
+        """
+        Training forward pass.
 
-        # Score the decoder's soft codon distribution, keeping critic gradients
-        # connected to the generated sequence rather than the target sequence.
-        predicted_expression = self.expression_predictor(F.softmax(logits, dim=-1))
+        Returns
+        -------
+        {
+            "logits":
+                [B, L_codon, 64],
+
+            "expression":
+                [B]
+        }
+        """
+
+        # ---------------------------------------------------------------------
+        # Basic shapes
+        # ---------------------------------------------------------------------
+
+        if protein_tokens.dim() != 2:
+            raise ValueError(
+                "protein_tokens must have shape [B, L_aa]."
+            )
+
+        if target_codons.dim() != 2:
+            raise ValueError(
+                "target_codons must have shape [B, L_codon]."
+            )
+
+        B, L_aa = protein_tokens.shape
+        B_codon, L_codon = target_codons.shape
+
+        if B != B_codon:
+            raise ValueError(
+                "protein_tokens and target_codons must have "
+                "the same batch size."
+            )
+
+        if len(aa_sequence) != B:
+            raise ValueError(
+                f"aa_sequence batch size ({len(aa_sequence)}) "
+                f"does not match protein batch size ({B})."
+            )
+
+        if not all(
+            isinstance(sequence, str)
+            for sequence in aa_sequence
+        ):
+            raise TypeError(
+                "Every aa_sequence item must be a string."
+            )
+
+        # ---------------------------------------------------------------------
+        # Biological sequence lengths are authoritative.
+        # ---------------------------------------------------------------------
+
+        sequence_lengths = torch.tensor(
+            [
+                len(sequence)
+                for sequence in aa_sequence
+            ],
+            dtype=torch.long,
+            device=protein_tokens.device,
+        )
+
+        if torch.any(
+            sequence_lengths <= 0
+        ):
+            raise ValueError(
+                "All amino-acid sequences must contain at least "
+                "one residue."
+            )
+
+        if torch.any(
+            sequence_lengths > L_aa
+        ):
+            raise ValueError(
+                "An amino-acid sequence is longer than "
+                "protein_tokens."
+            )
+
+        if torch.any(
+            sequence_lengths > L_codon
+        ):
+            raise ValueError(
+                "An amino-acid sequence is longer than "
+                "target_codons."
+            )
+
+        # ---------------------------------------------------------------------
+        # Canonical protein mask
+        # ---------------------------------------------------------------------
+
+        expected_protein_mask = (
+            torch.arange(
+                L_aa,
+                device=protein_tokens.device,
+            )
+            .unsqueeze(0)
+            >= sequence_lengths.unsqueeze(1)
+        )
+
+        if protein_padding_mask is None:
+
+            protein_padding_mask = (
+                expected_protein_mask
+            )
+
+        else:
+
+            if protein_padding_mask.device != protein_tokens.device:
+                raise ValueError(
+                    "protein_padding_mask and protein_tokens "
+                    "must be on the same device."
+                )
+
+            if protein_padding_mask.shape != (
+                B,
+                L_aa,
+            ):
+                raise ValueError(
+                    "protein_padding_mask has incorrect shape."
+                )
+
+            self._validate_right_padding_mask(
+                protein_padding_mask,
+                sequence_lengths,
+                L_aa,
+                "protein_padding_mask",
+            )
+
+        # ---------------------------------------------------------------------
+        # Canonical codon mask
+        # ---------------------------------------------------------------------
+
+        expected_codon_mask = (
+            torch.arange(
+                L_codon,
+                device=target_codons.device,
+            )
+            .unsqueeze(0)
+            >= sequence_lengths.to(
+                target_codons.device
+            ).unsqueeze(1)
+        )
+
+        if codon_padding_mask is None:
+
+            codon_padding_mask = (
+                expected_codon_mask
+            )
+
+        else:
+
+            if codon_padding_mask.device != target_codons.device:
+                raise ValueError(
+                    "codon_padding_mask and target_codons "
+                    "must be on the same device."
+                )
+
+            if codon_padding_mask.shape != (
+                B,
+                L_codon,
+            ):
+                raise ValueError(
+                    "codon_padding_mask has incorrect shape."
+                )
+
+            self._validate_right_padding_mask(
+                codon_padding_mask,
+                sequence_lengths.to(
+                    target_codons.device
+                ),
+                L_codon,
+                "codon_padding_mask",
+            )
+
+        # ---------------------------------------------------------------------
+        # Validate protein token values
+        # ---------------------------------------------------------------------
+
+        protein_valid = ~protein_padding_mask
+        protein_padded = protein_padding_mask
+
+        if torch.any(
+            protein_tokens[protein_valid] < 0
+        ):
+            raise ValueError(
+                "Valid protein tokens cannot be negative."
+            )
+
+        if torch.any(
+            protein_tokens[protein_valid]
+            >= len(AA_VOCAB)
+        ):
+            raise ValueError(
+                "Valid protein tokens must be canonical "
+                "amino-acid IDs in [0, 19]."
+            )
+
+        if torch.any(
+            protein_tokens[protein_padded]
+            != AA_PAD_TOKEN
+        ):
+            raise ValueError(
+                "Padded protein positions must contain AA_PAD_TOKEN."
+            )
+
+        # ---------------------------------------------------------------------
+        # Validate codon token values
+        # ---------------------------------------------------------------------
+
+        codon_valid = ~codon_padding_mask
+        codon_padded = codon_padding_mask
+
+        if torch.any(
+            target_codons[codon_valid] < 0
+        ):
+            raise ValueError(
+                "Valid codon tokens cannot be negative."
+            )
+
+        if torch.any(
+            target_codons[codon_valid]
+            >= len(ALL_CODONS)
+        ):
+            raise ValueError(
+                "Valid codon tokens must be in [0, 63]."
+            )
+
+        if torch.any(
+            target_codons[codon_padded]
+            != PAD_TOKEN
+        ):
+            raise ValueError(
+                "Padded codon positions must contain PAD_TOKEN."
+            )
+
+        # ---------------------------------------------------------------------
+        # PAD_TOKEN and codon padding mask must agree exactly.
+        # ---------------------------------------------------------------------
+
+        expected_codon_padding = (
+            target_codons.eq(PAD_TOKEN)
+        )
+
+        if not torch.equal(
+            codon_padding_mask,
+            expected_codon_padding,
+        ):
+            raise ValueError(
+                "codon_padding_mask must exactly match "
+                "target_codons == PAD_TOKEN."
+            )
+
+        # ---------------------------------------------------------------------
+        # Encode protein
+        # ---------------------------------------------------------------------
+
+        memory, memory_padding_mask = (
+            self.encode_protein(
+                protein_tokens,
+                protein_sequences=aa_sequence,
+                protein_padding_mask=protein_padding_mask,
+            )
+        )
+
+        # ---------------------------------------------------------------------
+        # Decode
+        # ---------------------------------------------------------------------
+
+        logits = self.decode_teacher_forced(
+            memory=memory,
+            target_codons=target_codons,
+            aa_sequence=aa_sequence,
+            target_padding_mask=codon_padding_mask,
+            memory_padding_mask=memory_padding_mask,
+        )
+
+        # ---------------------------------------------------------------------
+        # Differentiable expression prediction
+        # ---------------------------------------------------------------------
+
+        predicted_expression = (
+            self.expression_predictor(
+                F.softmax(
+                    logits,
+                    dim=-1,
+                ),
+                padding_mask=codon_padding_mask,
+            )
+        )
 
         return {
-            "logits": logits,  # (B, L, 64) for cross-entropy
-            "expression": predicted_expression,  # (B,) for critic loss
+            "logits": logits,
+            "expression": predicted_expression,
         }
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # TRAINING LOSS (peer-reviewed multi-objective)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1017,6 +2666,7 @@ def codon_optimizer_loss(
     target_expression: Optional[torch.Tensor] = None,  # (B,) measured yield
     protein_fitness_logits: Optional[torch.Tensor] = None,
     lambdas: Optional[Dict[str, float]] = None,
+    codon_padding_mask=None
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Multi-objective training loss.
@@ -1044,15 +2694,16 @@ def codon_optimizer_loss(
     L_CE = F.cross_entropy(
         logits.reshape(B * L, vocab),
         target_codons.reshape(B * L),
+        ignore_index=PAD_TOKEN,
     )
 
     # ── Differentiable CAI reward ─────────────────────────────────────────────
     # We want CAI to be HIGH (≥ 0.96), so minimize -CAI
-    cai_per_seq = torch.stack([compute_cai_from_logits(logits[b]) for b in range(B)])
+    cai_per_seq = torch.stack([compute_cai_from_logits(logits[b][~codon_padding_mask[b]]) for b in range(B)])
     L_CAI = -cai_per_seq.mean()
 
     # ── GC content penalty ────────────────────────────────────────────────────
-    gc_per_seq = torch.stack([gc_from_logits(logits[b]) for b in range(B)])
+    gc_per_seq = torch.stack([gc_from_logits(logits[b][~codon_padding_mask[b]]) for b in range(B)])
     # Treat the requested 58-65% range as an acceptance band. Scaling by the
     # band width keeps the constraint meaningful while preserving gradients.
     gc_low, gc_high = 0.58, 0.65
@@ -1062,10 +2713,10 @@ def codon_optimizer_loss(
     L_GC = (gc_violation / (gc_high - gc_low)).pow(2).mean()
 
     # ── UpA dinucleotide penalty ──────────────────────────────────────────────
-    L_UpA = torch.stack([upa_penalty(logits[b]) for b in range(B)]).mean()
+    L_UpA = torch.stack([upa_penalty(logits[b][~codon_padding_mask[b]]) for b in range(B)]).mean()
 
     # ── Differentiable motif avoidance ──────────────────────────────────────
-    L_motif = torch.stack([motif_penalty_from_logits(logits[b]) for b in range(B)]).mean()
+    L_motif = torch.stack([motif_penalty_from_logits(logits[b][~codon_padding_mask[b]]) for b in range(B)]).mean()
 
     if protein_fitness_logits is not None:
         L_fitness = protein_fitness_loss_from_logits(logits, protein_fitness_logits)
