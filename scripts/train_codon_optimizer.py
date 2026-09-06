@@ -22,20 +22,67 @@ from torch.utils.data import DataLoader
 from chimera.codon_optimizer import (
     CodonOptimizer,
     codon_optimizer_loss,
+    AA_VOCAB,
+    PAD_TOKEN
 )
 from data.codon_dataset import CodonJSONLDataset
 
 
 def collate_records(batch: list[dict]) -> dict[str, torch.Tensor | list[str]]:
-    protein_lengths = {item["protein_tokens"].shape[0] for item in batch}
-    if len(protein_lengths) != 1:
-        raise ValueError(
-            "Mixed-length batches are unsupported; use --batch-size 1 "
-            "or group records by sequence length"
-        )
+    """Pad variable-length protein/codon sequences within each batch."""
+
+    protein_lengths = torch.tensor(
+        [item["protein_tokens"].shape[0] for item in batch],
+        dtype=torch.long,
+    )
+
+    codon_lengths = torch.tensor(
+        [item["codon_tokens"].shape[0] for item in batch],
+        dtype=torch.long,
+    )
+
+    max_protein_len = int(protein_lengths.max())
+    max_codon_len = int(codon_lengths.max())
+
+    protein_pad_token = len(AA_VOCAB)
+
+    protein_tokens = torch.full(
+        (len(batch), max_protein_len),
+        protein_pad_token,
+        dtype=torch.long,
+    )
+
+    codon_tokens = torch.full(
+        (len(batch), max_codon_len),
+        PAD_TOKEN,
+        dtype=torch.long,
+    )
+
+    protein_padding_mask = torch.ones(
+        (len(batch), max_protein_len),
+        dtype=torch.bool,
+    )
+
+    codon_padding_mask = torch.ones(
+        (len(batch), max_codon_len),
+        dtype=torch.bool,
+    )
+
+    for i, item in enumerate(batch):
+        p = item["protein_tokens"]
+        c = item["codon_tokens"]
+
+        protein_tokens[i, : p.shape[0]] = p
+        codon_tokens[i, : c.shape[0]] = c
+
+        protein_padding_mask[i, : p.shape[0]] = False
+        codon_padding_mask[i, : c.shape[0]] = False
+
     return {
-        "protein_tokens": torch.stack([item["protein_tokens"] for item in batch]),
-        "codon_tokens": torch.stack([item["codon_tokens"] for item in batch]),
+        "protein_tokens": protein_tokens,
+        "codon_tokens": codon_tokens,
+        "protein_padding_mask": protein_padding_mask,
+        "codon_padding_mask": codon_padding_mask,
         "aa_sequence": [item["aa_sequence"][0] for item in batch],
         "expression": torch.stack([item["expression"] for item in batch]),
     }
@@ -58,12 +105,15 @@ def train_epoch(model, loader, optimizer, device) -> dict[str, float]:
             protein_tokens,
             codon_tokens,
             batch["aa_sequence"],
+            protein_padding_mask=batch["protein_padding_mask"].to(device),
+            codon_padding_mask=batch["codon_padding_mask"].to(device),
         )
         loss, metrics = codon_optimizer_loss(
             output["logits"],
             codon_tokens,
             output["expression"],
             target_expression=expression,
+            codon_padding_mask=batch["codon_padding_mask"].to(device)
         )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
