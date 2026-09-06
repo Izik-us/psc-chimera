@@ -1,0 +1,2 @@
+GO:0008334	histone mRNA metabolic process
+GO:0016071	mRNA metabolic process

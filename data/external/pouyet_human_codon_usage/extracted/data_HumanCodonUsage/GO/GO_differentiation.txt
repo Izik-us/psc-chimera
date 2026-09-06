@@ -1,0 +1,374 @@
+GO:0000904	cell morphogenesis involved in differentiation
+GO:0001649	osteoblast differentiation
+GO:0001754	eye photoreceptor cell differentiation
+GO:0001779	natural killer cell differentiation
+GO:0001826	inner cell mass cell differentiation
+GO:0001829	trophectodermal cell differentiation
+GO:0001865	NK T cell differentiation
+GO:0001923	B-1 B cell differentiation
+GO:0001949	sebaceous gland cell differentiation
+GO:0002062	chondrocyte differentiation
+GO:0002067	glandular epithelial cell differentiation
+GO:0002085	inhibition of neuroepithelial cell differentiation
+GO:0002244	hematopoietic progenitor cell differentiation
+GO:0002268	follicular dendritic cell differentiation
+GO:0002292	T cell differentiation involved in immune response
+GO:0002302	CD8-positive, alpha-beta T cell differentiation involved in immune response
+GO:0002313	mature B cell differentiation involved in immune response
+GO:0002314	germinal center B cell differentiation
+GO:0002315	marginal zone B cell differentiation
+GO:0002316	follicular B cell differentiation
+GO:0002317	plasma cell differentiation
+GO:0002318	myeloid progenitor cell differentiation
+GO:0002320	lymphoid progenitor cell differentiation
+GO:0002327	immature B cell differentiation
+GO:0002328	pro-B cell differentiation
+GO:0002329	pre-B cell differentiation
+GO:0002335	mature B cell differentiation
+GO:0002337	B-1a B cell differentiation
+GO:0002361	CD4-positive, CD25-positive, alpha-beta regulatory T cell differentiation
+GO:0002521	leukocyte differentiation
+GO:0002572	pro-T cell differentiation
+GO:0002573	myeloid leukocyte differentiation
+GO:0002761	regulation of myeloid leukocyte differentiation
+GO:0002763	positive regulation of myeloid leukocyte differentiation
+GO:0003167	atrioventricular bundle cell differentiation
+GO:0003168	Purkinje myocyte differentiation
+GO:0003256	regulation of transcription from RNA polymerase II promoter involved in myocardial precursor cell differentiation
+GO:0003257	positive regulation of transcription from RNA polymerase II promoter involved in myocardial precursor cell differentiation
+GO:0003309	type B pancreatic cell differentiation
+GO:0003310	pancreatic A cell differentiation
+GO:0003311	pancreatic D cell differentiation
+GO:0003357	noradrenergic neuron differentiation
+GO:0003413	chondrocyte differentiation involved in endochondral bone morphogenesis
+GO:0003418	growth plate cartilage chondrocyte differentiation
+GO:0007289	spermatid nucleus differentiation
+GO:0007548	sex differentiation
+GO:0009913	epidermal cell differentiation
+GO:0009994	oocyte differentiation
+GO:0010001	glial cell differentiation
+GO:0010002	cardioblast differentiation
+GO:0010668	ectodermal cell differentiation
+GO:0010724	regulation of definitive erythrocyte differentiation
+GO:0010725	regulation of primitive erythrocyte differentiation
+GO:0010742	macrophage derived foam cell differentiation
+GO:0010743	regulation of macrophage derived foam cell differentiation
+GO:0010744	positive regulation of macrophage derived foam cell differentiation
+GO:0010769	regulation of cell morphogenesis involved in differentiation
+GO:0010770	positive regulation of cell morphogenesis involved in differentiation
+GO:0010830	regulation of myotube differentiation
+GO:0010831	positive regulation of myotube differentiation
+GO:0014016	neuroblast differentiation
+GO:0014033	neural crest cell differentiation
+GO:0014037	Schwann cell differentiation
+GO:0014038	regulation of Schwann cell differentiation
+GO:0014040	positive regulation of Schwann cell differentiation
+GO:0014816	skeletal muscle satellite cell differentiation
+GO:0014835	myoblast differentiation involved in skeletal muscle regeneration
+GO:0014902	myotube differentiation
+GO:0014908	myotube differentiation involved in skeletal muscle regeneration
+GO:0021514	ventral spinal cord interneuron differentiation
+GO:0021515	cell differentiation in spinal cord
+GO:0021522	spinal cord motor neuron differentiation
+GO:0021523	somatic motor neuron differentiation
+GO:0021524	visceral motor neuron differentiation
+GO:0021526	medial motor column neuron differentiation
+GO:0021527	spinal cord association neuron differentiation
+GO:0021528	commissural neuron differentiation in spinal cord
+GO:0021529	spinal cord oligodendrocyte cell differentiation
+GO:0021533	cell differentiation in hindbrain
+GO:0021702	cerebellar Purkinje cell differentiation
+GO:0021707	cerebellar granule cell differentiation
+GO:0021773	striatal medium spiny neuron differentiation
+GO:0021858	GABAergic neuron differentiation in basal ganglia
+GO:0021859	pyramidal neuron differentiation
+GO:0021861	forebrain radial glial cell differentiation
+GO:0021870	Cajal-Retzius cell differentiation
+GO:0021879	forebrain neuron differentiation
+GO:0021889	olfactory bulb interneuron differentiation
+GO:0021892	cerebral cortex GABAergic interneuron differentiation
+GO:0021895	cerebral cortex neuron differentiation
+GO:0021953	central nervous system neuron differentiation
+GO:0021979	hypothalamus cell differentiation
+GO:0030098	lymphocyte differentiation
+GO:0030099	myeloid cell differentiation
+GO:0030154	cell differentiation
+GO:0030182	neuron differentiation
+GO:0030183	B cell differentiation
+GO:0030216	keratinocyte differentiation
+GO:0030217	T cell differentiation
+GO:0030218	erythrocyte differentiation
+GO:0030219	megakaryocyte differentiation
+GO:0030221	basophil differentiation
+GO:0030222	eosinophil differentiation
+GO:0030223	neutrophil differentiation
+GO:0030224	monocyte differentiation
+GO:0030225	macrophage differentiation
+GO:0030316	osteoclast differentiation
+GO:0030318	melanocyte differentiation
+GO:0030851	granulocyte differentiation
+GO:0030852	regulation of granulocyte differentiation
+GO:0030854	positive regulation of granulocyte differentiation
+GO:0030855	epithelial cell differentiation
+GO:0030856	regulation of epithelial cell differentiation
+GO:0030858	positive regulation of epithelial cell differentiation
+GO:0030859	polarized epithelial cell differentiation
+GO:0030862	positive regulation of polarized epithelial cell differentiation
+GO:0032330	regulation of chondrocyte differentiation
+GO:0032332	positive regulation of chondrocyte differentiation
+GO:0032825	positive regulation of natural killer cell differentiation
+GO:0032831	positive regulation of CD4-positive, CD25-positive, alpha-beta regulatory T cell differentiation
+GO:0033077	T cell differentiation in thymus
+GO:0033081	regulation of T cell differentiation in thymus
+GO:0033089	positive regulation of T cell differentiation in thymus
+GO:0033327	Leydig cell differentiation
+GO:0035026	leading edge cell differentiation
+GO:0035051	cardiocyte differentiation
+GO:0035315	hair cell differentiation
+GO:0035645	enteric smooth muscle cell differentiation
+GO:0035881	amacrine cell differentiation
+GO:0035883	enteroendocrine cell differentiation
+GO:0035886	vascular smooth muscle cell differentiation
+GO:0035887	aortic smooth muscle cell differentiation
+GO:0035914	skeletal muscle cell differentiation
+GO:0035987	endodermal cell differentiation
+GO:0035990	tendon cell differentiation
+GO:0042093	T-helper cell differentiation
+GO:0042490	mechanoreceptor differentiation
+GO:0042491	auditory receptor cell differentiation
+GO:0042492	gamma-delta T cell differentiation
+GO:0042692	muscle cell differentiation
+GO:0043011	myeloid dendritic cell differentiation
+GO:0043353	enucleate erythrocyte differentiation
+GO:0043367	CD4-positive, alpha-beta T cell differentiation
+GO:0043370	regulation of CD4-positive, alpha-beta T cell differentiation
+GO:0043372	positive regulation of CD4-positive, alpha-beta T cell differentiation
+GO:0043374	CD8-positive, alpha-beta T cell differentiation
+GO:0043378	positive regulation of CD8-positive, alpha-beta T cell differentiation
+GO:0043379	memory T cell differentiation
+GO:0043380	regulation of memory T cell differentiation
+GO:0043382	positive regulation of memory T cell differentiation
+GO:0043697	cell dedifferentiation
+GO:0044335	canonical Wnt signaling pathway involved in neural crest cell differentiation
+GO:0044338	canonical Wnt signaling pathway involved in mesenchymal stem cell differentiation
+GO:0044339	canonical Wnt signaling pathway involved in osteoblast differentiation
+GO:0045063	T-helper 1 cell differentiation
+GO:0045064	T-helper 2 cell differentiation
+GO:0045065	cytotoxic T cell differentiation
+GO:0045066	regulatory T cell differentiation
+GO:0045444	fat cell differentiation
+GO:0045445	myoblast differentiation
+GO:0045446	endothelial cell differentiation
+GO:0045577	regulation of B cell differentiation
+GO:0045579	positive regulation of B cell differentiation
+GO:0045580	regulation of T cell differentiation
+GO:0045582	positive regulation of T cell differentiation
+GO:0045585	positive regulation of cytotoxic T cell differentiation
+GO:0045586	regulation of gamma-delta T cell differentiation
+GO:0045588	positive regulation of gamma-delta T cell differentiation
+GO:0045591	positive regulation of regulatory T cell differentiation
+GO:0045595	regulation of cell differentiation
+GO:0045597	positive regulation of cell differentiation
+GO:0045598	regulation of fat cell differentiation
+GO:0045600	positive regulation of fat cell differentiation
+GO:0045601	regulation of endothelial cell differentiation
+GO:0045603	positive regulation of endothelial cell differentiation
+GO:0045604	regulation of epidermal cell differentiation
+GO:0045606	positive regulation of epidermal cell differentiation
+GO:0045607	regulation of auditory receptor cell differentiation
+GO:0045609	positive regulation of auditory receptor cell differentiation
+GO:0045616	regulation of keratinocyte differentiation
+GO:0045618	positive regulation of keratinocyte differentiation
+GO:0045619	regulation of lymphocyte differentiation
+GO:0045621	positive regulation of lymphocyte differentiation
+GO:0045622	regulation of T-helper cell differentiation
+GO:0045624	positive regulation of T-helper cell differentiation
+GO:0045625	regulation of T-helper 1 cell differentiation
+GO:0045627	positive regulation of T-helper 1 cell differentiation
+GO:0045630	positive regulation of T-helper 2 cell differentiation
+GO:0045634	regulation of melanocyte differentiation
+GO:0045636	positive regulation of melanocyte differentiation
+GO:0045637	regulation of myeloid cell differentiation
+GO:0045639	positive regulation of myeloid cell differentiation
+GO:0045645	positive regulation of eosinophil differentiation
+GO:0045646	regulation of erythrocyte differentiation
+GO:0045648	positive regulation of erythrocyte differentiation
+GO:0045651	positive regulation of macrophage differentiation
+GO:0045652	regulation of megakaryocyte differentiation
+GO:0045654	positive regulation of megakaryocyte differentiation
+GO:0045655	regulation of monocyte differentiation
+GO:0045657	positive regulation of monocyte differentiation
+GO:0045660	positive regulation of neutrophil differentiation
+GO:0045661	regulation of myoblast differentiation
+GO:0045663	positive regulation of myoblast differentiation
+GO:0045664	regulation of neuron differentiation
+GO:0045666	positive regulation of neuron differentiation
+GO:0045667	regulation of osteoblast differentiation
+GO:0045669	positive regulation of osteoblast differentiation
+GO:0045670	regulation of osteoclast differentiation
+GO:0045672	positive regulation of osteoclast differentiation
+GO:0045685	regulation of glial cell differentiation
+GO:0045687	positive regulation of glial cell differentiation
+GO:0046534	positive regulation of photoreceptor cell differentiation
+GO:0046632	alpha-beta T cell differentiation
+GO:0046638	positive regulation of alpha-beta T cell differentiation
+GO:0046661	male sex differentiation
+GO:0048333	mesodermal cell differentiation
+GO:0048371	lateral mesodermal cell differentiation
+GO:0048392	intermediate mesodermal cell differentiation
+GO:0048505	regulation of timing of cell differentiation
+GO:0048515	spermatid differentiation
+GO:0048667	cell morphogenesis involved in neuron differentiation
+GO:0048708	astrocyte differentiation
+GO:0048709	oligodendrocyte differentiation
+GO:0048710	regulation of astrocyte differentiation
+GO:0048711	positive regulation of astrocyte differentiation
+GO:0048713	regulation of oligodendrocyte differentiation
+GO:0048714	positive regulation of oligodendrocyte differentiation
+GO:0048762	mesenchymal cell differentiation
+GO:0048773	erythrophore differentiation
+GO:0048863	stem cell differentiation
+GO:0048934	peripheral nervous system neuron differentiation
+GO:0050872	white fat cell differentiation
+GO:0050873	brown fat cell differentiation
+GO:0050931	pigment cell differentiation
+GO:0050942	positive regulation of pigment cell differentiation
+GO:0051138	positive regulation of NK T cell differentiation
+GO:0051145	smooth muscle cell differentiation
+GO:0051146	striated muscle cell differentiation
+GO:0051147	regulation of muscle cell differentiation
+GO:0051149	positive regulation of muscle cell differentiation
+GO:0051150	regulation of smooth muscle cell differentiation
+GO:0051152	positive regulation of smooth muscle cell differentiation
+GO:0051153	regulation of striated muscle cell differentiation
+GO:0051155	positive regulation of striated muscle cell differentiation
+GO:0051891	positive regulation of cardioblast differentiation
+GO:0055007	cardiac muscle cell differentiation
+GO:0055012	ventricular cardiac muscle cell differentiation
+GO:0060008	Sertoli cell differentiation
+GO:0060014	granulosa cell differentiation
+GO:0060019	radial glial cell differentiation
+GO:0060020	Bergmann glial cell differentiation
+GO:0060040	retinal bipolar neuron differentiation
+GO:0060113	inner ear receptor cell differentiation
+GO:0060126	somatotropin secreting cell differentiation
+GO:0060127	prolactin secreting cell differentiation
+GO:0060128	corticotropin hormone secreting cell differentiation
+GO:0060129	thyroid-stimulating hormone-secreting cell differentiation
+GO:0060164	regulation of timing of neuron differentiation
+GO:0060165	regulation of timing of subpallium neuron differentiation
+GO:0060217	hemangioblast cell differentiation
+GO:0060218	hematopoietic stem cell differentiation
+GO:0060219	camera-type eye photoreceptor cell differentiation
+GO:0060221	retinal rod cell differentiation
+GO:0060290	transdifferentiation
+GO:0060318	definitive erythrocyte differentiation
+GO:0060319	primitive erythrocyte differentiation
+GO:0060374	mast cell differentiation
+GO:0060375	regulation of mast cell differentiation
+GO:0060376	positive regulation of mast cell differentiation
+GO:0060379	cardiac muscle cell myoblast differentiation
+GO:0060479	lung cell differentiation
+GO:0060480	lung goblet cell differentiation
+GO:0060486	Clara cell differentiation
+GO:0060487	lung epithelial cell differentiation
+GO:0060509	Type I pneumocyte differentiation
+GO:0060510	Type II pneumocyte differentiation
+GO:0060528	secretory columnal luminar epithelial cell differentiation involved in prostate glandular acinus development
+GO:0060529	squamous basal epithelial stem cell differentiation involved in prostate gland acinus development
+GO:0060563	neuroepithelial cell differentiation
+GO:0060575	intestinal epithelial cell differentiation
+GO:0060591	chondroblast differentiation
+GO:0060644	mammary gland epithelial cell differentiation
+GO:0060689	cell differentiation involved in salivary gland development
+GO:0060706	cell differentiation involved in embryonic placenta development
+GO:0060707	trophoblast giant cell differentiation
+GO:0060708	spongiotrophoblast differentiation
+GO:0060709	glycogen cell differentiation involved in embryonic placenta development
+GO:0060715	syncytiotrophoblast cell differentiation involved in labyrinthine layer development
+GO:0060718	chorionic trophoblast cell differentiation
+GO:0060742	epithelial cell differentiation involved in prostate gland development
+GO:0060800	regulation of cell differentiation involved in embryonic placenta development
+GO:0060836	lymphatic endothelial cell differentiation
+GO:0060837	blood vessel endothelial cell differentiation
+GO:0060842	arterial endothelial cell differentiation
+GO:0060843	venous endothelial cell differentiation
+GO:0060915	mesenchymal cell differentiation involved in lung development
+GO:0060921	sinoatrial node cell differentiation
+GO:0060947	cardiac vascular smooth muscle cell differentiation
+GO:0060956	endocardial cell differentiation
+GO:0061005	cell differentiation involved in kidney development
+GO:0061017	hepatoblast differentiation
+GO:0061030	epithelial cell differentiation involved in mammary gland alveolus development
+GO:0061100	lung neuroendocrine cell differentiation
+GO:0061101	neuroendocrine cell differentiation
+GO:0061102	stomach neuroendocrine cell differentiation
+GO:0061103	carotid body glomus cell differentiation
+GO:0061104	adrenal chromaffin cell differentiation
+GO:0061140	lung secretory cell differentiation
+GO:0061141	lung ciliated cell differentiation
+GO:0061452	retrotrapezoid nucleus neuron differentiation
+GO:0061470	T follicular helper cell differentiation
+GO:0070306	lens fiber cell differentiation
+GO:0070315	G1 to G0 transition involved in cell differentiation
+GO:0070365	hepatocyte differentiation
+GO:0070368	positive regulation of hepatocyte differentiation
+GO:0071542	dopaminergic neuron differentiation
+GO:0071895	odontoblast differentiation
+GO:0072112	glomerular visceral epithelial cell differentiation
+GO:0072139	glomerular parietal epithelial cell differentiation
+GO:0072160	nephron tubule epithelial cell differentiation
+GO:0072161	mesenchymal cell differentiation involved in kidney development
+GO:0072162	metanephric mesenchymal cell differentiation
+GO:0072182	regulation of nephron tubule epithelial cell differentiation
+GO:0072184	renal vesicle progenitor cell differentiation
+GO:0072192	ureter epithelial cell differentiation
+GO:0072193	ureter smooth muscle cell differentiation
+GO:0072202	cell differentiation involved in metanephros development
+GO:0072240	metanephric DCT cell differentiation
+GO:0072254	metanephric glomerular mesangial cell differentiation
+GO:0072307	regulation of metanephric nephron tubule epithelial cell differentiation
+GO:0072539	T-helper 17 cell differentiation
+GO:0072674	multinuclear osteoclast differentiation
+GO:0090104	pancreatic epsilon cell differentiation
+GO:0090335	regulation of brown fat cell differentiation
+GO:0090336	positive regulation of brown fat cell differentiation
+GO:0090425	acinar cell differentiation
+GO:0097028	dendritic cell differentiation
+GO:0097029	mature conventional dendritic cell differentiation
+GO:0097154	GABAergic neuron differentiation
+GO:0098528	skeletal muscle fiber differentiation
+GO:1900100	positive regulation of plasma cell differentiation
+GO:1901248	positive regulation of lung ciliated cell differentiation
+GO:1901249	regulation of lung goblet cell differentiation
+GO:1901251	positive regulation of lung goblet cell differentiation
+GO:1901532	regulation of hematopoietic progenitor cell differentiation
+GO:1901534	positive regulation of hematopoietic progenitor cell differentiation
+GO:1902036	regulation of hematopoietic stem cell differentiation
+GO:1902038	positive regulation of hematopoietic stem cell differentiation
+GO:1902748	positive regulation of lens fiber cell differentiation
+GO:1902809	regulation of skeletal muscle fiber differentiation
+GO:1903251	multi-ciliated epithelial cell differentiation
+GO:2000063	positive regulation of ureter smooth muscle cell differentiation
+GO:2000176	positive regulation of pro-T cell differentiation
+GO:2000358	positive regulation of kidney smooth muscle cell differentiation
+GO:2000594	positive regulation of metanephric DCT cell differentiation
+GO:2000696	regulation of epithelial cell differentiation involved in kidney development
+GO:2000721	positive regulation of transcription from RNA polymerase II promoter involved in smooth muscle cell differentiation
+GO:2000724	positive regulation of cardiac vascular smooth muscle cell differentiation
+GO:2000727	positive regulation of cardiac muscle cell differentiation
+GO:2000736	regulation of stem cell differentiation
+GO:2000738	positive regulation of stem cell differentiation
+GO:2000739	regulation of mesenchymal stem cell differentiation
+GO:2000741	positive regulation of mesenchymal stem cell differentiation
+GO:2000768	positive regulation of nephron tubule epithelial cell differentiation
+GO:2000973	regulation of pro-B cell differentiation
+GO:2000977	regulation of forebrain neuron differentiation
+GO:2000979	positive regulation of forebrain neuron differentiation
+GO:2000982	positive regulation of inner ear receptor cell differentiation
+GO:2001012	mesenchymal cell differentiation involved in renal system development
+GO:2001014	regulation of skeletal muscle cell differentiation
+GO:2001016	positive regulation of skeletal muscle cell differentiation
+GO:2001051	positive regulation of tendon cell differentiation
+GO:2001198	regulation of dendritic cell differentiation
+GO:2001200	positive regulation of dendritic cell differentiation

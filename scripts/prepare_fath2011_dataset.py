@@ -104,6 +104,8 @@ def build_records(
                     "expression": 1.0 / scale,
                     "expression_ratio": 1.0,
                     "accession": accession,
+                    "source": "Fath2011_Table1",
+                    "label_type": "measured",
                 },
                 {
                     "aa_sequence": optimized_protein,
@@ -111,6 +113,8 @@ def build_records(
                     "expression": ratio / scale,
                     "expression_ratio": ratio,
                     "accession": accession,
+                    "source": "Fath2011_Table1",
+                    "label_type": "measured",
                 },
             ]
         )

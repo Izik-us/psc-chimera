@@ -1,0 +1,587 @@
+GO:0001501	skeletal system development
+GO:0001541	ovarian follicle development
+GO:0001568	blood vessel development
+GO:0001654	eye development
+GO:0001655	urogenital system development
+GO:0001656	metanephros development
+GO:0001657	ureteric bud development
+GO:0001701	in utero embryonic development
+GO:0001822	kidney development
+GO:0001823	mesonephros development
+GO:0001824	blastocyst development
+GO:0001840	neural plate development
+GO:0001885	endothelial cell development
+GO:0001889	liver development
+GO:0001890	placenta development
+GO:0001892	embryonic placenta development
+GO:0001893	maternal placenta development
+GO:0001942	hair follicle development
+GO:0001944	vasculature development
+GO:0001945	lymph vessel development
+GO:0002063	chondrocyte development
+GO:0002064	epithelial cell development
+GO:0002066	columnar/cuboidal epithelial cell development
+GO:0002068	glandular epithelial cell development
+GO:0002072	optic cup morphogenesis involved in camera-type eye development
+GO:0002074	extraocular skeletal muscle development
+GO:0002076	osteoblast development
+GO:0002088	lens development in camera-type eye
+GO:0002520	immune system development
+GO:0002930	trabecular meshwork development
+GO:0002932	tendon sheath development
+GO:0003006	developmental process involved in reproduction
+GO:0003157	endocardium development
+GO:0003158	endothelium development
+GO:0003161	cardiac conduction system development
+GO:0003162	atrioventricular node development
+GO:0003163	sinoatrial node development
+GO:0003165	Purkinje myocyte development
+GO:0003166	bundle of His development
+GO:0003170	heart valve development
+GO:0003171	atrioventricular valve development
+GO:0003174	mitral valve development
+GO:0003175	tricuspid valve development
+GO:0003176	aortic valve development
+GO:0003197	endocardial cushion development
+GO:0003205	cardiac chamber development
+GO:0003229	ventricular cardiac muscle tissue development
+GO:0003231	cardiac ventricle development
+GO:0003279	cardiac septum development
+GO:0003281	ventricular septum development
+GO:0003283	atrial septum development
+GO:0003284	septum primum development
+GO:0003285	septum secundum development
+GO:0003323	type B pancreatic cell development
+GO:0003334	keratinocyte development
+GO:0003335	corneocyte development
+GO:0003342	proepicardium development
+GO:0003350	pulmonary myocardium development
+GO:0003358	noradrenergic neuron development
+GO:0003360	brainstem development
+GO:0003406	retinal pigment epithelium development
+GO:0003407	neural retina development
+GO:0003408	optic cup formation involved in camera-type eye development
+GO:0003417	growth plate cartilage development
+GO:0003431	growth plate cartilage chondrocyte development
+GO:0003433	chondrocyte development involved in endochondral bone morphogenesis
+GO:0007275	multicellular organismal development
+GO:0007281	germ cell development
+GO:0007286	spermatid development
+GO:0007398	ectoderm development
+GO:0007399	nervous system development
+GO:0007417	central nervous system development
+GO:0007418	ventral midline development
+GO:0007420	brain development
+GO:0007422	peripheral nervous system development
+GO:0007423	sensory organ development
+GO:0007431	salivary gland development
+GO:0007492	endoderm development
+GO:0007494	midgut development
+GO:0007495	visceral mesoderm-endoderm interaction involved in midgut development
+GO:0007497	posterior midgut development
+GO:0007498	mesoderm development
+GO:0007506	gonadal mesoderm development
+GO:0007507	heart development
+GO:0007512	adult heart development
+GO:0007517	muscle organ development
+GO:0007519	skeletal muscle tissue development
+GO:0007522	visceral muscle development
+GO:0007525	somatic muscle development
+GO:0007528	neuromuscular junction development
+GO:0008406	gonad development
+GO:0008544	epidermis development
+GO:0008584	male gonad development
+GO:0008585	female gonad development
+GO:0009790	embryo development
+GO:0009791	post-embryonic development
+GO:0009792	embryo development ending in birth or egg hatching
+GO:0009888	tissue development
+GO:0010623	developmental programmed cell death
+GO:0010720	positive regulation of cell development
+GO:0010975	regulation of neuron projection development
+GO:0010976	positive regulation of neuron projection development
+GO:0014002	astrocyte development
+GO:0014003	oligodendrocyte development
+GO:0014005	microglia development
+GO:0014031	mesenchymal cell development
+GO:0014032	neural crest cell development
+GO:0014044	Schwann cell development
+GO:0014706	striated muscle tissue development
+GO:0014707	branchiomeric skeletal muscle development
+GO:0014904	myotube cell development
+GO:0016202	regulation of striated muscle tissue development
+GO:0016358	dendrite development
+GO:0021510	spinal cord development
+GO:0021516	dorsal spinal cord development
+GO:0021517	ventral spinal cord development
+GO:0021536	diencephalon development
+GO:0021537	telencephalon development
+GO:0021539	subthalamus development
+GO:0021541	ammon gyrus development
+GO:0021542	dentate gyrus development
+GO:0021543	pallium development
+GO:0021544	subpallium development
+GO:0021545	cranial nerve development
+GO:0021546	rhombomere development
+GO:0021548	pons development
+GO:0021549	cerebellum development
+GO:0021553	olfactory nerve development
+GO:0021554	optic nerve development
+GO:0021557	oculomotor nerve development
+GO:0021558	trochlear nerve development
+GO:0021559	trigeminal nerve development
+GO:0021562	vestibulocochlear nerve development
+GO:0021563	glossopharyngeal nerve development
+GO:0021564	vagus nerve development
+GO:0021568	rhombomere 2 development
+GO:0021569	rhombomere 3 development
+GO:0021570	rhombomere 4 development
+GO:0021571	rhombomere 5 development
+GO:0021572	rhombomere 6 development
+GO:0021591	ventricular system development
+GO:0021592	fourth ventricle development
+GO:0021670	lateral ventricle development
+GO:0021675	nerve development
+GO:0021678	third ventricle development
+GO:0021679	cerebellar molecular layer development
+GO:0021680	cerebellar Purkinje cell layer development
+GO:0021681	cerebellar granular layer development
+GO:0021695	cerebellar cortex development
+GO:0021703	locus ceruleus development
+GO:0021723	medullary reticular formation development
+GO:0021740	principal sensory nucleus of trigeminal nerve development
+GO:0021747	cochlear nucleus development
+GO:0021750	vestibular nucleus development
+GO:0021754	facial nucleus development
+GO:0021756	striatum development
+GO:0021759	globus pallidus development
+GO:0021761	limbic system development
+GO:0021762	substantia nigra development
+GO:0021764	amygdala development
+GO:0021766	hippocampus development
+GO:0021767	mammillary body development
+GO:0021768	nucleus accumbens development
+GO:0021769	orbitofrontal cortex development
+GO:0021771	lateral geniculate nucleus development
+GO:0021772	olfactory bulb development
+GO:0021782	glial cell development
+GO:0021784	postganglionic parasympathetic fiber development
+GO:0021794	thalamus development
+GO:0021854	hypothalamus development
+GO:0021860	pyramidal neuron development
+GO:0021884	forebrain neuron development
+GO:0021891	olfactory bulb interneuron development
+GO:0021894	cerebral cortex GABAergic interneuron development
+GO:0021897	forebrain astrocyte development
+GO:0021915	neural tube development
+GO:0021954	central nervous system neuron development
+GO:0021983	pituitary gland development
+GO:0021984	adenohypophysis development
+GO:0021985	neurohypophysis development
+GO:0021986	habenula development
+GO:0021987	cerebral cortex development
+GO:0021988	olfactory lobe development
+GO:0022004	midbrain-hindbrain boundary maturation during brain development
+GO:0022037	metencephalon development
+GO:0022038	corpus callosum development
+GO:0030323	respiratory tube development
+GO:0030324	lung development
+GO:0030325	adrenal gland development
+GO:0030539	male genitalia development
+GO:0030540	female genitalia development
+GO:0030850	prostate gland development
+GO:0030878	thyroid gland development
+GO:0030879	mammary gland development
+GO:0030900	forebrain development
+GO:0030901	midbrain development
+GO:0030902	hindbrain development
+GO:0030903	notochord development
+GO:0030917	midbrain-hindbrain boundary development
+GO:0031016	pancreas development
+GO:0031017	exocrine pancreas development
+GO:0031018	endocrine pancreas development
+GO:0031076	embryonic camera-type eye development
+GO:0031077	post-embryonic camera-type eye development
+GO:0031128	developmental induction
+GO:0031175	neuron projection development
+GO:0031214	biomineral tissue development
+GO:0032502	developmental process
+GO:0032808	lacrimal gland development
+GO:0032835	glomerulus development
+GO:0032836	glomerular basement membrane development
+GO:0033504	floor plate development
+GO:0035050	embryonic heart tube development
+GO:0035270	endocrine system development
+GO:0035272	exocrine system development
+GO:0035295	tube development
+GO:0035502	metanephric part of ureteric bud development
+GO:0035607	fibroblast growth factor receptor signaling pathway involved in orbitofrontal cortex development
+GO:0035622	intrahepatic bile duct development
+GO:0035787	cell migration involved in kidney development
+GO:0035844	cloaca development
+GO:0035846	oviduct epithelium development
+GO:0035847	uterine epithelium development
+GO:0035855	megakaryocyte development
+GO:0035878	nail development
+GO:0035904	aorta development
+GO:0035907	dorsal aorta development
+GO:0035989	tendon development
+GO:0035993	deltoid tuberosity development
+GO:0036035	osteoclast development
+GO:0036302	atrioventricular canal development
+GO:0039020	pronephric nephron tubule development
+GO:0040019	positive regulation of embryonic development
+GO:0040034	regulation of development, heterochronic
+GO:0042335	cuticle development
+GO:0042461	photoreceptor cell development
+GO:0042462	eye photoreceptor cell development
+GO:0043009	chordate embryonic development
+GO:0043010	camera-type eye development
+GO:0043045	DNA methylation involved in embryo development
+GO:0043583	ear development
+GO:0043584	nose development
+GO:0043586	tongue development
+GO:0043588	skin development
+GO:0044111	development involved in symbiotic interaction
+GO:0044345	stromal-epithelial cell signaling involved in prostate gland development
+GO:0045136	development of secondary sexual characteristics
+GO:0045137	development of primary sexual characteristics
+GO:0045682	regulation of epidermis development
+GO:0045684	positive regulation of epidermis development
+GO:0045844	positive regulation of striated muscle tissue development
+GO:0045995	regulation of embryonic development
+GO:0046543	development of secondary female sexual characteristics
+GO:0046544	development of secondary male sexual characteristics
+GO:0046545	development of primary female sexual characteristics
+GO:0046546	development of primary male sexual characteristics
+GO:0046548	retinal rod cell development
+GO:0046549	retinal cone cell development
+GO:0048058	compound eye corneal lens development
+GO:0048066	developmental pigmentation
+GO:0048070	regulation of developmental pigmentation
+GO:0048087	positive regulation of developmental pigmentation
+GO:0048286	lung alveolus development
+GO:0048318	axial mesoderm development
+GO:0048339	paraxial mesoderm development
+GO:0048368	lateral mesoderm development
+GO:0048382	mesendoderm development
+GO:0048389	intermediate mesoderm development
+GO:0048468	cell development
+GO:0048483	autonomic nervous system development
+GO:0048484	enteric nervous system development
+GO:0048485	sympathetic nervous system development
+GO:0048486	parasympathetic nervous system development
+GO:0048513	organ development
+GO:0048535	lymph node development
+GO:0048536	spleen development
+GO:0048537	mucosal-associated lymphoid tissue development
+GO:0048538	thymus development
+GO:0048539	bone marrow development
+GO:0048541	Peyer's patch development
+GO:0048565	digestive tract development
+GO:0048566	embryonic digestive tract development
+GO:0048568	embryonic organ development
+GO:0048569	post-embryonic organ development
+GO:0048588	developmental cell growth
+GO:0048589	developmental growth
+GO:0048599	oocyte development
+GO:0048608	reproductive structure development
+GO:0048611	embryonic ectodermal digestive tract development
+GO:0048627	myoblast development
+GO:0048638	regulation of developmental growth
+GO:0048639	positive regulation of developmental growth
+GO:0048641	regulation of skeletal muscle tissue development
+GO:0048643	positive regulation of skeletal muscle tissue development
+GO:0048666	neuron development
+GO:0048706	embryonic skeletal system development
+GO:0048732	gland development
+GO:0048733	sebaceous gland development
+GO:0048738	cardiac muscle tissue development
+GO:0048739	cardiac muscle fiber development
+GO:0048741	skeletal muscle fiber development
+GO:0048742	regulation of skeletal muscle fiber development
+GO:0048743	positive regulation of skeletal muscle fiber development
+GO:0048745	smooth muscle tissue development
+GO:0048747	muscle fiber development
+GO:0048749	compound eye development
+GO:0048793	pronephros development
+GO:0048806	genitalia development
+GO:0048821	erythrocyte development
+GO:0048822	enucleate erythrocyte development
+GO:0048839	inner ear development
+GO:0048840	otolith development
+GO:0048856	anatomical structure development
+GO:0048857	neural nucleus development
+GO:0048864	stem cell development
+GO:0048869	cellular developmental process
+GO:0048880	sensory system development
+GO:0048894	efferent axon development in a lateral line nerve
+GO:0048935	peripheral nervous system neuron development
+GO:0050773	regulation of dendrite development
+GO:0050793	regulation of developmental process
+GO:0051216	cartilage development
+GO:0051797	regulation of hair follicle development
+GO:0051798	positive regulation of hair follicle development
+GO:0051960	regulation of nervous system development
+GO:0055001	muscle cell development
+GO:0055002	striated muscle cell development
+GO:0055006	cardiac cell development
+GO:0055013	cardiac muscle cell development
+GO:0055014	atrial cardiac muscle cell development
+GO:0055015	ventricular cardiac muscle cell development
+GO:0055020	positive regulation of cardiac muscle fiber development
+GO:0055024	regulation of cardiac muscle tissue development
+GO:0055123	digestive system development
+GO:0060009	Sertoli cell development
+GO:0060016	granulosa cell development
+GO:0060017	parathyroid gland development
+GO:0060021	palate development
+GO:0060022	hard palate development
+GO:0060023	soft palate development
+GO:0060035	notochord cell development
+GO:0060037	pharyngeal system development
+GO:0060039	pericardium development
+GO:0060041	retina development in camera-type eye
+GO:0060065	uterus development
+GO:0060066	oviduct development
+GO:0060067	cervix development
+GO:0060068	vagina development
+GO:0060117	auditory receptor cell development
+GO:0060118	vestibular receptor cell development
+GO:0060119	inner ear receptor cell development
+GO:0060133	somatotropin secreting cell development
+GO:0060157	urinary bladder development
+GO:0060166	olfactory pit development
+GO:0060173	limb development
+GO:0060282	positive regulation of oocyte development
+GO:0060322	head development
+GO:0060324	face development
+GO:0060348	bone development
+GO:0060351	cartilage development involved in endochondral bone morphogenesis
+GO:0060426	lung vasculature development
+GO:0060427	lung connective tissue development
+GO:0060428	lung epithelium development
+GO:0060429	epithelium development
+GO:0060430	lung saccule development
+GO:0060433	bronchus development
+GO:0060435	bronchiole development
+GO:0060438	trachea development
+GO:0060446	branching involved in open tracheal system development
+GO:0060458	right lung development
+GO:0060459	left lung development
+GO:0060462	lung lobe development
+GO:0060465	pharynx development
+GO:0060481	lobar bronchus epithelium development
+GO:0060482	lobar bronchus development
+GO:0060484	lung-associated mesenchyme development
+GO:0060485	mesenchyme development
+GO:0060496	mesenchymal-epithelial cell signaling involved in lung development
+GO:0060528	secretory columnal luminar epithelial cell differentiation involved in prostate glandular acinus development
+GO:0060529	squamous basal epithelial stem cell differentiation involved in prostate gland acinus development
+GO:0060532	bronchus cartilage development
+GO:0060534	trachea cartilage development
+GO:0060537	muscle tissue development
+GO:0060538	skeletal muscle organ development
+GO:0060539	diaphragm development
+GO:0060541	respiratory system development
+GO:0060560	developmental growth involved in morphogenesis
+GO:0060576	intestinal epithelial cell development
+GO:0060611	mammary gland fat development
+GO:0060612	adipose tissue development
+GO:0060613	fat pad development
+GO:0060674	placenta blood vessel development
+GO:0060689	cell differentiation involved in salivary gland development
+GO:0060691	epithelial cell maturation involved in salivary gland development
+GO:0060706	cell differentiation involved in embryonic placenta development
+GO:0060709	glycogen cell differentiation involved in embryonic placenta development
+GO:0060711	labyrinthine layer development
+GO:0060712	spongiotrophoblast layer development
+GO:0060715	syncytiotrophoblast cell differentiation involved in labyrinthine layer development
+GO:0060716	labyrinthine layer blood vessel development
+GO:0060717	chorion development
+GO:0060738	epithelial-mesenchymal signaling involved in prostate gland development
+GO:0060739	mesenchymal-epithelial cell signaling involved in prostate gland development
+GO:0060742	epithelial cell differentiation involved in prostate gland development
+GO:0060743	epithelial cell maturation involved in prostate gland development
+GO:0060749	mammary gland alveolus development
+GO:0060764	cell-cell signaling involved in mammary gland development
+GO:0060768	regulation of epithelial cell proliferation involved in prostate gland development
+GO:0060769	positive regulation of epithelial cell proliferation involved in prostate gland development
+GO:0060782	regulation of mesenchymal cell proliferation involved in prostate gland development
+GO:0060783	mesenchymal smoothened signaling pathway involved in prostate gland development
+GO:0060800	regulation of cell differentiation involved in embryonic placenta development
+GO:0060840	artery development
+GO:0060841	venous blood vessel development
+GO:0060872	semicircular canal development
+GO:0060873	anterior semicircular canal development
+GO:0060875	lateral semicircular canal development
+GO:0060887	limb epidermis development
+GO:0060915	mesenchymal cell differentiation involved in lung development
+GO:0060916	mesenchymal cell proliferation involved in lung development
+GO:0060928	atrioventricular node cell development
+GO:0060931	sinoatrial node cell development
+GO:0060948	cardiac vascular smooth muscle cell development
+GO:0060973	cell migration involved in heart development
+GO:0060976	coronary vasculature development
+GO:0060996	dendritic spine development
+GO:0060998	regulation of dendritic spine development
+GO:0060999	positive regulation of dendritic spine development
+GO:0061005	cell differentiation involved in kidney development
+GO:0061009	common bile duct development
+GO:0061010	gall bladder development
+GO:0061011	hepatic duct development
+GO:0061029	eyelid development in camera-type eye
+GO:0061030	epithelial cell differentiation involved in mammary gland alveolus development
+GO:0061032	visceral serous pericardium development
+GO:0061034	olfactory bulb mitral cell layer development
+GO:0061035	regulation of cartilage development
+GO:0061036	positive regulation of cartilage development
+GO:0061049	cell growth involved in cardiac muscle cell development
+GO:0061050	regulation of cell growth involved in cardiac muscle cell development
+GO:0061051	positive regulation of cell growth involved in cardiac muscle cell development
+GO:0061053	somite development
+GO:0061055	myotome development
+GO:0061056	sclerotome development
+GO:0061061	muscle structure development
+GO:0061074	regulation of neural retina development
+GO:0061108	seminal vesicle epithelium development
+GO:0061143	alveolar primary septum development
+GO:0061144	alveolar secondary septum development
+GO:0061145	lung smooth muscle development
+GO:0061153	trachea gland development
+GO:0061180	mammary gland epithelium development
+GO:0061181	regulation of chondrocyte development
+GO:0061184	positive regulation of dermatome development
+GO:0061189	positive regulation of sclerotome development
+GO:0061193	taste bud development
+GO:0061196	fungiform papilla development
+GO:0061205	paramesonephric duct development
+GO:0061290	canonical Wnt signaling pathway involved in metanephric kidney development
+GO:0061298	retina vasculature development in camera-type eye
+GO:0061300	cerebellum vasculature development
+GO:0061303	cornea development in camera-type eye
+GO:0061308	cardiac neural crest cell development involved in heart development
+GO:0061309	cardiac neural crest cell development involved in outflow tract morphogenesis
+GO:0061312	BMP signaling pathway involved in heart development
+GO:0061314	Notch signaling involved in heart development
+GO:0061326	renal tubule development
+GO:0061360	optic chiasma development
+GO:0061374	mammillothalamic axonal tract development
+GO:0061377	mammary gland lobule development
+GO:0061379	inferior colliculus development
+GO:0061444	endocardial cushion cell development
+GO:0061448	connective tissue development
+GO:0061458	reproductive system development
+GO:0061525	hindgut development
+GO:0061548	ganglion development
+GO:0061549	sympathetic ganglion development
+GO:0061551	trigeminal ganglion development
+GO:0061564	axon development
+GO:0070121	Kupffer's vesicle development
+GO:0070169	positive regulation of biomineral tissue development
+GO:0070307	lens fiber cell development
+GO:0070384	Harderian gland development
+GO:0071109	superior temporal gyrus development
+GO:0071599	otic vesicle development
+GO:0072001	renal system development
+GO:0072006	nephron development
+GO:0072011	glomerular endothelium development
+GO:0072012	glomerulus vasculature development
+GO:0072014	proximal tubule development
+GO:0072015	glomerular visceral epithelial cell development
+GO:0072016	glomerular parietal epithelial cell development
+GO:0072017	distal tubule development
+GO:0072044	collecting duct development
+GO:0072047	proximal/distal pattern formation involved in nephron development
+GO:0072053	renal inner medulla development
+GO:0072054	renal outer medulla development
+GO:0072060	outer medullary collecting duct development
+GO:0072061	inner medullary collecting duct development
+GO:0072070	loop of Henle development
+GO:0072073	kidney epithelium development
+GO:0072075	metanephric mesenchyme development
+GO:0072080	nephron tubule development
+GO:0072111	cell proliferation involved in kidney development
+GO:0072136	metanephric mesenchymal cell proliferation involved in metanephros development
+GO:0072138	mesenchymal cell proliferation involved in ureteric bud development
+GO:0072141	renal interstitial fibroblast development
+GO:0072143	mesangial cell development
+GO:0072144	glomerular mesangial cell development
+GO:0072161	mesenchymal cell differentiation involved in kidney development
+GO:0072163	mesonephric epithelium development
+GO:0072164	mesonephric tubule development
+GO:0072166	posterior mesonephric tubule development
+GO:0072170	metanephric tubule development
+GO:0072176	nephric duct development
+GO:0072177	mesonephric duct development
+GO:0072189	ureter development
+GO:0072190	ureter urothelium development
+GO:0072198	mesenchymal cell proliferation involved in ureter development
+GO:0072202	cell differentiation involved in metanephros development
+GO:0072203	cell proliferation involved in metanephros development
+GO:0072205	metanephric collecting duct development
+GO:0072207	metanephric epithelium development
+GO:0072208	metanephric smooth muscle tissue development
+GO:0072210	metanephric nephron development
+GO:0072213	metanephric capsule development
+GO:0072214	metanephric cortex development
+GO:0072218	metanephric ascending thin limb development
+GO:0072219	metanephric cortical collecting duct development
+GO:0072221	metanephric distal convoluted tubule development
+GO:0072224	metanephric glomerulus development
+GO:0072227	metanephric macula densa development
+GO:0072229	metanephric proximal convoluted tubule development
+GO:0072233	metanephric thick ascending limb development
+GO:0072234	metanephric nephron tubule development
+GO:0072235	metanephric distal tubule development
+GO:0072236	metanephric loop of Henle development
+GO:0072237	metanephric proximal tubule development
+GO:0072239	metanephric glomerulus vasculature development
+GO:0072249	metanephric glomerular visceral epithelial cell development
+GO:0072255	metanephric glomerular mesangial cell development
+GO:0072259	metanephric interstitial fibroblast development
+GO:0072262	metanephric glomerular mesangial cell proliferation involved in metanephros development
+GO:0072268	pattern specification involved in metanephros development
+GO:0072272	proximal/distal pattern formation involved in metanephric nephron development
+GO:0072274	metanephric glomerular basement membrane development
+GO:0072286	metanephric connecting tubule development
+GO:0072300	positive regulation of metanephric glomerulus development
+GO:0072358	cardiovascular system development
+GO:0072359	circulatory system development
+GO:0072498	embryonic skeletal joint development
+GO:0072520	seminiferous tubule development
+GO:0080125	multicellular structure septum development
+GO:0090094	metanephric cap mesenchymal cell proliferation involved in metanephros development
+GO:0090102	cochlea development
+GO:0090184	positive regulation of kidney development
+GO:0090193	positive regulation of glomerulus development
+GO:0090214	spongiotrophoblast layer developmental growth
+GO:0097084	vascular smooth muscle cell development
+GO:1900006	positive regulation of dendrite development
+GO:1901166	neural crest cell migration involved in autonomic nervous system development
+GO:1901342	regulation of vasculature development
+GO:1901724	positive regulation of cell proliferation involved in kidney development
+GO:1901863	positive regulation of muscle tissue development
+GO:1902742	apoptotic process involved in development
+GO:1903045	neural crest cell migration involved in sympathetic nervous system development
+GO:1903375	facioacoustic ganglion development
+GO:1990401	embryonic lung development
+GO:1990402	embryonic liver development
+GO:1990403	embryonic brain development
+GO:2000020	positive regulation of male gonad development
+GO:2000074	regulation of type B pancreatic cell development
+GO:2000078	positive regulation of type B pancreatic cell development
+GO:2000194	regulation of female gonad development
+GO:2000287	positive regulation of myotome development
+GO:2000354	regulation of ovarian follicle development
+GO:2000382	positive regulation of mesoderm development
+GO:2000386	positive regulation of ovarian follicle development
+GO:2000478	positive regulation of metanephric glomerular visceral epithelial cell development
+GO:2000696	regulation of epithelial cell differentiation involved in kidney development
+GO:2000729	positive regulation of mesenchymal cell proliferation involved in ureter development
+GO:2000744	positive regulation of anterior head development
+GO:2000793	cell proliferation involved in heart valve development
+GO:2001012	mesenchymal cell differentiation involved in renal system development
+GO:2001076	positive regulation of metanephric ureteric bud development
+GO:2001204	regulation of osteoclast development
+GO:2001206	positive regulation of osteoclast development

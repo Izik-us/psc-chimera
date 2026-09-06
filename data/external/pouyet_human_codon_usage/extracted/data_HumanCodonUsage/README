@@ -1,0 +1,160 @@
+################################################
+#### get_canonical_transcript_species.pl #######
+################################################
+  Perl script used to select canonical transcripts (see http://www.ensembl.org/Help/Glossary?id=346  for a definition)
+
+################################
+#### go_concat_summary #########
+################################
+This file contains information on average base composition, intragenic recombination rate, and meiotic expression levels for 687 GO terms (biological process) associated to at least 40 genes. For each GO term, we concatenated coding sequences to compute the total codon usage, the RSCU and GC-content, and we also computed the average intragenic recombination rate and average expression levels. The following variables are available for each GO term:
+
+	GC	:	mean GC content of CDS
+	GC3	:	mean GC content at third codon position 
+	GCflank	:	mean GC content of flanking regions 10kb upstream and 10kb downstream of the transcription unit
+	RecGene.HapMap22 : mean intragenic recombination rate (computed only with genes at least 5kb long)
+	F_PGC_17W :	mean expression level (FPKM) in female PGC at 17 weeks
+	H_Mean	:	mean expression level (FPKM) in male round spermatids and pachytene spermatocytes
+	Exp_Meiosis :	mean expression level of F_PGC_17W and H_Mean
+	GCi	:	mean intronic GC content 
+
+#############################
+#### go_concat.rscu #########
+#############################
+  RSCU (Relative Synonymous Codon Usage) computed on GO concatenates. 
+
+##################################
+#### go_concat.nbcodons #########
+##################################
+  Number of each of the 64 codons in GO concatenates.
+
+
+################################
+#### human_genes_summary #######
+################################
+This file contains the following information for 19766 protein coding genes (from Ensembl release 83):
+	Ensembl.Gene.ID	:	Ensembl gene identifiers
+	gene.symbol 	:	gene name	
+	Transcript	:	Ensembl transcript ID
+	Chrom		:	Chromosome
+	Start_hg18	:	start position on hg18
+	End_hg18	:	end position
+	LgGenes		:	gene length
+	LgCDS		:	CDS length
+	GC		:	GC content of CDS
+	GC3		:	GC content at third position
+	GCflank		:	GC content at flanking regions (10kb upstream and 10kb downstream of the transcription unit)
+	GCi		:	intronic GC content
+	RecGene.HapMap22:	sex-averaged intragenic recombination rate from HapMap release 22
+	columns 14 to 33:	expression level (FPKM) in early embryos from Guo et al., 2015. 
+				For ex: M_PGC_10W where:	
+				M or F stands for Male or Female 
+				PGC or Soma stands for germ cells or somatic cells 
+				4-19W stands for the stage of development from 4 to 19 weeks
+				ICM stands for inner cell mass
+	M_RS		:	expression level (FPKM) of male round spermatids (Lesch et al, 2016)
+	M_PS		:	expression level (FPKM) of male pachytene spermatocytes (Lesch et al, 2016)
+	Exp_Meiosis	:	Mean FPKM of female expression (F_PGC_17W) and of male expression (mean of M_PS and M_RS)	
+	type		:	gene type 0= other; 1= proliferation; 2 = differentiation and NA = both proliferation and differentiation	
+
+Concerning the expression datasets, we used the following datasets:
+From Guo et al, 2015, we downloaded the Panel 4 ("FPKM of pool-split PGCs") of the table S1 "Summary of Single-Cell RNA-Seq Dataset and Expression Levels of RefSeq Genes in Human PGCs and Neighboring Somatic Cells"
+From Kryuchkova-Mostacci N, Robinson-Rechavi M. (2015), we used the processed table "File_31_Hum_Data_Tissues_Fagerberg.txt" available as a Supplementary material.
+From Lesch et al, 2016, we downloaded the expression levels in PS and RS of 3 males from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE68507. These files are: GSM1673959 (human1_PS_RNA), GSM1673963 (human1_RS_RNA), GSM1673967 (human2_PS_RNA), GSM1673971 (human2_RS_RNA), GSM1673975 (human3_PS_RNA) and GSM1673978 (human3_RS_RNA).
+##############################################
+#### human_genes_expression_in_tissues #########
+##############################################
+This files contains RPKM expression values in 27 adult bulk tissues. File from supplementary file from Robinson-Rechavi paper, data originated from Fagerberg paper. See: http://journals.plos.org/plosone/article?id=10.1371/journal.pone.0131673 
+	Ensembl.Gene.ID	:	Ensembl gene identifiers
+	Ensembl.Transcript.ID	:	Ensembl transcript identifiers
+	Averaged.RPKM.*	:	Averaged RPKM expression values in 27 different adult tissues
+
+
+##############################################
+#### human_genes_CO_profile.female        ####
+##############################################
+
+Profile of female crossover rate along human protein-coding genes.
+
+Female crossover rates (cM/Mb) were measured in 1 kb-long non-overlapping windows, upstream and downstream of the transcription start site (TSS) and of the polyadenylation site (pA) of each human gene, using the sex-specific genetic map published by Bhérer et al. (2017).
+
+	Transcript	:	Ensembl transcript ID
+	Up_TSS40 to Up_TSS1	: CO rate upstream of the TSS
+	Dw_TSS1 to Dw_TSS40 : CO rate downstream of the TSS
+	Up_pA40 to	Up_pA1 : CO rate upstream of the pA
+	Dw_pA1 to Dw_pA40 : CO rate downstream of the pA
+
+Numbers in column names (e.g. Up_TSS40, Dw_pA40) refer to the distance of the window to the TSS or pA (in kb).
+
+
+##############################################
+#### human_genes_CO_profile.male          ####
+##############################################
+
+Profile of ale crossover rate along human genes.
+
+same content as "human_genes_CO_profile.female"
+
+##############################################
+#### human_genes_CO_rate_intragenic       ####
+##############################################
+
+Crossover rate measured within the transcription unit of human protein-coding genes (from the TSS to the pA) using genetic maps published by Bhérer et al. (2017).
+
+	Chrom	: chromosome
+	GeneStart : Ensembl gene start coordinate (hg19 reference genome assembly) 
+	GeneEnd	: Ensembl gene end coordinate 
+	Strand	: gene orientation
+	Transcript	: Ensembl transcript ID
+	CO_IG_female : female intragenic  CO rate	
+	CO_IG_male : male intragenic  CO rate
+	CO_IG_sexavg : sex-averaged intragenic  CO rate
+
+
+##############################################
+#### human_genes_list.hg19.DMC1_profile_A ####
+##############################################
+
+
+Number of male DSB-hotspot targeted by PRDM9 alleles A/B along human protein-coding genes.
+
+Pratto et al. (2014) published a list of DSB hotspots (detected by DMC1 ChipSeq experiment in male meiotic cells) targeted by different PRDM9 alleles (A/B or C).
+
+We measured variation in DSB hotspot density along genes by couting the number of DSB-hotspot in 1 kb-long non-overlapping windows, upstream and downstream of the transcription start site (TSS) and of the polyadenylation site (pA) of each human gene. 
+
+
+	Transcript	:	Ensembl transcript ID
+	Up_TSS40 to Up_TSS1	: number of DSB-hotspot overlapping windows upstream of the TSS.
+	Dw_TSS1 to Dw_TSS40 : number of DSB-hotspot overlapping windows downstream of the TSS
+	Up_pA40 to	Up_pA1 : number of DSB-hotspot overlapping windows upstream of the pA
+	Dw_pA1 to Dw_pA40 : number of DSB-hotspot overlapping windows downstream of the pA
+	NbPeakDMC1_intragenic : number of DSB-hotspot within the entire transcription unit
+	Strand : gene orientation
+
+Numbers in column names (e.g. Up_TSS40, Dw_pA40) refer to the distance of the window to the TSS or pA (in kb).
+
+
+##############################################
+#### human_genes_list.hg19.DMC1_profile_C ####
+##############################################
+
+Number of male DSB-hotspot targeted by PRDM9 alleles C along human protein-coding genes.
+
+same content as "human_genes_list.hg19.DMC1_profile_A"
+
+
+#################
+## References  ##
+#################
+
+Bhérer C, Campbell CL, Auton A. Refined genetic maps reveal sexual dimorphism in human meiotic recombination at multiple scales. Nat. Commun. 2017;8:14994. 
+
+Guo F, Yan L, Guo H, Li L, Hu B, Zhao Y, et al. The Transcriptome and DNA Methylome Landscapes of Human Primordial Germ Cells. Cell; 2015;161:1437–52. 
+
+Kryuchkova-Mostacci N, Robinson-Rechavi M. (2015). Tissue-Specific Evolution of Protein Coding Genes in Human and Mouse. PloS One, 10(6), 1‚Äì15. http://doi.org/10.1371/journal.pone.0131673
+
+Fagerberg L, Hallström BM, Oksvold P, Kampf C, Djureinovic D, Odeberg J, et al. Analysis of the human tissue-specific expression by genome-wide integration of transcriptomics and antibody-based proteomics. Mol. Cell. Proteomics. 2014;13:397–406. 
+
+Lesch B J, Silber S J, McCarrey J R, Page D C. (2016) Parallel evolution of male germline epigenetic poising and somatic development in animals. Nat Genet;48(8):888-94. doi:10.1038/ng.3591
+
+Pratto F, Brick K, Khil P, Smagulova F, Petukhova G V., Camerini-Otero RD. Recombination initiation maps of individual human genomes. Science (80-. ). 2014;346:1256442–1256442. 
+

@@ -1,0 +1,23 @@
+Each "GO_*" file contains a list of GO terms associated to the keywords that were used to define proliferation and differentiation functional categories.
+   Proliferation:
+	mitotic-cell-cycle       
+	mRNA-metabolic-process
+	chromatin-modification  
+	negative-regulation-cell-cycle
+	chromatin-remodeling    
+	nucleosome-assembly    
+	translation
+   Differentiation:
+	development    
+	differentiation
+	cell-adhesion
+	pattern-specification       
+	multicellular-organism-growth
+	angiogenesis            
+
+
+Each file "GO_*.excluded" provides a list of GO terms that match the keyword but correspond to its negation (for example,  “negative regulation of angiogenesis” was excluded from the “angiogenesis” category)
+
+Each "genes_*" file provides a list of genes associated to proliferation, differentiation or both.
+
+
