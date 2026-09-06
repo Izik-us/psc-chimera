@@ -1101,6 +1101,12 @@ class CodonOptimizer(nn.Module):
     # ===================================================================
     # INITIALIZATION
     # ===================================================================
+    def train(self, mode: bool = True):
+        super().train(mode)
+
+        if self.esm_model is not None:
+            self.esm_model.eval()
+        return self
 
     def _init_weights(self):
         """
@@ -1731,7 +1737,20 @@ class CodonOptimizer(nn.Module):
     # ===================================================================
     # TEACHER-FORCED DECODER
     # ===================================================================
+    @staticmethod
+    def _causal_mask(length: int, device: torch.device) -> torch.Tensor:
+        """Boolean causal mask: True blocks attention to future positions."""
+        if length <= 0:
+            raise ValueError("causal mask length must be positive")
 
+        return torch.triu(
+            torch.ones(
+                (length, length),
+                dtype=torch.bool,
+                device=device,
+            ),
+            diagonal=1,
+        )
     def decode_teacher_forced(
         self,
         memory: torch.Tensor,
@@ -1882,12 +1901,7 @@ class CodonOptimizer(nn.Module):
             ).unsqueeze(0)
         )
 
-        causal_mask = (
-            nn.Transformer.generate_square_subsequent_mask(
-                L,
-                device=device,
-            )
-        )
+        causal_mask = torch.triu(torch.ones((L, L), dtype=torch.bool, device=device), diagonal=1)
 
         # ---------------------------------------------------------------
         # Decoder
