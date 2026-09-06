@@ -1,0 +1,17 @@
+GO:0001525	angiogenesis
+GO:0001946	lymphangiogenesis
+GO:0002040	sprouting angiogenesis
+GO:0002041	intussusceptive angiogenesis
+GO:0002042	cell migration involved in sprouting angiogenesis
+GO:0002043	blood vessel endothelial cell proliferation involved in sprouting angiogenesis
+GO:0002044	blood vessel endothelial cell migration involved in intussusceptive angiogenesis
+GO:0045765	regulation of angiogenesis
+GO:0045766	positive regulation of angiogenesis
+GO:0060055	angiogenesis involved in wound healing
+GO:0060978	angiogenesis involved in coronary vascular morphogenesis
+GO:0060981	cell migration involved in coronary angiogenesis
+GO:0090049	regulation of cell migration involved in sprouting angiogenesis
+GO:0090050	positive regulation of cell migration involved in sprouting angiogenesis
+GO:1901492	positive regulation of lymphangiogenesis
+GO:1903589	positive regulation of blood vessel endothelial cell proliferation involved in sprouting angiogenesis
+GO:1903672	positive regulation of sprouting angiogenesis

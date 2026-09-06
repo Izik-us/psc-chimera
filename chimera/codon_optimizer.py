@@ -106,6 +106,12 @@ VOCAB_SIZE = len(ALL_CODONS) + 3  # 67
 # Amino acid vocabulary (standard + unknown)
 AA_VOCAB = "ACDEFGHIKLMNPQRSTVWY"
 AA_TO_IDX = {aa: i for i, aa in enumerate(AA_VOCAB)}
+CODON_TO_AA: Dict[str, str] = {
+    codon: amino_acid
+    for amino_acid, codons in CODON_TABLE.items()
+    for codon in codons
+    if amino_acid in AA_TO_IDX
+}
 
 # Human codon usage frequency table (from highly expressed HEK293 genes)
 # Values represent relative adaptiveness w.r.t. the most frequent codon per AA
@@ -344,7 +350,9 @@ def upa_penalty(logits: torch.Tensor) -> torch.Tensor:
     probs = F.softmax(logits, dim=-1)  # (L, 64)
     ends = (probs * ends_with_U).sum(-1)[:-1]  # (L-1,)
     starts = (probs * starts_with_A).sum(-1)[1:]  # (L-1,) shifted
-    return (ends * starts).sum()
+    if ends.numel() == 0:
+        return logits.new_zeros(())
+    return (ends * starts).mean()
 
 
 def motif_penalty_from_logits(logits: torch.Tensor) -> torch.Tensor:
@@ -359,12 +367,61 @@ def motif_penalty_from_logits(logits: torch.Tensor) -> torch.Tensor:
     nucleotide_probs = torch.einsum("lc,cnk->lnk", probs, codon_bases).reshape(-1, 4)
 
     def pattern_probability(pattern: str) -> torch.Tensor:
-        indices = ["ACGT".index(base) for base in pattern]
-        probabilities = [
-            nucleotide_probs[offset : offset + len(pattern), indices].prod()
-            for offset in range(len(nucleotide_probs) - len(pattern) + 1)
-        ]
-        return torch.stack(probabilities).sum()
+        window_count = nucleotide_probs.shape[0] - len(pattern) + 1
+        if window_count <= 0:
+            return logits.new_zeros(())
+
+        pattern_indices = ["ACGT".index(base) for base in pattern]
+        offsets = torch.arange(window_count, device=logits.device)
+        first_codon = offsets // 3
+        first_phase = offsets % 3
+        codon_group_count = (first_phase + len(pattern) + 2) // 3
+        pattern_positions = torch.arange(len(pattern), device=logits.device)
+        global_positions = first_phase[:, None] + pattern_positions[None, :]
+        local_positions = global_positions % 3
+        base_indices = torch.tensor(
+            pattern_indices,
+            dtype=torch.long,
+            device=logits.device,
+        ).expand(window_count, -1)
+
+        # A codon is one categorical choice, so bases within that codon are
+        # dependent. Build all window/group compatibility masks in one batch,
+        # then sum each group's compatible codon probabilities before taking
+        # the product across groups. The number of groups is bounded by the
+        # fixed motif length, so training cost is linear in sequence length.
+        max_groups = (len(pattern) + 4) // 3
+        groups = torch.arange(max_groups, device=logits.device)
+        belongs_to_group = (
+            (global_positions // 3)[:, None, :] == groups[None, :, None]
+        )
+        base_masks = codon_bases[:, local_positions, base_indices].permute(1, 2, 0)
+        compatible = torch.where(
+            belongs_to_group.unsqueeze(-1),
+            base_masks[:, None, :, :].bool(),
+            torch.ones(
+                (window_count, max_groups, len(pattern), len(ALL_CODONS)),
+                dtype=torch.bool,
+                device=logits.device,
+            ),
+        ).all(dim=2)
+
+        codon_indices = (first_codon[:, None] + groups[None, :]).clamp_max(
+            probs.shape[0] - 1
+        )
+        group_probabilities = probs[codon_indices].mul(compatible).sum(dim=-1)
+        active_groups = groups[None, :] < codon_group_count[:, None]
+        window_probabilities = torch.where(
+            active_groups,
+            group_probabilities,
+            torch.ones_like(group_probabilities),
+        ).prod(dim=1)
+
+        return window_probabilities.mean()
+
+    sequence_length = nucleotide_probs.shape[0]
+    if sequence_length == 0:
+        return logits.new_zeros(())
 
     upa = pattern_probability("TA")
     poly_a = pattern_probability("AATAAA") + pattern_probability("ATTAAA")
@@ -496,14 +553,15 @@ class CodonOptimizer(nn.Module):
     """
     Corrected autoregressive codon optimizer.
 
-    Architecture (per peer review):
+        Architecture (per peer review):
         Protein → ESM-2 Encoder (150M) → Cross-Attention →
-        TransformerDecoder (autoregressive) → Synonymous Mask → DNA
+        TransformerDecoder (autoregressive) → Codon constraints → DNA
         ↓
         ExpressionPredictor (critic) → Multi-objective loss
 
-    The hard synonymous masking is the key biological correctness guarantee:
-    every generated codon is GUARANTEED to encode the same amino acid.
+    By default, hard synonymous masking guarantees that every generated codon
+    encodes the same amino acid. ``allow_nonsynonymous=True`` enables guided
+    protein redesign when paired with an external fitness objective.
     """
 
     def __init__(
@@ -515,9 +573,11 @@ class CodonOptimizer(nn.Module):
         dropout: float = 0.1,
         esm_model_name: str = "esm2_t30_150M_UR50D",
         esm_model_path: Optional[str] = None,
+        allow_nonsynonymous: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
+        self.allow_nonsynonymous = allow_nonsynonymous
         self.esm_model_name = esm_model_name
         self.esm_model_path = esm_model_path
         self.esm_model = None
@@ -687,14 +747,18 @@ class CodonOptimizer(nn.Module):
 
         logits = self.codon_head(dec_out)  # (B, L, 64)
 
-        # Apply synonymous masking at each position
-        for b in range(B):
-            aa_str = (
-                aa_sequence[b] if isinstance(aa_sequence[b], str) else aa_sequence[0]
-            )
-            for pos, aa in enumerate(aa_str[:L]):
-                syn_mask = get_synonymous_mask(aa, device)
-                logits[b, pos, ~syn_mask] = -1e9
+        if not self.allow_nonsynonymous:
+            if len(aa_sequence) != B or not all(
+                isinstance(sequence, str) for sequence in aa_sequence
+            ):
+                raise ValueError(
+                    "aa_sequence must contain one amino-acid string per batch item"
+                )
+            for b in range(B):
+                aa_str = aa_sequence[b]
+                for pos, aa in enumerate(aa_str[:L]):
+                    syn_mask = get_synonymous_mask(aa, device)
+                    logits[b, pos, ~syn_mask] = -1e9
 
         return logits
 
@@ -783,9 +847,10 @@ class CodonOptimizer(nn.Module):
                 else:
                     logits = self.codon_head(dec_out[:, -1, :])  # (1, 64)
 
-                # Hard synonymous constraint
-                syn_mask = get_synonymous_mask(aa, device)
-                logits[:, ~syn_mask] = -1e9
+                # Preserve the input protein unless mutation mode is enabled.
+                if not self.allow_nonsynonymous:
+                    syn_mask = get_synonymous_mask(aa, device)
+                    logits[:, ~syn_mask] = -1e9
 
                 if temperature > 0.0 and temperature != 1.0:
                     logits = logits / temperature
@@ -853,14 +918,20 @@ class CodonOptimizer(nn.Module):
                 logits = self.codon_head(dec_out[0, -1, :])  # (64,)
 
                 # Synonymous mask
-                syn_mask = get_synonymous_mask(aa, device)
-                logits[~syn_mask] = -1e9
+                if not self.allow_nonsynonymous:
+                    syn_mask = get_synonymous_mask(aa, device)
+                    logits[~syn_mask] = -1e9
 
                 log_probs = F.log_softmax(logits, dim=-1)
 
                 # Expand top-k options
+                candidate_count = (
+                    int(syn_mask.sum().item())
+                    if not self.allow_nonsynonymous
+                    else len(ALL_CODONS)
+                )
                 topk_log_probs, topk_indices = log_probs.topk(
-                    min(beam_width, syn_mask.sum())
+                    min(beam_width, candidate_count)
                 )
                 for lp, idx in zip(topk_log_probs, topk_indices):
                     new_seq = torch.cat([seq, idx.view(1, 1)], dim=1)
@@ -901,24 +972,71 @@ class CodonOptimizer(nn.Module):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def protein_fitness_loss_from_logits(
+    codon_logits: torch.Tensor,
+    fitness_logits: torch.Tensor,
+) -> torch.Tensor:
+    """Match codon-derived amino-acid probabilities to a fitness model.
+
+    ``fitness_logits`` should contain per-position preferences over
+    ``AA_VOCAB`` from an external protein fitness or stability model. This
+    keeps non-synonymous mutation mode guided by a measurable objective rather
+    than treating arbitrary amino-acid substitutions as improvements.
+    """
+    if codon_logits.ndim != 3 or fitness_logits.ndim != 3:
+        raise ValueError("codon_logits and fitness_logits must have shape (B, L, C)")
+    if codon_logits.shape[-1] != len(ALL_CODONS):
+        raise ValueError(
+            f"codon_logits must have {len(ALL_CODONS)} codon classes, "
+            f"got {codon_logits.shape[-1]}"
+        )
+    if codon_logits.shape[:2] != fitness_logits.shape[:2]:
+        raise ValueError("codon and fitness sequence dimensions must match")
+    if fitness_logits.shape[-1] != len(AA_VOCAB):
+        raise ValueError(f"fitness_logits must have {len(AA_VOCAB)} amino-acid classes")
+
+    codon_probs = F.softmax(codon_logits, dim=-1)
+    aa_selector = torch.zeros(
+        (len(ALL_CODONS), len(AA_VOCAB)),
+        dtype=codon_probs.dtype,
+        device=codon_logits.device,
+    )
+    for codon_index, codon in enumerate(ALL_CODONS):
+        amino_acid = CODON_TO_AA.get(codon)
+        if amino_acid is not None:
+            aa_selector[codon_index, AA_TO_IDX[amino_acid]] = 1.0
+    aa_probs = torch.einsum("blc,ca->bla", codon_probs, aa_selector)
+    target_probs = F.softmax(fitness_logits, dim=-1)
+    return -(target_probs * torch.log(aa_probs.clamp_min(1e-8))).sum(dim=-1).mean()
+
+
 def codon_optimizer_loss(
     logits: torch.Tensor,  # (B, L, 64) predicted codon logits
     target_codons: torch.Tensor,  # (B, L) ground truth codon tokens
     predicted_expression: torch.Tensor,  # (B,) critic expression prediction
     target_expression: Optional[torch.Tensor] = None,  # (B,) measured yield
+    protein_fitness_logits: Optional[torch.Tensor] = None,
     lambdas: Optional[Dict[str, float]] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Multi-objective training loss.
 
-    L = L_CE
-      + λ_CAI    × L_CAI         (differentiable codon adaptation index)
-      + λ_GC     × L_GC          (GC content deviation from 0.62 target)
+        L = L_CE
+            + λ_CAI    × L_CAI         (differentiable codon adaptation index)
+            + λ_GC     × L_GC          (GC content violation outside 58-65%)
       + λ_UpA    × L_UpA         (UpA dinucleotide penalty)
+            + λ_fitness × L_fitness   (external protein fitness preferences)
       + λ_expr   × L_expression  (biological critic loss)
     """
     if lambdas is None:
-        lambdas = {"cai": 0.3, "gc": 0.4, "upa": 0.15, "motif": 0.3, "expr": 0.5}
+                lambdas = {
+                        "cai": 0.3,
+                        "gc": 0.4,
+                        "upa": 0.15,
+                        "motif": 0.3,
+                        "fitness": 0.0,
+                        "expr": 0.5,
+                }
 
     B, L, vocab = logits.shape
 
@@ -935,13 +1053,24 @@ def codon_optimizer_loss(
 
     # ── GC content penalty ────────────────────────────────────────────────────
     gc_per_seq = torch.stack([gc_from_logits(logits[b]) for b in range(B)])
-    L_GC = ((gc_per_seq - 0.62) ** 2).mean()  # target GC = 62%
+    # Treat the requested 58-65% range as an acceptance band. Scaling by the
+    # band width keeps the constraint meaningful while preserving gradients.
+    gc_low, gc_high = 0.58, 0.65
+    if gc_high <= gc_low:
+        raise ValueError("gc_high must be greater than gc_low")
+    gc_violation = F.relu(gc_low - gc_per_seq) + F.relu(gc_per_seq - gc_high)
+    L_GC = (gc_violation / (gc_high - gc_low)).pow(2).mean()
 
     # ── UpA dinucleotide penalty ──────────────────────────────────────────────
     L_UpA = torch.stack([upa_penalty(logits[b]) for b in range(B)]).mean()
 
     # ── Differentiable motif avoidance ──────────────────────────────────────
     L_motif = torch.stack([motif_penalty_from_logits(logits[b]) for b in range(B)]).mean()
+
+    if protein_fitness_logits is not None:
+        L_fitness = protein_fitness_loss_from_logits(logits, protein_fitness_logits)
+    else:
+        L_fitness = logits.new_zeros(())
 
     # ── Expression critic loss ────────────────────────────────────────────────
     if target_expression is not None:
@@ -957,6 +1086,7 @@ def codon_optimizer_loss(
         + lambdas["gc"] * L_GC
         + lambdas["upa"] * L_UpA
         + lambdas["motif"] * L_motif
+        + lambdas.get("fitness", 0.0) * L_fitness
         + lambdas["expr"] * L_expr
     )
 
@@ -967,6 +1097,7 @@ def codon_optimizer_loss(
         "gc": gc_per_seq.mean().item(),
         "upa": L_UpA.item(),
         "motif": L_motif.item(),
+        "fitness": L_fitness.item(),
         "expression": predicted_expression.mean().item(),
     }
 

@@ -19,6 +19,7 @@ from chimera.codon_optimizer import (
     CodonOptimizer,
     optimize_nrps_for_mammalian_expression,
 )
+from chimera.protein_fitness import ESMProteinFitnessScorer
 from chimera.flow_matching import SE3FlowMatching
 from chimera.geometry import GeometryReport, validate_backbone
 from chimera.evaluators import BiologicalObjectiveEvaluator
@@ -48,6 +49,7 @@ __all__ = [
     "NRPSConstraints",
     "CodonOptimizer",
     "optimize_nrps_for_mammalian_expression",
+    "ESMProteinFitnessScorer",
     "SE3FlowMatching",
     "GeometryReport",
     "validate_backbone",

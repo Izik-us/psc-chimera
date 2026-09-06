@@ -1,0 +1,3 @@
+GO:0035264	multicellular organism growth
+GO:0040014	regulation of multicellular organism growth
+GO:0040018	positive regulation of multicellular organism growth

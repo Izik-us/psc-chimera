@@ -1,0 +1,2 @@
+GO:0006338	chromatin remodeling
+GO:0043044	ATP-dependent chromatin remodeling

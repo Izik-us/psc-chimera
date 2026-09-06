@@ -1,0 +1,13 @@
+{
+  "total_records": 588,
+  "train_records": 479,
+  "validation_records": 109,
+  "sources": [
+    "Pouyet_HumanCodonUsage",
+    "fath2011_codon_training_measured"
+  ],
+  "label_types": [
+    "proxy",
+    "unknown"
+  ]
+}

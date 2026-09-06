@@ -1,0 +1,13 @@
+{
+  "total_records": 100,
+  "train_records": 85,
+  "validation_records": 15,
+  "sources": [
+    "Fath2011_Table1",
+    "fath2011_codon_training_proxy"
+  ],
+  "label_types": [
+    "measured",
+    "weak"
+  ]
+}

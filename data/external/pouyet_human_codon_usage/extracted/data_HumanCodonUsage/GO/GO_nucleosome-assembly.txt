@@ -1,0 +1,4 @@
+GO:0006334	nucleosome assembly
+GO:0006335	DNA replication-dependent nucleosome assembly
+GO:0006336	DNA replication-independent nucleosome assembly
+GO:0034080	CENP-A containing nucleosome assembly

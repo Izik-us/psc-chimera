@@ -1,0 +1,31 @@
+GO:0000082	G1/S transition of mitotic cell cycle
+GO:0000083	regulation of transcription involved in G1/S transition of mitotic cell cycle
+GO:0000086	G2/M transition of mitotic cell cycle
+GO:0000117	regulation of transcription involved in G2/M transition of mitotic cell cycle
+GO:0000278	mitotic cell cycle
+GO:0000320	re-entry into mitotic cell cycle
+GO:0007089	traversing start control point of mitotic cell cycle
+GO:0007091	metaphase/anaphase transition of mitotic cell cycle
+GO:0007093	mitotic cell cycle checkpoint
+GO:0007113	endomitotic cell cycle
+GO:0007346	regulation of mitotic cell cycle
+GO:0009794	regulation of mitotic cell cycle, embryonic
+GO:0010389	regulation of G2/M transition of mitotic cell cycle
+GO:0010971	positive regulation of G2/M transition of mitotic cell cycle
+GO:0031659	positive regulation of cyclin-dependent protein serine/threonine kinase activity involved in G1/S transition of mitotic cell cycle
+GO:0031662	positive regulation of cyclin-dependent protein serine/threonine kinase activity involved in G2/M transition of mitotic cell cycle
+GO:0033277	abortive mitotic cell cycle
+GO:0044772	mitotic cell cycle phase transition
+GO:0045931	positive regulation of mitotic cell cycle
+GO:0045977	positive regulation of mitotic cell cycle, embryonic
+GO:0051437	positive regulation of ubiquitin-protein ligase activity involved in regulation of mitotic cell cycle transition
+GO:0051439	regulation of ubiquitin-protein ligase activity involved in mitotic cell cycle
+GO:0071850	mitotic cell cycle arrest
+GO:0071931	positive regulation of transcription involved in G1/S transition of mitotic cell cycle
+GO:0090266	regulation of mitotic cell cycle spindle assembly checkpoint
+GO:0090267	positive regulation of mitotic cell cycle spindle assembly checkpoint
+GO:1900087	positive regulation of G1/S transition of mitotic cell cycle
+GO:1901990	regulation of mitotic cell cycle phase transition
+GO:1901992	positive regulation of mitotic cell cycle phase transition
+GO:1903047	mitotic cell cycle process
+GO:2000045	regulation of G1/S transition of mitotic cell cycle

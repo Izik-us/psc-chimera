@@ -1,0 +1,8 @@
+GO:0007386	compartment pattern specification
+GO:0007389	pattern specification process
+GO:0009880	embryonic pattern specification
+GO:0009952	anterior/posterior pattern specification
+GO:0021797	forebrain anterior/posterior pattern specification
+GO:0035054	embryonic heart tube anterior/posterior pattern specification
+GO:0060896	neural plate pattern specification
+GO:0072268	pattern specification involved in metanephros development

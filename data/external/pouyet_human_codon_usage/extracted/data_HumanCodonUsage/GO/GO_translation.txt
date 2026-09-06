@@ -1,0 +1,68 @@
+GO:0001731	formation of translation preinitiation complex
+GO:0001732	formation of cytoplasmic translation initiation complex
+GO:0002181	cytoplasmic translation
+GO:0002183	cytoplasmic translational initiation
+GO:0002184	cytoplasmic translational termination
+GO:0002190	cap-independent translational initiation
+GO:0002192	IRES-dependent translational initiation
+GO:0006412	translation
+GO:0006413	translational initiation
+GO:0006414	translational elongation
+GO:0006415	translational termination
+GO:0006417	regulation of translation
+GO:0006418	tRNA aminoacylation for protein translation
+GO:0006446	regulation of translational initiation
+GO:0006449	regulation of translational termination
+GO:0006450	regulation of translational fidelity
+GO:0006452	translational frameshifting
+GO:0006613	cotranslational protein targeting to membrane
+GO:0006614	SRP-dependent cotranslational protein targeting to membrane
+GO:0006616	SRP-dependent cotranslational protein targeting to membrane, translocation
+GO:0006617	SRP-dependent cotranslational protein targeting to membrane, signal sequence recognition
+GO:0006620	posttranslational protein targeting to membrane
+GO:0009386	translational attenuation
+GO:0010998	regulation of translational initiation by eIF2 alpha phosphorylation
+GO:0017148	negative regulation of translation
+GO:0031204	posttranslational protein targeting to membrane, translocation
+GO:0032055	negative regulation of translation in response to stress
+GO:0032057	negative regulation of translational initiation in response to stress
+GO:0032058	positive regulation of translational initiation in response to stress
+GO:0032543	mitochondrial translation
+GO:0032938	negative regulation of translation in response to oxidative stress
+GO:0034421	post-translational protein acetylation
+GO:0035278	negative regulation of translation involved in gene silencing by miRNA
+GO:0036493	positive regulation of translation in response to endoplasmic reticulum stress
+GO:0036496	regulation of translational initiation by eIF2 alpha dephosphorylation
+GO:0043143	regulation of translation by machinery localization
+GO:0043555	regulation of translation in response to stress
+GO:0043558	regulation of translational initiation in response to stress
+GO:0043686	co-translational protein modification
+GO:0043687	post-translational protein modification
+GO:0045727	positive regulation of translation
+GO:0045900	negative regulation of translational elongation
+GO:0045901	positive regulation of translational elongation
+GO:0045903	positive regulation of translational fidelity
+GO:0045905	positive regulation of translational termination
+GO:0045947	negative regulation of translational initiation
+GO:0045948	positive regulation of translational initiation
+GO:0045993	negative regulation of translational initiation by iron
+GO:0045994	positive regulation of translational initiation by iron
+GO:0051083	'de novo' cotranslational protein folding
+GO:0051084	'de novo' posttranslational protein folding
+GO:0070124	mitochondrial translational initiation
+GO:0070125	mitochondrial translational elongation
+GO:0070126	mitochondrial translational termination
+GO:0070127	tRNA aminoacylation for mitochondrial protein translation
+GO:0070129	regulation of mitochondrial translation
+GO:0070130	negative regulation of mitochondrial translation
+GO:0070131	positive regulation of mitochondrial translation
+GO:0097167	circadian regulation of translation
+GO:1900248	negative regulation of cytoplasmic translational elongation
+GO:1901194	negative regulation of formation of translation preinitiation complex
+GO:1901874	negative regulation of post-translational protein modification
+GO:1903676	positive regulation of cap-dependent translational initiation
+GO:1903679	positive regulation of cap-independent translational initiation
+GO:1990145	maintenance of translational fidelity
+GO:2000765	regulation of cytoplasmic translation
+GO:2000766	negative regulation of cytoplasmic translation
+GO:2000767	positive regulation of cytoplasmic translation
