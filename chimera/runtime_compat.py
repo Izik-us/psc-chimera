@@ -1,8 +1,4 @@
-"""Merge-safe runtime compatibility implementations for public CHIMERAv2.
-
-The historical modules remain import-compatible, while the public package
-installs corrected scientific contracts before constructing CHIMERAv2.
-"""
+"""Merge-safe runtime compatibility implementations for public CHIMERAv2."""
 
 from __future__ import annotations
 
@@ -17,6 +13,7 @@ from . import schrodinger_bridge as _schrodinger_bridge
 from .multi_objective import MultiScaleNRPSDesigner as _LegacyDesigner
 from .chimera_v2 import FlowMatchingBackbone as _LegacyFlowBackbone, SubstratePocketConditioner as _LegacyConditioner
 from .dpo import DPOBatch, DPOTrainer
+from .bayesian import BayesianUncertaintyEstimator
 from .schrodinger_bridge import SE3SchrodingerBridge
 
 AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
@@ -39,8 +36,6 @@ def merge_ready_so3_log(R: torch.Tensor) -> torch.Tensor:
         0.5 * torch.sqrt(d2) * torch.where(R[..., 1, 0] - R[..., 0, 1] >= 0, 1.0, -1.0),
     ], dim=-1)
     sin_half = q.norm(dim=-1)
-    # q_vec = sin(theta/2) * axis, so theta/sin(theta/2) recovers the
-    # principal axis-angle vector. The previous factor of 2 doubled omega.
     quat_omega = q * (theta / sin_half.clamp_min(1e-7)).unsqueeze(-1)
     return torch.where((theta < 1e-4).unsqueeze(-1), vee, quat_omega)
 
@@ -163,6 +158,27 @@ def merge_ready_update_from_proteus(self, survivors, failures, msa, pair_feature
     return metrics
 
 
-_flow_matching.InvariantPointAttention = MergeReadyInvariantPointAttention
-_flow_matching.so3_log = merge_ready_so3_log
-_schrodinger_bridge.so3_log = merge_ready_so3_log
+def set_best_observed(self, value: Optional[float]) -> None:
+    """Set the experimentally observed EI baseline in normalized utility space."""
+    if value is not None and not 0.0 <= float(value) <= 1.0:
+        raise ValueError("best_observed must be in the normalized [0,1] utility space")
+    self.best_observed = None if value is None else float(value)
+
+
+def merge_ready_expected_improvement(self, mean, std, best_observed):
+    """Use the canonical Gaussian EI implementation and an external observed baseline when set."""
+    effective_best = getattr(self, "best_observed", None)
+    if effective_best is None:
+        effective_best = float(best_observed)
+    return BayesianUncertaintyEstimator.expected_improvement(mean, std, effective_best)
+
+
+def merge_ready_design(self, *args, **kwargs):
+    """Preserve legacy design API while making the default device portable."""
+    device = kwargs.get("device", "cuda")
+    if device == "cuda" and not torch.cuda.is_available():
+        kwargs["device"] = str(next(self.parameters()).device)
+    return _LEGACY_DESIGN(self, *args, **kwargs)
+
+
+_LEGACY_DESIGN = None
