@@ -1,8 +1,9 @@
 """Merge-safe runtime compatibility implementations for public CHIMERAv2.
 
-The large historical ``chimera_v2.py`` module is retained for compatibility,
-while the package entrypoint substitutes corrected components before a model is
-constructed. This avoids maintaining two subtly different scientific paths.
+The historical ``chimera_v2.py`` remains import-compatible, while the public
+package substitutes corrected components before CHIMERAv2 construction. This
+keeps the repair isolated and prevents users from silently taking a stale
+scientific path through the public API.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ from .chimera_v2 import (
     FlowMatchingBackbone as _LegacyFlowBackbone,
     SubstratePocketConditioner as _LegacyConditioner,
 )
-from .flow_matching import SE3FlowMatching
 from .schrodinger_bridge import SE3SchrodingerBridge
 
 
@@ -74,8 +74,6 @@ class MergeReadyFlowMatchingBackbone(_LegacyFlowBackbone):
 
     def __init__(self, d_single: int = 256, d_pair: int = 256, n_blocks: int = 8):
         super().__init__(d_single, d_pair, n_blocks)
-        # Keep the velocity network architecture, but use it as the learned SB
-        # drift rather than the historical heuristic noise-corrected CFM path.
         self.sb_model = SE3SchrodingerBridge(
             self.flow_model.velocity_field,
             diffusion=0.05,
@@ -93,7 +91,6 @@ class MergeReadyFlowMatchingBackbone(_LegacyFlowBackbone):
         substrate_coords=None,
         evol_conditioning_fn=None,
     ):
-        del evol_conditioning_fn
         evol_single = self.frozen_bridge(evol_single)
         return self.sb_model.sample(
             R0,
@@ -103,6 +100,7 @@ class MergeReadyFlowMatchingBackbone(_LegacyFlowBackbone):
             n_steps=n_steps,
             fixed_mask=fixed_mask,
             substrate_coords=substrate_coords,
+            evol_conditioning_fn=evol_conditioning_fn,
         )
 
     def loss(
