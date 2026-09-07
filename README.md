@@ -1,226 +1,267 @@
-<div align="center">
-
 # PSC-CHIMERA
 
 **Compositional Hierarchical Inference Model for Evolutionary Representation and Architecture**
 
-[![Tests](https://github.com/Izik-us/psc-chimera/actions/workflows/tests.yml/badge.svg)](https://github.com/Izik-us/psc-chimera/actions)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.1+-ee4c2c.svg)](https://pytorch.org/)
+Stage 1 computational design prototype for the theoretical Pharmacosynthetic Constructor (PSC) engineering pipeline.
 
-*Stage 1 computational design engine of the Pharmacosynthetic Constructor (PSC) Engineering Pipeline*
-
-> **Implementation status:** This repository is a research prototype. The local
-> EvoFormer, flow, and ProteinMPNN classes are shape-compatible approximations,
-> not the OpenFold, RFdiffusion, or dauparas/ProteinMPNN models. Their external
-> checkpoints cannot be loaded into these classes. The CLI now refuses missing
-> biological inputs unless `--demo` is explicitly requested. Do not interpret
-> demo or uncalibrated proxy scores as validated biological designs.
-
-[Overview](#overview) • [What CHIMERA Engineers](#what-chimera-engineers) • [Architecture](#architecture) • [Quick Start](#quick-start) • [Installation](#installation) • [Pipeline](#psc-pipeline) • [Roadmap](#roadmap)
-
-</div>
+> **Research-status notice:** CHIMERA is a research prototype. The local EvoFormer, RFdiffusion/SE(3), and ProteinMPNN components are explicitly **approximations**, not drop-in replacements for OpenFold, RFdiffusion, or dauparas/ProteinMPNN. Native upstream checkpoints are not loaded into structurally incompatible local classes. Proxy objectives are not experimentally calibrated and must not be interpreted as biological validation.
 
 ---
 
-## Overview
+## Architecture contract
 
-The **Pharmacosynthetic Constructor (PSC)** is a theoretical biomedical engineering framework for *in situ therapeutic synthesis*: a reprogrammable composite molecular machine that uses the body's own biochemistry as feedstock to manufacture therapeutic molecules directly inside target cells — turning the body into a precision pharmacological manufacturing system.
+The public `chimera.CHIMERAv2` entry point installs the current merge-safe component contracts before model construction. The intended pipeline is:
 
-**CHIMERA is the complete computational design engine for the PSC's catalytic core (Layer 1).**
-
-Layer 1 is an engineered NRPS/PKS hybrid assembly line operating inside mammalian cells. Building it requires designing not just one enzyme domain but an entire coordinated molecular factory: every domain in the assembly line, every junction between modules, every novel catalytic insert, and the full multi-module architecture that strings them together into a continuous synthesis pathway.
-
-CHIMERA is intended to study the engineering problems of NRPS mammalian
-expression and module compatibility. It does not yet solve those problems:
-the mammalian target dataset, calibrated biological evaluators, and wet-lab
-validation remain future work.
-
----
-
-## What CHIMERA Engineers
-
-CHIMERA is not an A-domain engineer. It is a **full NRPS machinery design system** covering every component of the Layer 1 catalytic core:
-
-### Canonical NRPS Domains
-
-| Domain | Function | CHIMERA's Role |
-|--------|----------|----------------|
-| **A-domain** (Adenylation) | Substrate recognition and activation as aminoacyl-AMP | Selectivity code transplant from bacterial analogs; PoET-scored against animal NRPS family; substrate-conditioned backbone generation |
-| **T-domain** (Thiolation / PCP) | Tethers substrate via 20Å phosphopantetheine arm; shuttles intermediates between catalytic domains | PPant attachment site design; co-evolving interface with A-domain enforced via EvoFormer pair representation |
-| **C-domain** (Condensation) | Catalyzes peptide/ester/C-C bond formation between tethered intermediates | Standard amide, ester, and C-C bond variants; novel bond chemistries via engineered C-domain variants; split-reporter selection in PROTEUS |
-| **TE-domain** (Thioesterase) | Releases finished product; controls linear vs cyclic product geometry | Cyclization vs linear release engineering; tunable release kinetics that determine product Cmax and local concentration profile |
-| **E-domain** (Epimerization) | Converts L-amino acids to D-configuration | D-amino acid incorporation for products with improved protease resistance |
-| **Cy-domain** (Cyclization) | Heterocyclization of Cys/Ser/Thr residues | Thiazoline/oxazoline ring formation for cyclic peptide natural product analogs |
-| **Mt-domain** (N-Methylation) | N-methylates backbone amides | Increased membrane permeability and protease resistance in product peptides |
-
-### De Novo Enzyme Insert Domains
-
-CHIMERA designs domains from scratch using a theozyme → RFdiffusion → ProteinMPNN workflow for reaction chemistries **not present in any natural NRPS/PKS**:
-
-- Novel ring closures not achievable by natural TE-domains
-- Bioorthogonal reactions using endogenous cofactors (SAM, NADPH)
-- Non-standard functional group additions (fluorination, phosphorylation)
-- Reductive chemistry beyond natural PKS ketoreductases
-
-These are the source of Tier 3 and Tier 4 PSC outputs — molecular architectures that no existing biosynthetic machinery produces.
-
-### Module-Module Interface Engineering
-
-The **30-year NRPS module incompatibility problem**: swapping modules between NRPS assembly lines breaks the condensation interface geometry, destroying activity. CHIMERA's multi-scale hierarchical designer directly solves this:
-
-- **Scale 3** (Module attention): Explicit module-module interface attention learns which linker geometries support productive condensation between adjacent modules
-- **RFdiffusion linker design**: Generates new inter-module linkers conditioned on EvoFormer pair representations encoding co-evolutionary constraints between flanking domains
-- **Pairwise interface scoring**: Each module pair gets an explicit compatibility score; incompatible combinations are rejected before PROTEUS
-
-### NRPS-PKS Hybrid Modules
-
-For Tier 2 PSC outputs (enhanced resolvins, macrolide variants, neurosteroids, kinase inhibitors), CHIMERA designs hybrid NRPS-PKS modules that combine:
-
-- NRPS adenylation + PKS ketosynthase extensions
-- Polyketide chain extension with amino acid incorporation
-- Reductive loop domains (KR, DH, ER) for saturated/unsaturated polyketide products
-- Full hybrid module backbone geometry via flow matching conditioned on both NRPS and PKS MSAs simultaneously
-
-### PPTase Engineering
-
-The phosphopantetheinyl transferase that activates all T-domains is itself a design target. CHIMERA's PPTase sub-campaign uses PROTEUS to evolve the native mammalian ACSF4 enzyme toward broader NRPS T-domain specificity — avoiding immunogenicity from bacterial Sfp while maintaining the post-translational modification that makes the entire assembly line functional.
-
-### Full Assembly-Line Design
-
-CHIMERA can design complete multi-module NRPS systems — not just individual domains:
-
-- Multi-module polycistronic mRNA encoding (up to 5 NRPS modules + PPTase in a single construct)
-- Substrate channeling architecture across the full assembly line
-- Stoichiometry balancing via IRES strength calibration
-- Icosahedral face compatibility at Scale 4 (ensuring each designed module integrates correctly into the PSC's 240nm icosahedral self-assembly)
-
----
-
-## Architecture
-
-```
-Animal NRPS MSA (Stage 0: NCBI, antiSMASH, Suring et al. 2023)
-including A, T, C, TE, E, Cy, Mt domain sequences
-       │
- EvoFormer [FROZEN ~700M params]
- Captures co-evolutionary constraints across ALL domain types
-       │
- TriangularPairUpdateConnector    ← TRAINABLE ~12M params total
- SubstratePocketConditioner       ←  substrate conditioning for A-domain
- EvolCrossAttentionConnector      ←  noise-adaptive evolutionary guidance
-       │
- SE(3) OT-Flow Matching [FROZEN — RFdiffusion base]
- Bridge: bacterial NRPS backbone → mammalian-functional design
- Works on any domain type: A, T, C, TE, linker, insert
- 20 NFE with RK4 (10x faster than DDPM)
-       │
- Multi-Scale Hierarchical Sequence Designer
- Scale 1: Residue  — ProteinMPNN GNN (catalytic residue precision)
- Scale 2: Domain   — A/T/C/TE/linker domain attention
- Scale 3: Module   — module-module interface compatibility (solves 30yr problem)
- Scale 4: Assembly — icosahedral face constraint (PSC Layer 1 integration)
- Bidirectional: bottom-up and top-down message passing
-       │
- Pareto Multi-Objective Head (5 objectives)
- F1: Evolutionary plausibility (PoET)
- F2: Structural stability (predicted pLDDT)
- F3: Mammalian expression efficiency (CodonOptimizer critic)
- F4: Substrate/product selectivity (domain function match)
- F5: Icosahedral assembly compatibility
-       │
- Bayesian Uncertainty + Expected Improvement
- → Ranked Pareto frontier — optimal batch for PROTEUS
+```text
+Animal / target-family MSA
+        │
+        ▼
+Evolutionary representation
+(local EvoFormer approximation or future native OpenFold adapter)
+        │
+        ├──────────────► pair representation
+        │
+        ▼
+Triangular pair connector + substrate conditioning + structural retrieval
+        │
+        ▼
+SE(3) Schrödinger-bridge backbone transport
+        │
+        │  entropic Sinkhorn endpoint coupling
+        │  Brownian-bridge conditional training targets
+        │  Euler-Maruyama stochastic sampling
+        ▼
+Hierarchical geometric sequence designer
+        │
+        ├─ residue scale: geometric message passing
+        ├─ domain scale: domain attention
+        ├─ module scale: interface attention
+        └─ assembly scale: symmetry/interface representation
+        │
+        ▼
+Five-objective prediction / evaluation
+        │
+        ├─ evolutionary plausibility
+        ├─ structural validity/stability proxy
+        ├─ expression proxy
+        ├─ substrate selectivity proxy
+        └─ assembly compatibility proxy
+        │
+        ▼
+Pareto non-dominated filtering
+        │
+        ▼
+Bayesian uncertainty + Gaussian Expected Improvement
+        │
+        ▼
+Candidate batch for external experimental evaluation
+        │
+        ▼
+PROTEUS preference data
+        │
+        ▼
+DPO update of the actual autoregressive sequence policy
 ```
 
-| Component | Params | Status |
-|-----------|--------|--------|
-| EvoFormer approximation | small local model | Frozen by default |
-| SE(3) flow approximation | local model | Frozen by default |
-| ProteinMPNN approximation | small local model | Frozen by default |
-| **Connectors + heads** | **~12M** | **Trainable** |
+### Scientific status of the transport model
+
+The canonical bridge implementation is in `chimera/schrodinger_bridge.py`.
+
+It is an **entropic Brownian Schrödinger-bridge approximation in a local SE(3) coordinate chart**. Translation is Euclidean and rotation is represented locally with
+
+\[
+\omega = \log(R_0^T R), \qquad R = R_0\exp(\omega).
+\]
+
+The endpoint coupling is computed with log-domain Sinkhorn scaling. For the reference SDE
+
+\[
+dX_t = \sqrt{2D}\,dW_t,
+\]
+
+the conditional Brownian bridge is
+
+\[
+X_t\mid X_0,X_1 \sim
+\mathcal N((1-t)X_0+tX_1,\;2Dt(1-t)I),
+\]
+
+with conditional drift
+
+\[
+b^*(x,t\mid x_1)=\frac{x_1-x}{1-t}.
+\]
+
+Training samples target endpoints from the **entropic endpoint coupling**, rather than simply pairing source `i` with target `i`. Sampling uses Euler-Maruyama because the Schrödinger bridge is stochastic.
+
+This is intentionally documented as a local Lie-algebra approximation. It is not presented as an exact closed-form heat-kernel Schrödinger bridge on SO(3).
 
 ---
 
-## Quick Start
+## Optimization contracts
+
+### PCGrad
+
+`chimera.pcgrad` implements canonical Projected Conflicting Gradients:
+
+1. compute one gradient per objective;
+2. randomly permute the other objectives for each task;
+3. when `g_i · g_j < 0`, project the conflicting component out;
+4. sum the projected gradients and write them to `.grad`.
+
+The repository no longer treats loss-magnitude differences as a substitute for gradient conflict detection.
+
+### DPO
+
+`chimera.dpo.DPOTrainer` implements the standard reference-policy DPO objective
+
+\[
+-\log\sigma\left(\beta[(\log\pi_\theta(y_w|x)-\log\pi_{ref}(y_w|x))
+-(\log\pi_\theta(y_l|x)-\log\pi_{ref}(y_l|x))]\right).
+\]
+
+The reference policy is frozen. If sequence masks are supplied, padding positions are excluded from the sequence log probability. A policy can provide `logprob(context, tokens)` or callable token logits for masked likelihoods.
+
+The older DPO implementation in `multi_objective.py` remains available as `LegacyDPOTrainer` for compatibility, but it is not the canonical API.
+
+### Bayesian uncertainty and Expected Improvement
+
+`chimera.bayesian.BayesianUncertaintyEstimator` uses MC dropout as an **approximate Bayesian posterior method**. It reports:
+
+- predictive mean;
+- epistemic variance;
+- epistemic standard deviation;
+- optional aleatoric variance when a model supplies predictive variance.
+
+Expected Improvement uses the standard deviation, not the variance:
+
+\[
+EI(x)=(\mu-f^*-\xi)\Phi(Z)+\sigma\phi(Z),
+\qquad
+Z=\frac{\mu-f^*-\xi}{\sigma}.
+\]
+
+Heterogeneous objectives are normalized before scalarization. The estimator also preserves each module's original training/evaluation mode while activating only dropout layers.
+
+**Important:** MC dropout is not an exact Bayesian posterior and should not be described as one. Deep ensembles or a calibrated probabilistic surrogate can be added for stronger uncertainty estimates.
+
+---
+
+## Geometry contract
+
+Backbone geometry uses `(B, L, 4, 3)` coordinates in `N/CA/C/O` order and optional `(B, L, 3, 3)` residue frames.
+
+The validator checks:
+
+- finite coordinates;
+- frame orthogonality and determinant;
+- Cα spacing;
+- peptide and local bond lengths;
+- backbone angle sanity;
+- steric clashes.
+
+The clash detector builds the backbone covalent graph and excludes atom pairs at graph distance one or two from the simple steric-distance test. This prevents expected bonded/near-bonded backbone distances from being mislabeled as steric clashes while still detecting genuinely close non-local atoms.
+
+The validator is a deterministic sanity check, **not** a molecular mechanics force field.
+
+---
+
+## ProteinMPNN contract
+
+`chimera.proteinmpnn.ProteinMPNN` is a ProteinMPNN-inspired local model, not the original pretrained ProteinMPNN.
+
+Its geometric edge features are:
+
+```text
+16 radial basis distance features
++ 3 query-frame local displacement features
++ 9 relative-frame rotation features
+= 28 edge features
+```
+
+The representation is invariant to a shared global rigid transformation. Fixed residues are hard constrained at the sequence-logit level.
+
+Native ProteinMPNN integration belongs behind `ProteinMPNNAdapter` and must be performed with the upstream implementation and its compatible checkpoint.
+
+---
+
+## Quick start
 
 ```python
-from chimera import CHIMERAv2, NRPSConstraints
 import torch
+from chimera import CHIMERAv2, NRPSConstraints
 
-# Load model
-model = CHIMERAv2.from_pretrained(
-    flow_ckpt = "weights/rfdiffusion_base.pt",
-    mpnn_ckpt = "weights/proteinmpnn_v48_020.pt",
-)
+model = CHIMERAv2()
 
-# Example: design a complete A+T+C+TE module for phenylalanine activation
+# The local classes are research approximations. Native upstream weights
+# require the corresponding adapters and environments.
+
 constraints = NRPSConstraints(
-    # Stachelhaus selectivity code positions (A-domain substrate pocket)
-    stachelhaus_positions = torch.tensor([235,236,239,278,299,301,322,330,517,518]),
-    # All four domain boundaries in the module
-    domain_boundaries     = torch.tensor([[[0,300],    # A-domain
-                                           [300,400],  # T-domain
-                                           [400,500],  # C-domain
-                                           [500,580],  # TE-domain
-                                           [580,600]]]), # linker
-    module_boundaries     = torch.tensor([[[0,600],[0,0],[0,0],[0,0],[0,0]]]),
-    icosahedral_face      = torch.tensor([7]),
-    # PPant attachment serine on T-domain
-    ppt_serine_position   = 519,
-    fixed_mask            = None,
-    hotspot_coords        = None,
-    hotspot_indices       = None,
-    target_substrate      = "PHE",
-)
-
-# Design: bridge bacterial PheA (1AMU) → mammalian-functional
-results = model.design(
-    nrps_msa        = msa_tokens,
-    source_backbone = (bacterial_R, bacterial_t),   # from PDB 1AMU
-    initial_pair_features = pair_features,
-    target_substrate = "PHE",
-    n_designs        = 500,
-    n_pareto_samples = 50,
-)
-
-# Update from PROTEUS results (any domain campaign)
-model.update_from_proteus(
-    survivors = sequences_that_expressed_and_functioned,
-    failures  = sequences_that_failed,
-    msa       = msa_tokens,
-    pair_features = pair_features,
+    fixed_mask=None,
+    stachelhaus_positions=torch.tensor([235, 236, 239, 278, 299, 301, 322, 330, 517, 518]),
+    domain_boundaries=torch.tensor([[[0, 300], [300, 400], [400, 500], [500, 580], [580, 600]]]),
+    module_boundaries=torch.tensor([[[0, 600], [0, 0], [0, 0], [0, 0], [0, 0]]]),
+    icosahedral_face=torch.tensor([7]),
+    ppt_serine_position=519,
+    hotspot_coords=None,
+    hotspot_indices=None,
+    target_substrate="PHE",
 )
 ```
+
+A real design run requires compatible MSA, pair features, source backbone frames, and any substrate geometry required by the selected conditioning path. The CLI refuses missing biological inputs unless demo mode is explicitly requested.
 
 ---
 
-## Companion Model: CodonOptimizer
+## Training
 
-Prepares **any** CHIMERA-designed NRPS sequence for mRNA delivery — A-domain, T-domain, C-domain, TE-domain, de novo inserts, or full modules.
+The intended optimization stages are:
+
+```text
+1. Supervised training of trainable connectors/heads
+2. Multi-objective gradient surgery with canonical PCGrad
+3. External experimental evaluation
+4. Frozen-reference DPO update from preference pairs
+5. Bayesian uncertainty estimation
+6. EI acquisition of the next experimental batch
+7. Repeat
+```
+
+The canonical low-level APIs are intentionally separate so each stage can be tested independently:
 
 ```python
-from chimera import optimize_nrps_for_mammalian_expression
-
-# Works on any NRPS domain or full module sequence
-result = optimize_nrps_for_mammalian_expression(
-    aa_sequence = your_full_module_sequence,   # A+T+C+TE or any sub-domain
-    beam_search = True,
-    verbose     = True,
+from chimera import (
+    BayesianUncertaintyEstimator,
+    DPOBatch,
+    DPOTrainer,
+    SchrodingerBridge,
+    pcgrad_step,
 )
-
-print(f"CAI: {result['cai']:.3f}")         # target ≥ 0.96
-print(f"GC:  {result['gc_content']:.3f}")  # target 0.58-0.65
-print(f"Bad motifs: {result['n_bad_motifs']}")  # target = 0
-# result['dna_sequence'] → Trilink/Aldevron for mRNA synthesis with N1mΨ
 ```
+
+For multi-objective supervised training, obtain independent task losses and pass them to `pcgrad_step` instead of summing them and calling ordinary `backward()`.
+
+For DPO, initialize a frozen reference policy **before** the preference update. Do not update the reference during the same DPO round.
+
+For active learning, `best_observed` must represent the best **experimentally observed** scalarized objective in the same normalized utility space as the candidate predictions. It should not silently be replaced by the maximum predicted candidate.
+
+---
+
+## Native upstream integrations
+
+The repository exposes explicit adapter boundaries for:
+
+| Component | Local implementation | Production boundary |
+|---|---|---|
+| Evolutionary trunk | small Transformer approximation | `OpenFoldAdapter` / `OpenFoldCLIAdapter` |
+| Backbone generation | local SE(3) SB/velocity architecture | `RFdiffusionAdapter` / `RFdiffusionCLIAdapter` |
+| Sequence design | ProteinMPNN-inspired model | `ProteinMPNNAdapter` |
+
+The adapters fail closed rather than loading an incompatible checkpoint into a different architecture.
 
 ---
 
 ## Installation
-
-### 1. Clone and install
 
 ```bash
 git clone https://github.com/Izik-us/psc-chimera.git
@@ -228,30 +269,9 @@ cd psc-chimera
 pip install -e .
 ```
 
-### 2. Optional external weights
+Optional native upstream projects must be installed in their own supported environments. Their checkpoints must be consumed by compatible upstream code or explicit adapters. A file merely being named `rfdiffusion_weights.pt` or `proteinmpnn_weights.pt` does not make it compatible with a local approximation.
 
-```bash
-bash scripts/download_weights.sh
-```
-
-The downloaded RFdiffusion and ProteinMPNN checkpoints are not loadable by the
-local approximation classes. Use them only after installing and configuring
-the corresponding upstream backends and adapters.
-
-### 3. Install external dependencies (production)
-
-```bash
-# OpenFold (EvoFormer backbone — covers all domain types)
-git clone https://github.com/aqlaboratory/openfold.git && pip install -e openfold/
-
-# RFdiffusion (backbone generation for all NRPS domains)
-git clone https://github.com/RosettaCommons/RFdiffusion.git && pip install -e RFdiffusion/
-
-# ProteinMPNN (sequence design for all domain types)
-git clone https://github.com/dauparas/ProteinMPNN.git
-```
-
-### 4. Run tests
+Run the CPU-safe test suite with:
 
 ```bash
 pytest tests/ -v
@@ -259,124 +279,89 @@ pytest tests/ -v
 
 ---
 
-## PSC Pipeline
+## Testing philosophy
 
-```
-Stage 0:  Sequence retrieval (all domain types)
-          NCBI: XP_018648700 (full NRPS), NIUQ01002120.1 (ACVS/IPNS/TE cluster)
-          antiSMASH DB: pre-annotated A/T/C/TE/E/Cy/Mt domain clusters
-          Suring et al. 2023 — 199 confirmed animal NRPS clusters
-          MIBiG: 3000+ A-domain selectivity labels for training
+The test suite is designed to reject silent scientific regressions, not merely import errors. It covers:
 
-Stage 1:  CHIMERA v2 computational design        ← THIS REPO
-          Designs: A-domains, T-domains, C-domains, TE-domains,
-                   E/Cy/Mt tailoring domains, de novo inserts,
-                   module-module linkers, NRPS-PKS hybrids,
-                   full multi-module assembly lines
-          Output: 500 candidates → Pareto frontier → 50 for PROTEUS
+- SO(3) exponential/logarithmic-map consistency;
+- SE(3) interpolation;
+- geometric frame covariance/invariance;
+- fixed-residue constraints;
+- covalent-bond-aware clash detection;
+- PDB completeness validation;
+- Sinkhorn marginal constraints;
+- Brownian bridge statistics;
+- canonical PCGrad conflict handling;
+- DPO preference behavior and masking;
+- MC-dropout mode restoration;
+- EI numerical behavior;
+- ProteinMPNN geometric invariance and shape contracts;
+- CHIMERAv2 integration shapes.
 
-Stage 1.5: PoET evolutionary plausibility scoring
-           Scores any NRPS domain sequence against its family MSA
-
-Stage 2:  CodonOptimizer mRNA preparation        ← THIS REPO
-          Any domain or full module → CAI ≥ 0.96, GC 58-65%
-          Outputs polycistronic mRNA encoding full NRPS assembly line
-
-Stage 3:  PROTEUS directed evolution
-          Domain-by-domain campaigns: A+T → C → TE → linkers → integration
-          4-6 rounds per domain; CHIMERA updated via DPO after each round
-
-Stage 4:  Polycistronic mRNA → intracellular icosahedral self-assembly
-          Single LNP → 240nm PSC forms inside target cell
-          Full NRPS assembly line operational: substrate → product
-
-Stage 5:  Functional validation
-          LC-MS: confirm product identity and yield
-          PPant loading assay: confirm T-domain activation
-          Sensor ring activation: confirm conditional synthesis
-```
+CI runs the CPU test suite on supported Python versions without requiring pretrained biological weights.
 
 ---
 
-## PROTEUS Campaign Structure
+## What is not yet scientifically validated
 
-Each domain type runs its own PROTEUS campaign, in this order:
+The following are deliberately **not** claimed as experimentally validated:
 
-```
-Campaign 1 (A+T module):   5 rounds — substrate activation + PPant loading
-Campaign 2 (C-domain):     3-5 rounds — bond formation + novel chemistry
-Campaign 3 (TE-domain):    3 rounds — product release + cyclization geometry
-Campaign 4 (De novo inserts): 5+ rounds — novel chemistry selection
-Campaign 5 (Linkers):      3-4 rounds — module-module interface compatibility
-Campaign 6 (Integration):  2-3 rounds — full assembly-line function
-─────────────────────────────────────────────────────────────────
-Total:                     ~21-30 rounds, parallel where possible
-```
+- mammalian NRPS functional prediction;
+- pLDDT or structural stability from the local proxy heads;
+- PoET/evolutionary likelihood calibration;
+- substrate selectivity prediction without validated A-domain labels;
+- icosahedral assembly compatibility;
+- de novo catalytic chemistry;
+- wet-lab expression, PPant loading, product yield, or intracellular assembly.
 
-CHIMERA is updated via DPO after every campaign. Each round, the model gets better at predicting what works in mammalian cells for every domain type.
+These require domain-specific datasets, calibrated predictors, native structural backbones, controlled experimental evaluation, and external validation.
 
 ---
 
-## Production Setup
+## Repository status
 
-The codebase uses stubs for the three pretrained backbones. See the production guide for Items 1-9:
+### Implemented
 
-| Item | Component | Time | GPU needed |
-|------|-----------|------|-----------|
-| 7, 8, 9 | Code fixes (random sampling, Hamming diversity, block counts) | 30 min | No |
-| 4 | ESM-2 150M → CodonOptimizer | ~2 hr | 4GB |
-| 3 | ProteinMPNN integration | ~3 hr | 2GB |
-| 1 | EvoFormer / OpenFold | ~1 day | 6GB |
-| 2 | RFdiffusion weight transfer | ~1 day | 4GB |
+- [x] Strict foundation-model adapter boundaries
+- [x] Geometric clash validation repair
+- [x] ProteinMPNN fixed-residue constraints
+- [x] Rigid-transform-invariant ProteinMPNN edge geometry
+- [x] Canonical PCGrad
+- [x] Entropic Sinkhorn endpoint coupling
+- [x] Brownian Schrödinger-bridge training/sampling approximation
+- [x] Canonical DPO objective
+- [x] Mask-aware DPO likelihoods
+- [x] MC-dropout epistemic uncertainty
+- [x] Analytic Gaussian Expected Improvement
+- [x] Regression and scientific-contract tests
+- [x] Incremental CI linting and CPU test execution
 
-Hardware: **MacBook Pro M4 Max 48GB** (best) or RTX 4090 Laptop (16GB VRAM).
-Cloud: **RunPod** (~$0.74/hr RTX 4090) or Google Colab Pro ($10/mo) while waiting.
+### Still required before a production biological claim
 
----
-
-## Roadmap
-
-- [x] CHIMERA v1 — EvoFormer + SE3Denoiser + ProteinMPNN connectors
-- [x] CHIMERA v2 — flow matching, multi-scale designer, RAG, DPO, Pareto, Bayesian uncertainty
-- [x] Full NRPS machinery scope — A/T/C/TE/E/Cy/Mt + de novo inserts + linkers + hybrids
-- [x] CodonOptimizer — autoregressive + expression critic
-- [x] Test suite — shape/integration/math tests + CI/CD
-- [ ] Production weight loading — Items 1-9 (in progress, collaborative)
-- [ ] Stage 0 data pipeline — full NRPS domain sequence retrieval from all databases
-- [ ] C-domain training data — MIBiG condensation domain annotations
-- [ ] TE-domain cyclization training — cyclic vs linear product geometry labels
-- [ ] De novo insert theozyme library — reaction geometry database
-- [ ] First training run on Fath et al. codon optimization data
-- [ ] First PROTEUS round — A+T domain campaign
-- [ ] Wet lab validation of first CHIMERA-designed module
+- [ ] Native OpenFold integration and checkpoint compatibility validation
+- [ ] Native RFdiffusion integration or validated bridge training data
+- [ ] Native ProteinMPNN integration
+- [ ] Domain-specific animal NRPS datasets and labels
+- [ ] Calibrated biological objective evaluators
+- [ ] Experimental PROTEUS data pipeline
+- [ ] External validation of generated structures and sequences
+- [ ] Wet-lab validation
 
 ---
 
-## Key References
+## References
 
-| Paper | Relevance |
-|-------|-----------|
-| Suring et al. 2023 *Genes* | Animal NRPS sequences (all domain types), Stage 0 templates |
-| Fath et al. 2011 *PLoS ONE* | 9-parameter codon optimization for any NRPS sequence |
-| Lipman et al. 2022 *ICLR* | OT-Flow Matching replacing DDPM |
-| Yim et al. 2023 | SE(3) flow matching for protein backbones |
-| Rafailov et al. 2023 *NeurIPS* | DPO — learning from PROTEUS preference pairs |
-| Truong Jr & Bepler 2023 *NeurIPS* | PoET — evolutionary fitness for any NRPS domain |
-| Watson et al. 2023 *Nature* | RFdiffusion — backbone generation |
-| Jumper et al. 2021 *Nature* | AlphaFold2 EvoFormer |
-| Dauparas et al. 2022 *Science* | ProteinMPNN — sequence design |
-| Miller & Gulick 2016 *Methods Mol Biol* | NRPS structural biology (A/T/C/TE domain architecture) |
-| Mootz et al. 2002 *PNAS* | NRPS module incompatibility (the 30-year problem) |
-| Bozhüyük et al. 2018 *Nat Chem* | Modular NRPS recombination — closest experimental precedent |
+- Lipman et al., *Flow Matching for Generative Modeling*, 2022/2023.
+- Yim et al., *SE(3) Diffusion Model with Application to Protein Backbone Generation*, 2023.
+- Liu et al., *I²SB: Image-to-Image Schrödinger Bridge*, 2023.
+- Bose et al., *SE(3)-Stochastic Flow Matching for Protein Backbone Generation*, 2023.
+- Yu et al., *Gradient Surgery for Multi-Task Learning*, NeurIPS 2020.
+- Rafailov et al., *Direct Preference Optimization: Your Language Model is Secretly a Reward Model*, NeurIPS 2023.
+- Gal & Ghahramani, *Dropout as a Bayesian Approximation*, 2016.
+- Jones et al., *Efficient Global Optimization of Expensive Black-Box Functions*, 1998.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
-
----
-
-<div align="center">
-<sub>PSC Engineering Pipeline · CHIMERA v2 · Theoretical Biomedical Engineering Framework · github.com/Izik-us/psc-chimera</sub>
-</div>
+MIT
