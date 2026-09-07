@@ -121,17 +121,7 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
                     read_system_stats,
                 )
 
-                capture_now = (
-                    (global_step + 1)
-                    % observatory.update_every
-                    == 0
-                    or global_step == 0
-                )
-
-                model.set_attention_capture(
-                    capture_now,
-                    final_layer_only=True,
-                )
+                
 
                 # ------------------------------------------------------
                 # The model forward above has already happened.
