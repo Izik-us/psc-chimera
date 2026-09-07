@@ -110,34 +110,285 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
             totals[name] = totals.get(name, 0.0) + float(value)
 
         if observatory is not None:
+
             try:
-                from codon_observatory import TrainingTelemetry, read_system_stats
-                cpu, ram = read_system_stats()
-                sample_idx = 0
-                valid_len = int((~codon_mask[sample_idx]).sum().item())
-                pos = max(0, valid_len - 1)
-                probs = torch.softmax(output["logits"][sample_idx, pos].detach(), dim=-1)
-                aa = batch["aa_sequence"][sample_idx][pos]
-                candidates = CODON_TABLE[aa]
-                candidate_ids = [ALL_CODONS.index(c) for c in candidates]
-                candidate_probs = [float(probs[i].item()) for i in candidate_ids]
-                lr = float(optimizer.param_groups[0]["lr"])
-                elapsed = max(time.perf_counter() - batch_start, 1e-9)
-                telemetry = TrainingTelemetry(
-                    epoch=epoch, total_epochs=total_epochs, global_step=global_step, total_steps=total_steps,
-                    loss=float(loss.detach().item()), ce=float(metrics.get("ce", 0.0)), cai=float(metrics.get("cai", 0.0)),
-                    gc=float(metrics.get("gc", 0.0)), motif=float(metrics.get("motif", 0.0)), upa=float(metrics.get("upa", 0.0)),
-                    expression_loss=float(metrics.get("expression", 0.0)), gradient_norm=grad_norm, learning_rate=lr,
-                    cpu_percent=cpu, memory_gb=ram, batch_time=elapsed, samples_per_second=len(batch["aa_sequence"]) / elapsed,
-                    protein_length=len(batch["aa_sequence"][sample_idx]), codon_length=valid_len,
-                    predicted_expression=float(output["expression"][sample_idx].detach().item()), target_expression=float(expression[sample_idx].detach().item()),
-                    architecture=(f"d_model={model.d_model}, heads={model.n_heads}, decoder_layers={model.n_dec_layers}, dim_ff={model.dim_ff}"),
-                    sample_protein=batch["aa_sequence"][sample_idx], sample_probabilities=candidate_probs,
-                    sample_candidate_codons=candidates,
+
+                from codon_observatory import (
+                    TrainingTelemetry,
+                    read_system_stats,
                 )
-                observatory.update(telemetry)
+
+                capture_now = (
+                    (global_step + 1)
+                    % observatory.update_every
+                    == 0
+                    or global_step == 0
+                )
+
+                model.set_attention_capture(
+                    capture_now,
+                    final_layer_only=True,
+                )
+
+                # ------------------------------------------------------
+                # The model forward above has already happened.
+                # Attention is therefore captured on the next forward.
+                # ------------------------------------------------------
+
+                if capture_now:
+
+                    cpu, ram = read_system_stats()
+
+                    sample_idx = 0
+
+                    valid_len = int(
+                        (~codon_mask[sample_idx])
+                        .sum()
+                        .item()
+                    )
+
+                    if valid_len > 0:
+
+                        selected_position = (
+                            global_step
+                            // observatory.update_every
+                        ) % valid_len
+
+                        aa = (
+                            batch["aa_sequence"]
+                            [sample_idx]
+                            [selected_position]
+                        )
+
+                        candidates = CODON_TABLE[aa]
+
+                        logits_at_position = (
+                            output["logits"]
+                            [
+                                sample_idx,
+                                selected_position
+                            ]
+                            .detach()
+                        )
+
+                        probs = torch.softmax(
+                            logits_at_position,
+                            dim=-1,
+                        )
+
+                        candidate_ids = [
+                            ALL_CODONS.index(codon)
+                            for codon in candidates
+                        ]
+
+                        candidate_probs = [
+                            float(
+                                probs[idx].item()
+                            )
+                            for idx in candidate_ids
+                        ]
+
+                        # --------------------------------------------------
+                        # Teacher-forced causal prediction trace.
+                        #
+                        # Every position is predicted from the causal
+                        # prefix, while the real training codons are used
+                        # as the decoder input.
+                        # --------------------------------------------------
+
+                        predicted_ids = (
+                            output["logits"]
+                            [
+                                sample_idx,
+                                :valid_len
+                            ]
+                            .argmax(dim=-1)
+                            .tolist()
+                        )
+
+                        predicted_codons = [
+                            ALL_CODONS[idx]
+                            for idx in predicted_ids
+                        ]
+
+                        attention = (
+                            model.get_cross_attention()
+                        )
+
+                        if attention is not None:
+
+                            attention_sample = (
+                                attention[
+                                    sample_idx
+                                ]
+                                .cpu()
+                                .numpy()
+                            )
+
+                        else:
+
+                            attention_sample = None
+
+                        lr = float(
+                            optimizer.param_groups[0]["lr"]
+                        )
+
+                        elapsed = max(
+                            time.perf_counter()
+                            - batch_start,
+                            1e-9,
+                        )
+
+                        telemetry = TrainingTelemetry(
+
+                            epoch=epoch,
+                            total_epochs=total_epochs,
+
+                            global_step=global_step,
+                            total_steps=total_steps,
+
+                            loss=float(
+                                loss.detach().item()
+                            ),
+
+                            ce=float(
+                                metrics.get(
+                                    "ce",
+                                    0.0,
+                                )
+                            ),
+
+                            cai=float(
+                                metrics.get(
+                                    "cai",
+                                    0.0,
+                                )
+                            ),
+
+                            gc=float(
+                                metrics.get(
+                                    "gc",
+                                    0.0,
+                                )
+                            ),
+
+                            motif=float(
+                                metrics.get(
+                                    "motif",
+                                    0.0,
+                                )
+                            ),
+
+                            upa=float(
+                                metrics.get(
+                                    "upa",
+                                    0.0,
+                                )
+                            ),
+
+                            expression_loss=float(
+                                metrics.get(
+                                    "expression",
+                                    0.0,
+                                )
+                            ),
+
+                            gradient_norm=grad_norm,
+
+                            learning_rate=lr,
+
+                            cpu_percent=cpu,
+                            memory_gb=ram,
+
+                            batch_time=elapsed,
+
+                            samples_per_second=(
+                                len(
+                                    batch["aa_sequence"]
+                                )
+                                / elapsed
+                            ),
+
+                            protein_length=len(
+                                batch["aa_sequence"]
+                                [sample_idx]
+                            ),
+
+                            codon_length=valid_len,
+
+                            predicted_expression=float(
+                                output[
+                                    "expression"
+                                ][sample_idx]
+                                .detach()
+                                .item()
+                            ),
+
+                            target_expression=float(
+                                expression[
+                                    sample_idx
+                                ]
+                                .detach()
+                                .item()
+                            ),
+
+                            architecture=(
+                                f"d_model="
+                                f"{model.d_model}, "
+                                f"heads="
+                                f"{model.n_heads}, "
+                                f"decoder_layers="
+                                f"{model.n_dec_layers}, "
+                                f"dim_ff="
+                                f"{model.dim_ff}"
+                            ),
+
+                            sample_protein=(
+                                batch[
+                                    "aa_sequence"
+                                ][sample_idx]
+                            ),
+
+                            selected_position=(
+                                selected_position
+                            ),
+
+                            selected_amino_acid=aa,
+
+                            candidate_codons=candidates,
+
+                            candidate_probabilities=(
+                                candidate_probs
+                            ),
+
+                            predicted_codons=(
+                                predicted_codons
+                            ),
+
+                            cross_attention=(
+                                attention_sample
+                            ),
+                        )
+
+                        observatory.update(
+                            telemetry
+                        )
+
+                model.set_attention_capture(
+                    False
+                )
+
             except Exception as exc:
-                print(f"visualizer_warning={type(exc).__name__}: {exc}", flush=True)
+
+                model.set_attention_capture(
+                    False
+                )
+
+                print(
+                    "visualizer_warning="
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
     count = max(1, len(loader))
     return {name: value / count for name, value in totals.items()}, global_step
 
