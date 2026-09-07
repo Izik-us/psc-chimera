@@ -19,7 +19,7 @@ class DPOBatch:
 
 
 class DPOTrainer:
-    """Stable DPO objective with a frozen reference policy."""
+    """Stable DPO objective with a frozen, deterministic reference policy."""
 
     def __init__(self, beta: float = 0.1, label_smoothing: float = 0.0, reference_free: bool = False):
         if beta <= 0:
@@ -64,6 +64,7 @@ class DPOTrainer:
 
     def loss(self, policy, reference, batch: DPOBatch):
         """Return DPO loss and detached diagnostics."""
+        policy.train()
         pi_chosen = self._sequence_logprob(policy, batch.context, batch.chosen, batch.chosen_mask)
         pi_rejected = self._sequence_logprob(policy, batch.context, batch.rejected, batch.rejected_mask)
         if self.reference_free:
@@ -72,9 +73,14 @@ class DPOTrainer:
         else:
             if reference is None:
                 raise ValueError("reference policy is required unless reference_free=True")
-            with torch.no_grad():
-                ref_chosen = self._sequence_logprob(reference, batch.context, batch.chosen, batch.chosen_mask)
-                ref_rejected = self._sequence_logprob(reference, batch.context, batch.rejected, batch.rejected_mask)
+            reference_training = reference.training
+            reference.eval()
+            try:
+                with torch.no_grad():
+                    ref_chosen = self._sequence_logprob(reference, batch.context, batch.chosen, batch.chosen_mask)
+                    ref_rejected = self._sequence_logprob(reference, batch.context, batch.rejected, batch.rejected_mask)
+            finally:
+                reference.train(reference_training)
 
         chosen_adv = pi_chosen - ref_chosen
         rejected_adv = pi_rejected - ref_rejected
