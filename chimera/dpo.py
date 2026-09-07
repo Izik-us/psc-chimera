@@ -1,13 +1,4 @@
-"""Direct Preference Optimization for autoregressive sequence policies.
-
-Implements the original DPO objective on sequence-level log probabilities:
-    -log sigmoid(beta * ((log pi_theta(y_w|x)-log pi_ref(y_w|x))
-                       -(log pi_theta(y_l|x)-log pi_ref(y_l|x))))
-
-Policies may expose either ``logprob(context, tokens)`` or a callable forward
-that returns next-token logits. Sequence masks are applied to token-level log
-probabilities so padding never contributes to the preference signal.
-"""
+"""Direct Preference Optimization for autoregressive sequence policies."""
 
 from __future__ import annotations
 
@@ -30,8 +21,7 @@ class DPOBatch:
 class DPOTrainer:
     """Stable DPO objective with a frozen reference policy."""
 
-    def __init__(self, beta: float = 0.1, label_smoothing: float = 0.0,
-                 reference_free: bool = False):
+    def __init__(self, beta: float = 0.1, label_smoothing: float = 0.0, reference_free: bool = False):
         if beta <= 0:
             raise ValueError("beta must be positive")
         if not 0.0 <= label_smoothing < 0.5:
@@ -43,19 +33,24 @@ class DPOTrainer:
     @staticmethod
     def _sequence_logprob(policy, context, tokens, mask=None):
         """Return one masked sequence log-probability per sample."""
+        if context.ndim == 2:
+            context = context.unsqueeze(1).expand(-1, tokens.shape[1], -1)
+        elif context.ndim != 3:
+            raise ValueError("context must have shape (B,D) or (B,L,D)")
+        if context.shape[:2] != tokens.shape:
+            raise ValueError("context sequence dimensions must match token dimensions")
+
         if mask is not None:
             if mask.shape != tokens.shape:
                 raise ValueError("sequence mask must have shape (B,L)")
-            # Prefer a policy-provided token-logprob implementation.
             if hasattr(policy, "token_logprobs"):
                 token_logp = policy.token_logprobs(context, tokens)
             elif callable(policy):
                 logits = policy(context, tokens)
-                if logits.shape != (*tokens.shape, logits.shape[-1]):
+                expected = (*tokens.shape, logits.shape[-1])
+                if logits.shape != expected:
                     raise ValueError("policy forward must return logits with shape (B,L,V)")
-                token_logp = F.log_softmax(logits, dim=-1).gather(
-                    -1, tokens.unsqueeze(-1)
-                ).squeeze(-1)
+                token_logp = F.log_softmax(logits, dim=-1).gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
             else:
                 raise TypeError("masked DPO requires token_logprobs or a callable policy")
             return (token_logp * mask.to(token_logp.dtype)).sum(dim=-1)
@@ -69,12 +64,8 @@ class DPOTrainer:
 
     def loss(self, policy, reference, batch: DPOBatch):
         """Return DPO loss and detached diagnostics."""
-        pi_chosen = self._sequence_logprob(
-            policy, batch.context, batch.chosen, batch.chosen_mask
-        )
-        pi_rejected = self._sequence_logprob(
-            policy, batch.context, batch.rejected, batch.rejected_mask
-        )
+        pi_chosen = self._sequence_logprob(policy, batch.context, batch.chosen, batch.chosen_mask)
+        pi_rejected = self._sequence_logprob(policy, batch.context, batch.rejected, batch.rejected_mask)
         if self.reference_free:
             ref_chosen = torch.zeros_like(pi_chosen)
             ref_rejected = torch.zeros_like(pi_rejected)
@@ -82,23 +73,15 @@ class DPOTrainer:
             if reference is None:
                 raise ValueError("reference policy is required unless reference_free=True")
             with torch.no_grad():
-                ref_chosen = self._sequence_logprob(
-                    reference, batch.context, batch.chosen, batch.chosen_mask
-                )
-                ref_rejected = self._sequence_logprob(
-                    reference, batch.context, batch.rejected, batch.rejected_mask
-                )
+                ref_chosen = self._sequence_logprob(reference, batch.context, batch.chosen, batch.chosen_mask)
+                ref_rejected = self._sequence_logprob(reference, batch.context, batch.rejected, batch.rejected_mask)
 
         chosen_adv = pi_chosen - ref_chosen
         rejected_adv = pi_rejected - ref_rejected
         logits = self.beta * (chosen_adv - rejected_adv)
         positive = F.logsigmoid(logits)
         negative = F.logsigmoid(-logits)
-        loss = -(
-            (1.0 - self.label_smoothing) * positive
-            + self.label_smoothing * negative
-        ).mean()
-
+        loss = -((1.0 - self.label_smoothing) * positive + self.label_smoothing * negative).mean()
         with torch.no_grad():
             accuracy = (logits > 0).float().mean()
             chosen_reward = chosen_adv.mean()
