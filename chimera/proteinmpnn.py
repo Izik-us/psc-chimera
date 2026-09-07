@@ -4,7 +4,7 @@ CHIMERA — ProteinMPNN Module
 Evolutionary-context-aware geometric message-passing sequence designer.
 
 This is a ProteinMPNN-inspired implementation, not the original pretrained
-ProteinMPNN weights.  Geometry is represented with rigid-frame invariants:
+ProteinMPNN weights. Geometry is represented with rigid-frame invariants:
 relative positions are expressed in the query residue's local frame and
 relative rotations are represented by R_i^T R_j.
 """
@@ -31,7 +31,9 @@ def get_protein_graph(
 
     diff = t_coords.unsqueeze(2) - t_coords.unsqueeze(1)
     dist = diff.norm(dim=-1)
-    dist_no_self = dist.masked_fill(torch.eye(L, device=device, dtype=torch.bool).unsqueeze(0), float("inf"))
+    dist_no_self = dist.masked_fill(
+        torch.eye(L, device=device, dtype=torch.bool).unsqueeze(0), float("inf")
+    )
     k = min(k_neighbors, L - 1)
     _, top_k_idx = dist_no_self.topk(k, dim=-1, largest=False)
     features = _compute_edge_features(t_coords, R_frames, top_k_idx)
@@ -51,9 +53,10 @@ def _compute_edge_features(
     centers = torch.linspace(0, 20, 16, device=t.device, dtype=t.dtype)
     rbf = torch.exp(-((dist.unsqueeze(-1) - centers) ** 2) / 2.0)
 
-    # Query-frame local displacement is invariant under a shared global rigid rotation.
     R_i = R.unsqueeze(2).expand(-1, -1, K, -1, -1)
-    local_delta = torch.einsum("blkij,blkj->blki", R_i.transpose(-1, -2), delta)
+    local_delta = torch.einsum(
+        "blkij,blkj->blki", R_i.transpose(-1, -2), delta
+    )
     local_delta = local_delta / dist.clamp_min(1e-6).unsqueeze(-1)
 
     idx_r = k_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, 3, 3)
@@ -121,12 +124,19 @@ class SequenceDecoder(nn.Module):
     def __init__(self, c_node: int = 128, vocab_size: int = 20):
         super().__init__()
         self.aa_embed = nn.Embedding(vocab_size + 1, c_node)
-        self.decoder_layers = nn.ModuleList([
-            nn.TransformerDecoderLayer(
-                d_model=c_node, nhead=4, dim_feedforward=512,
-                dropout=0.1, batch_first=True, norm_first=True,
-            ) for _ in range(3)
-        ])
+        self.decoder_layers = nn.ModuleList(
+            [
+                nn.TransformerDecoderLayer(
+                    d_model=c_node,
+                    nhead=4,
+                    dim_feedforward=512,
+                    dropout=0.1,
+                    batch_first=True,
+                    norm_first=True,
+                )
+                for _ in range(3)
+            ]
+        )
         self.to_logits = nn.Linear(c_node, vocab_size)
         self.vocab_size = vocab_size
 
@@ -169,29 +179,58 @@ class ProteinMPNN(nn.Module):
     def __init__(self, c_node=128, c_edge=128, n_mp_layers=3, k_neighbors=32, vocab_size=20):
         super().__init__()
         self.k_neighbors = k_neighbors
-        self.node_embed = nn.Sequential(nn.Linear(6, c_node), nn.GELU(), nn.Linear(c_node, c_node))
-        self.edge_embed = nn.Sequential(nn.Linear(28, c_edge), nn.GELU(), nn.Linear(c_edge, c_edge))
-        self.node_layers = nn.ModuleList([NodeMPNN(c_node, c_edge) for _ in range(n_mp_layers)])
-        self.edge_layers = nn.ModuleList([EdgeMPNN(c_node, c_edge) for _ in range(n_mp_layers)])
+        self.node_embed = nn.Sequential(
+            nn.Linear(6, c_node), nn.GELU(), nn.Linear(c_node, c_node)
+        )
+        self.edge_embed = nn.Sequential(
+            nn.Linear(28, c_edge), nn.GELU(), nn.Linear(c_edge, c_edge)
+        )
+        self.node_layers = nn.ModuleList(
+            [NodeMPNN(c_node, c_edge) for _ in range(n_mp_layers)]
+        )
+        self.edge_layers = nn.ModuleList(
+            [EdgeMPNN(c_node, c_edge) for _ in range(n_mp_layers)]
+        )
         self.decoder = SequenceDecoder(c_node, vocab_size)
 
-    def forward(self, t_coords, R_frames, evol_node_features, fixed_positions=None, fixed_aas=None):
+    def forward(
+        self,
+        t_coords,
+        R_frames,
+        evol_node_features,
+        fixed_positions=None,
+        fixed_aas=None,
+    ):
         B, L, _ = t_coords.shape
         if evol_node_features.shape[:2] != (B, L):
             raise ValueError("evol_node_features must have shape (B, L, d)")
-        k_idx, edge_geom, edge_mask = get_protein_graph(t_coords, R_frames, self.k_neighbors)
+        k_idx, edge_geom, edge_mask = get_protein_graph(
+            t_coords, R_frames, self.k_neighbors
+        )
 
         # Six invariant node descriptors, avoiding absolute/global-frame coordinates.
         centered = t_coords - t_coords.mean(dim=1, keepdim=True)
         all_dist = torch.cdist(t_coords, t_coords)
         mean_dist = all_dist.mean(dim=-1, keepdim=True)
         std_dist = all_dist.std(dim=-1, keepdim=True)
-        kth_dist = all_dist.masked_fill(torch.eye(L, device=t_coords.device, dtype=torch.bool).unsqueeze(0), float("inf")).topk(
-            min(self.k_neighbors, L - 1), dim=-1, largest=False
-        ).values[..., -1:].to(t_coords.dtype)
-        frame_err = (R_frames.transpose(-1, -2) @ R_frames - torch.eye(3, device=t_coords.device, dtype=t_coords.dtype)).square().mean(dim=(-1, -2), keepdim=True)
+        kth_dist = (
+            all_dist.masked_fill(
+                torch.eye(L, device=t_coords.device, dtype=torch.bool).unsqueeze(0),
+                float("inf"),
+            )
+            .topk(min(self.k_neighbors, L - 1), dim=-1, largest=False)
+            .values[..., -1:]
+            .to(t_coords.dtype)
+        )
+        frame_err = (
+            R_frames.transpose(-1, -2) @ R_frames
+            - torch.eye(3, device=t_coords.device, dtype=t_coords.dtype)
+        ).square().mean(dim=(-1, -2)).unsqueeze(-1)
         center_radius = centered.norm(dim=-1, keepdim=True)
-        node_geom = torch.cat([center_radius, mean_dist, std_dist, kth_dist, frame_err, torch.ones_like(center_radius)], dim=-1)
+        node_geom = torch.cat(
+            [center_radius, mean_dist, std_dist, kth_dist, frame_err, torch.ones_like(center_radius)],
+            dim=-1,
+        )
 
         node = self.node_embed(node_geom) + evol_node_features
         edge = self.edge_embed(edge_geom)
