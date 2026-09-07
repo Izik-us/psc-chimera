@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 
 from chimera.codon_optimizer import CodonOptimizer, codon_optimizer_loss, AA_VOCAB, PAD_TOKEN, ALL_CODONS, CODON_TABLE
 from data.codon_dataset import CodonJSONLDataset
-
+from codon_observatory import CodonObservatory, TrainingTelemetry, read_system_stats
 
 def collate_records(batch: list[dict]) -> dict[str, torch.Tensor | list[str]]:
     protein_lengths = torch.tensor([item["protein_tokens"].shape[0] for item in batch], dtype=torch.long)
@@ -111,7 +111,7 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
 
         if observatory is not None:
             try:
-                from visualization.codon_observatory import TrainingTelemetry, read_system_stats
+                from codon_observatory import TrainingTelemetry, read_system_stats
                 cpu, ram = read_system_stats()
                 sample_idx = 0
                 valid_len = int((~codon_mask[sample_idx]).sum().item())
@@ -223,7 +223,7 @@ def main() -> None:
     observatory = None
     if args.visualize:
         try:
-            from visualization.codon_observatory import CodonObservatory
+            from codon_observatory import CodonObservatory
             observatory = CodonObservatory(update_every=args.visualize_interval)
         except Exception as exc:
             print(f"visualizer_disabled={type(exc).__name__}: {exc}", flush=True)
