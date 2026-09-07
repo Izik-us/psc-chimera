@@ -25,6 +25,7 @@ import torch.nn.functional as F
 import numpy as np
 from typing import Tuple, Optional
 
+
 # ── Protein Graph Construction ────────────────────────────────────────────────
 
 
@@ -48,8 +49,7 @@ def get_protein_graph(
 
     # Self-loop distance = inf (exclude self)
     dist_no_self = dist + torch.eye(L, device=device).unsqueeze(0) * 1e9
-    # Clamp k to L-1 so short sequences (L < k_neighbors+1) don't crash topk
-    # (audit issue #18).
+    # Clamp k to L-1 so short sequences (L < k_neighbors+1) don't crash topk.
     k = max(1, min(k_neighbors, L - 1))
     _, top_k_idx = dist_no_self.topk(k, dim=-1, largest=False)
 
@@ -125,9 +125,9 @@ class NodeMPNN(nn.Module):
         # Compute messages
         msg_input = torch.cat(
             [
-                node_n.unsqueeze(2).expand(-1, -1, K, -1),  # source node
-                node_j,  # neighbor node
-                edge,  # edge features
+                node_n.unsqueeze(2).expand(-1, -1, K, -1),
+                node_j,
+                edge,
             ],
             dim=-1,
         )
@@ -168,18 +168,12 @@ class EdgeMPNN(nn.Module):
 
 
 class SequenceDecoder(nn.Module):
-    """
-    Autoregressive decoder: given updated node features, generates amino acid
-    sequence left-to-right with causal masking.
-
-    Node features include EvoFormer single_repr (via node_projection connector)
-    so each residue's amino acid prediction is informed by evolutionary context.
-    """
+    """Autoregressive decoder with optional fixed-residue constraints."""
 
     def __init__(self, c_node: int = 128, vocab_size: int = 20):
         super().__init__()
-        # Amino acid embedding for previously decoded positions
-        self.aa_embed = nn.Embedding(vocab_size + 1, c_node)  # +1 for masked token
+        # Amino acid embedding; vocab_size is reserved as the masked token.
+        self.aa_embed = nn.Embedding(vocab_size + 1, c_node)
 
         self.decoder_layers = nn.ModuleList(
             [
@@ -195,58 +189,74 @@ class SequenceDecoder(nn.Module):
             ]
         )
         self.to_logits = nn.Linear(c_node, vocab_size)
+        self.vocab_size = vocab_size
 
     def forward(
         self,
         node_features: torch.Tensor,
         sequence_so_far: Optional[torch.Tensor] = None,
-        masked_positions: Optional[torch.Tensor] = None,
+        fixed_positions: Optional[torch.Tensor] = None,
+        fixed_aas: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        node_features:    (B, L, c_node)  from ProteinMPNN graph network
-        sequence_so_far:  (B, L)          for teacher forcing (None at inference)
-        masked_positions: (B, L) bool     True = position to design (not fixed)
+        node_features:    (B, L, c_node) from ProteinMPNN graph network
+        sequence_so_far:  (B, L) optional known sequence context
+        fixed_positions:  (B, L) bool, True = position is fixed
+        fixed_aas:        (B, L) integer amino-acid IDs at fixed positions
         Returns logits:   (B, L, 20)
+
+        Fixed residues are both kept out of the designed-position context and
+        hard-constrained in the returned logits. Designed positions therefore
+        cannot accidentally learn from or overwrite fixed residues.
         """
         B, L, _ = node_features.shape
         device = node_features.device
 
         if sequence_so_far is None:
-            # Inference: all positions start masked
-            seq_in = torch.full((B, L), 20, dtype=torch.long, device=device)
+            seq_in = torch.full((B, L), self.vocab_size, dtype=torch.long, device=device)
         else:
-            seq_in = sequence_so_far
+            seq_in = sequence_so_far.clone()
 
-        # Embed known sequence context
-        seq_emb = self.aa_embed(seq_in)  # (B, L, c_node)
-        tgt = node_features + seq_emb  # fuse structural + sequence context
+        # If fixed residues are supplied, expose only fixed amino acids as
+        # teacher-forced context. Designed positions receive the masked token.
+        if fixed_positions is not None:
+            if fixed_positions.shape != (B, L) or fixed_positions.dtype != torch.bool:
+                raise ValueError("fixed_positions must have shape (B, L) and dtype bool")
+            if fixed_aas is None or fixed_aas.shape != (B, L):
+                raise ValueError("fixed_aas must have shape (B, L) when fixed_positions is provided")
+            if torch.any(fixed_positions & ((fixed_aas < 0) | (fixed_aas >= self.vocab_size))):
+                raise ValueError("fixed_aas contains invalid amino-acid IDs at fixed positions")
+            masked = torch.full_like(seq_in, self.vocab_size)
+            seq_in = torch.where(fixed_positions, fixed_aas, masked)
 
-        # Causal mask (left-to-right)
+        seq_emb = self.aa_embed(seq_in)
+        tgt = node_features + seq_emb
+
         causal_mask = nn.Transformer.generate_square_subsequent_mask(L, device=device)
 
         for layer in self.decoder_layers:
             tgt = layer(tgt=tgt, memory=node_features, tgt_mask=causal_mask)
 
-        return self.to_logits(tgt)  # (B, L, 20)
+        logits = self.to_logits(tgt)
+
+        # Fixed residues must remain exactly fixed. Give their prescribed amino
+        # acid a finite zero logit and every alternative -inf so downstream
+        # softmax/argmax cannot mutate a constrained position.
+        if fixed_positions is not None:
+            fixed_logits = torch.full_like(logits, float("-inf"))
+            fixed_logits.scatter_(
+                -1, fixed_aas.unsqueeze(-1), torch.zeros((), device=device, dtype=logits.dtype)
+            )
+            logits = torch.where(fixed_positions.unsqueeze(-1), fixed_logits, logits)
+
+        return logits
 
 
 # ── Full ProteinMPNN ────────────────────────────────────────────────────────
 
 
 class ProteinMPNN(nn.Module):
-    """
-    CHIMERA's sequence design module.
-
-    Takes backbone geometry + EvoFormer single_repr as node features.
-    Designs amino acid sequence via message-passing + autoregressive decoding.
-
-    The KEY connection from EvoFormer in CHIMERA:
-      single_repr (B, L, C_S=256) is projected to (B, L, 128) via node_projection
-      and concatenated to the geometric node features at every position.
-      This means every message-passing step is jointly informed by:
-        (a) local geometry (what the backbone looks like)
-        (b) evolutionary context (what the family has learned at this position)
-    """
+    """CHIMERA sequence design module."""
 
     def __init__(
         self,
@@ -257,20 +267,17 @@ class ProteinMPNN(nn.Module):
         vocab_size: int = 20,
     ):
         super().__init__()
-        # Node feature embedding (backbone geometry → node repr)
         self.node_embed = nn.Sequential(
-            nn.Linear(6, c_node),  # 6 = Cα position (3) + backbone torsion (3)
+            nn.Linear(6, c_node),
             nn.GELU(),
             nn.Linear(c_node, c_node),
         )
-        # Edge feature embedding (RBF distance → edge repr)
         self.edge_embed = nn.Sequential(
             nn.Linear(16, c_edge),
             nn.GELU(),
             nn.Linear(c_edge, c_edge),
         )
 
-        # Message-passing layers
         self.node_layers = nn.ModuleList(
             [NodeMPNN(c_node, c_edge) for _ in range(n_mp_layers)]
         )
@@ -278,46 +285,42 @@ class ProteinMPNN(nn.Module):
             [EdgeMPNN(c_node, c_edge) for _ in range(n_mp_layers)]
         )
 
-        # Sequence decoder
         self.decoder = SequenceDecoder(c_node, vocab_size)
 
     def forward(
         self,
         t_coords: torch.Tensor,
         R_frames: torch.Tensor,
-        evol_node_features: torch.Tensor,  # ← from EvoFormer node_projection
+        evol_node_features: torch.Tensor,
         fixed_positions: Optional[torch.Tensor] = None,
         fixed_aas: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        t_coords:           (B, L, 3)       Cα coordinates (from SE3Denoiser output)
-        R_frames:           (B, L, 3, 3)    Backbone frames
-        evol_node_features: (B, L, 128)     EvoFormer single_repr → node_projection
-        fixed_positions:    (B, L) bool     True = position is fixed (not designed)
+        t_coords:           (B, L, 3)       Cα coordinates
+        R_frames:            (B, L, 3, 3)    Backbone frames
+        evol_node_features: (B, L, 128)     EvoFormer → node projection
+        fixed_positions:    (B, L) bool     True = position is fixed
         fixed_aas:          (B, L) int      Amino acids at fixed positions
         """
         B, L, _ = t_coords.shape
 
-        # Build protein graph
+        k_idx, edge_geom, edge_mask = get_protein_graph(t_coords, R_frames, self.decoder.vocab_size)
+        # Use the configured graph neighborhood independently of vocabulary size.
         k_idx, edge_geom, edge_mask = get_protein_graph(t_coords, R_frames)
 
-        # Initialize node features: backbone geometry + evolutionary context
-        # Cα local coordinates (simplified: position normalized by sequence center)
         t_centered = t_coords - t_coords.mean(dim=1, keepdim=True)
-        # Approximate torsion placeholder (in practice: compute φ/ψ from coordinates)
-        torsions = torch.zeros(B, L, 3, device=t_coords.device)
-        node_geom = torch.cat([t_centered, torsions], dim=-1)  # (B, L, 6)
+        torsions = torch.zeros(B, L, 3, device=t_coords.device, dtype=t_coords.dtype)
+        node_geom = torch.cat([t_centered, torsions], dim=-1)
 
-        node = self.node_embed(node_geom) + evol_node_features  # KEY CHIMERA FUSION
+        node = self.node_embed(node_geom) + evol_node_features
         edge = self.edge_embed(edge_geom)
 
-        # Message passing: iteratively refine node and edge features
         for node_layer, edge_layer in zip(self.node_layers, self.edge_layers):
             node = node_layer(node, edge, k_idx, edge_mask)
             edge = edge_layer(node, edge, k_idx)
 
-        # Decode sequence
-        seq_context = fixed_aas if fixed_positions is not None else None
-        logits = self.decoder(node, seq_context, fixed_positions)
-
-        return logits  # (B, L, 20) — amino acid probabilities at each position
+        return self.decoder(
+            node,
+            fixed_positions=fixed_positions,
+            fixed_aas=fixed_aas,
+        )
