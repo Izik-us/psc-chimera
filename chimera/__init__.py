@@ -10,13 +10,12 @@ CHIMERA: Compositional Hierarchical Inference Model for
 __version__ = "2.0.0"
 __author__ = "PSC Engineering Pipeline"
 
-# Load implementation modules first, then install corrected child classes before
-# a CHIMERAv2 instance can construct the legacy components.
 from chimera import chimera_v2 as _chimera_v2
 from chimera.runtime_compat import (
     MergeReadyFlowMatchingBackbone,
     MergeReadyMultiScaleNRPSDesigner,
     MergeReadySubstratePocketConditioner,
+    merge_ready_update_from_proteus,
 )
 from chimera.pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 from chimera.bayesian import BayesianUncertaintyEstimator
@@ -26,6 +25,7 @@ _chimera_v2.MultiScaleNRPSDesigner = MergeReadyMultiScaleNRPSDesigner
 _chimera_v2.SubstratePocketConditioner = MergeReadySubstratePocketConditioner
 _chimera_v2.ParetoMultiObjectiveHead = MergeReadyParetoMultiObjectiveHead
 _chimera_v2.BayesianUncertaintyEstimator = BayesianUncertaintyEstimator
+_chimera_v2.CHIMERAv2.update_from_proteus = merge_ready_update_from_proteus
 CHIMERAv2 = _chimera_v2.CHIMERAv2
 NRPSConstraints = _chimera_v2.NRPSConstraints
 
@@ -56,8 +56,6 @@ from chimera.adapters import (
     ProteinMPNNAdapter,
 )
 
-# The exported Pareto head is the corrected implementation. The legacy class
-# remains available only through its explicit compatibility name.
 ParetoMultiObjectiveHead = MergeReadyParetoMultiObjectiveHead
 
 __all__ = [
