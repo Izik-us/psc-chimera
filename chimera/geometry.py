@@ -78,28 +78,55 @@ def validate_backbone(
     bonds = torch.cat([
         (coords[:, :, 1] - coords[:, :, 0]).norm(dim=-1).reshape(-1),
         (coords[:, :, 2] - coords[:, :, 1]).norm(dim=-1).reshape(-1),
+        (coords[:, :, 3] - coords[:, :, 2]).norm(dim=-1).reshape(-1),
         (coords[:, 1:, 0] - coords[:, :-1, 2]).norm(dim=-1).reshape(-1),
     ])
     counts = [
         coords.shape[0] * coords.shape[1],
         coords.shape[0] * coords.shape[1],
+        coords.shape[0] * coords.shape[1],
         coords.shape[0] * max(0, coords.shape[1] - 1),
     ]
     bond_target = torch.cat([
-        torch.full((count,), value, device=coords.device)
-        for value, count in zip((1.46, 1.53, 1.33), counts)
+        torch.full((count,), value, device=coords.device, dtype=coords.dtype)
+        for value, count in zip((1.46, 1.53, 1.23, 1.33), counts)
+        if count
     ])
-    bond_error = (bonds - bond_target).abs().max() if bonds.numel() else torch.tensor(0.0)
+    bond_error = (bonds - bond_target).abs().max() if bonds.numel() else torch.tensor(0.0, device=coords.device)
     v1 = coords[:, :, 0] - coords[:, :, 1]
     v2 = coords[:, :, 2] - coords[:, :, 1]
     angles = torch.acos((v1 * v2).sum(-1) / (v1.norm(dim=-1) * v2.norm(dim=-1)).clamp_min(1e-6))
-    angle_error = (angles - 1.91).abs().max() if angles.numel() else torch.tensor(0.0)
+    angle_error = (angles - 1.91).abs().max() if angles.numel() else torch.tensor(0.0, device=coords.device)
     torsion_abs = torch.tensor(0.0, device=coords.device)
+
+    # Do not count covalent neighbors as steric clashes. The old implementation
+    # compared every atom against every other atom, so N-CA, CA-C, C-O and the
+    # peptide C-N bond were reported as clashes at every residue.
     clash_points = coords.reshape(coords.shape[0], -1, 3)
     distances = torch.cdist(clash_points, clash_points)
-    n = distances.shape[-1]
-    distances = distances + torch.eye(n, device=distances.device).unsqueeze(0) * 1e6
-    clash_count = int((distances < clash_distance).sum().item() // 2)
+    n_res = coords.shape[1]
+    atom_type = torch.arange(4, device=coords.device).repeat(n_res)
+    residue_id = torch.arange(n_res, device=coords.device).repeat_interleave(4)
+    a = atom_type.unsqueeze(0)
+    b = atom_type.unsqueeze(1)
+    ra = residue_id.unsqueeze(0)
+    rb = residue_id.unsqueeze(1)
+    same_res = ra == rb
+    bonded_within_res = same_res & (
+        ((a == 0) & (b == 1))
+        | ((a == 1) & (b == 0))
+        | ((a == 1) & (b == 2))
+        | ((a == 2) & (b == 1))
+        | ((a == 2) & (b == 3))
+        | ((a == 3) & (b == 2))
+    )
+    adjacent_peptide = (
+        (ra + 1 == rb) & (a == 2) & (b == 0)
+    ) | ((rb + 1 == ra) & (b == 2) & (a == 0))
+    excluded = torch.eye(distances.shape[-1], device=distances.device, dtype=torch.bool)
+    excluded = excluded | bonded_within_res | adjacent_peptide
+    clash_mask = (distances < clash_distance) & ~excluded.unsqueeze(0)
+    clash_count = int(clash_mask.sum().item() // 2)
 
     return GeometryReport(
         finite=finite,
