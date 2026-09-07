@@ -10,18 +10,22 @@ CHIMERA: Compositional Hierarchical Inference Model for
 __version__ = "2.0.0"
 __author__ = "PSC Engineering Pipeline"
 
-# Load the implementation module first. The public package then substitutes
-# corrected runtime components before CHIMERAv2 instances are constructed.
+# Load implementation modules first, then install corrected child classes before
+# a CHIMERAv2 instance can construct the legacy components.
 from chimera import chimera_v2 as _chimera_v2
 from chimera.runtime_compat import (
     MergeReadyFlowMatchingBackbone,
     MergeReadyMultiScaleNRPSDesigner,
     MergeReadySubstratePocketConditioner,
 )
+from chimera.pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
+from chimera.bayesian import BayesianUncertaintyEstimator
 
 _chimera_v2.FlowMatchingBackbone = MergeReadyFlowMatchingBackbone
 _chimera_v2.MultiScaleNRPSDesigner = MergeReadyMultiScaleNRPSDesigner
 _chimera_v2.SubstratePocketConditioner = MergeReadySubstratePocketConditioner
+_chimera_v2.ParetoMultiObjectiveHead = MergeReadyParetoMultiObjectiveHead
+_chimera_v2.BayesianUncertaintyEstimator = BayesianUncertaintyEstimator
 CHIMERAv2 = _chimera_v2.CHIMERAv2
 NRPSConstraints = _chimera_v2.NRPSConstraints
 
@@ -33,12 +37,10 @@ from chimera.geometry import GeometryReport, validate_backbone
 from chimera.evaluators import BiologicalObjectiveEvaluator
 from chimera.pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from chimera.dpo import DPOBatch, DPOTrainer
-from chimera.bayesian import BayesianUncertaintyEstimator
 from chimera.domain_schema import DomainType, DomainSpan, AssemblySchema
 from chimera.multi_objective import (
     StructuralRetriever,
     DPOTrainer as LegacyDPOTrainer,
-    ParetoMultiObjectiveHead,
     BayesianUncertaintyEstimator as LegacyBayesianUncertaintyEstimator,
     MultiScaleNRPSDesigner as LegacyMultiScaleNRPSDesigner,
     AutoregressiveSequencePolicy,
@@ -53,6 +55,10 @@ from chimera.adapters import (
     RFdiffusionCLIAdapter,
     ProteinMPNNAdapter,
 )
+
+# The exported Pareto head is the corrected implementation. The legacy class
+# remains available only through its explicit compatibility name.
+ParetoMultiObjectiveHead = MergeReadyParetoMultiObjectiveHead
 
 __all__ = [
     "CHIMERAv2", "NRPSConstraints", "CodonOptimizer", "optimize_nrps_for_mammalian_expression",
