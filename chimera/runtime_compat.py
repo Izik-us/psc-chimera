@@ -15,10 +15,7 @@ import torch.nn.functional as F
 from . import flow_matching as _flow_matching
 from . import schrodinger_bridge as _schrodinger_bridge
 from .multi_objective import MultiScaleNRPSDesigner as _LegacyDesigner
-from .chimera_v2 import (
-    FlowMatchingBackbone as _LegacyFlowBackbone,
-    SubstratePocketConditioner as _LegacyConditioner,
-)
+from .chimera_v2 import FlowMatchingBackbone as _LegacyFlowBackbone, SubstratePocketConditioner as _LegacyConditioner
 from .dpo import DPOBatch, DPOTrainer
 from .schrodinger_bridge import SE3SchrodingerBridge
 
@@ -36,16 +33,15 @@ def merge_ready_so3_log(R: torch.Tensor) -> torch.Tensor:
     d0 = (1.0 + R[..., 0, 0] - R[..., 1, 1] - R[..., 2, 2]).clamp_min(0.0)
     d1 = (1.0 - R[..., 0, 0] + R[..., 1, 1] - R[..., 2, 2]).clamp_min(0.0)
     d2 = (1.0 - R[..., 0, 0] - R[..., 1, 1] + R[..., 2, 2]).clamp_min(0.0)
-    q = torch.stack(
-        [
-            0.5 * torch.sqrt(d0) * torch.where(R[..., 2, 1] - R[..., 1, 2] >= 0, 1.0, -1.0),
-            0.5 * torch.sqrt(d1) * torch.where(R[..., 0, 2] - R[..., 2, 0] >= 0, 1.0, -1.0),
-            0.5 * torch.sqrt(d2) * torch.where(R[..., 1, 0] - R[..., 0, 1] >= 0, 1.0, -1.0),
-        ],
-        dim=-1,
-    )
+    q = torch.stack([
+        0.5 * torch.sqrt(d0) * torch.where(R[..., 2, 1] - R[..., 1, 2] >= 0, 1.0, -1.0),
+        0.5 * torch.sqrt(d1) * torch.where(R[..., 0, 2] - R[..., 2, 0] >= 0, 1.0, -1.0),
+        0.5 * torch.sqrt(d2) * torch.where(R[..., 1, 0] - R[..., 0, 1] >= 0, 1.0, -1.0),
+    ], dim=-1)
     sin_half = q.norm(dim=-1)
-    quat_omega = q * (2.0 * theta / sin_half.clamp_min(1e-7)).unsqueeze(-1)
+    # q_vec = sin(theta/2) * axis, so theta/sin(theta/2) recovers the
+    # principal axis-angle vector. The previous factor of 2 doubled omega.
+    quat_omega = q * (theta / sin_half.clamp_min(1e-7)).unsqueeze(-1)
     return torch.where((theta < 1e-4).unsqueeze(-1), vee, quat_omega)
 
 
@@ -54,24 +50,17 @@ class MergeReadyInvariantPointAttention(_flow_matching.InvariantPointAttention):
 
     def forward(self, s, z, R, t, substrate_coords: Optional[torch.Tensor] = None):
         B, L, _ = s.shape
-
         def split_heads(x, n):
             return x.view(B, L, n, -1).permute(0, 2, 1, 3)
-
-        Q_s = split_heads(self.q_s(s), self.n_head)
-        K_s = split_heads(self.k_s(s), self.n_head)
-        V_s = split_heads(self.v_s(s), self.n_head)
-
+        Q_s, K_s, V_s = split_heads(self.q_s(s), self.n_head), split_heads(self.k_s(s), self.n_head), split_heads(self.v_s(s), self.n_head)
         def transform_points(pts_local, R_frames, t_frames):
             pts = pts_local.view(B, L, -1, 3)
             R_exp = R_frames.unsqueeze(2).expand(-1, -1, pts.shape[2], -1, -1)
             t_exp = t_frames.unsqueeze(2).expand(-1, -1, pts.shape[2], -1)
             return torch.einsum("blnij,blnj->blni", R_exp, pts) + t_exp
-
         Q_p = transform_points(self.q_p(s).view(B, L, self.n_head * self.n_qk_pts, 3), R, t).view(B, L, self.n_head, self.n_qk_pts, 3)
         K_p = transform_points(self.k_p(s).view(B, L, self.n_head * self.n_qk_pts, 3), R, t).view(B, L, self.n_head, self.n_qk_pts, 3)
         V_p = transform_points(self.v_p(s).view(B, L, self.n_head * self.n_v_pts, 3), R, t).view(B, L, self.n_head, self.n_v_pts, 3)
-
         attn_s = torch.einsum("bhid,bhjd->bhij", Q_s, K_s) * (Q_s.shape[-1] ** -0.5)
         diff_p = Q_p.permute(0, 2, 1, 3, 4).unsqueeze(3) - K_p.permute(0, 2, 1, 3, 4).unsqueeze(2)
         attn_p = -(diff_p.norm(dim=-1) ** 2).sum(dim=-1)
@@ -86,16 +75,11 @@ class MergeReadyInvariantPointAttention(_flow_matching.InvariantPointAttention):
         out_p = torch.einsum("bhij,bijc->bhic", attn, relative)
         out_p_local = torch.einsum("blij,bhlj->bhli", R.transpose(-1, -2), out_p)
         out_z = torch.einsum("bhij,bijc->bhic", attn, z)
-        return self.out(torch.cat([
-            out_s.permute(0, 2, 1, 3).reshape(B, L, -1),
-            out_p_local.permute(0, 2, 1, 3).reshape(B, L, -1),
-            out_z.permute(0, 2, 1, 3).reshape(B, L, -1),
-        ], dim=-1))
+        return self.out(torch.cat([out_s.permute(0, 2, 1, 3).reshape(B, L, -1), out_p_local.permute(0, 2, 1, 3).reshape(B, L, -1), out_z.permute(0, 2, 1, 3).reshape(B, L, -1)], dim=-1))
 
 
 class MergeReadyMultiScaleNRPSDesigner(_LegacyDesigner):
     """Hierarchical designer with the corrected 28-D geometry edge contract."""
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         d_residue = self.edge_proj.out_features
@@ -104,7 +88,6 @@ class MergeReadyMultiScaleNRPSDesigner(_LegacyDesigner):
 
 class MergeReadySubstratePocketConditioner(_LegacyConditioner):
     """Substrate conditioner with direct residue-to-atom distance gating."""
-
     def forward(self, pair_repr, substrate_id, substrate_coords=None, substrate_types=None, residue_coords=None):
         B, L, _, d = pair_repr.shape
         if substrate_id.ndim != 1 or substrate_id.shape[0] != B:
@@ -129,37 +112,19 @@ class MergeReadySubstratePocketConditioner(_LegacyConditioner):
 
 class MergeReadyFlowMatchingBackbone(_LegacyFlowBackbone):
     """CHIMERAv2 structure backbone using the canonical stochastic SB path."""
-
     def __init__(self, d_single=256, d_pair=256, n_blocks=8):
         super().__init__(d_single, d_pair, n_blocks)
         self.sb_model = SE3SchrodingerBridge(self.flow_model.velocity_field, diffusion=0.05, sinkhorn_iters=50)
-
     def sample(self, R0, t0, pair_cond, evol_single, n_steps=20, fixed_mask=None, substrate_coords=None, evol_conditioning_fn=None):
         evol_single = self.frozen_bridge(evol_single)
         return self.sb_model.sample(R0, t0, pair_cond, evol_single, n_steps=n_steps, fixed_mask=fixed_mask, substrate_coords=substrate_coords, evol_conditioning_fn=evol_conditioning_fn)
-
     def loss(self, R0, t0, R1, t1, pair_cond, evol_single, fixed_mask=None, substrate_coords=None):
         evol_single = self.frozen_bridge(evol_single)
         return self.sb_model.bridge_loss(R0, t0, R1, t1, pair_cond, evol_single, fixed_mask=fixed_mask, substrate_coords=substrate_coords)
 
 
-def merge_ready_update_from_proteus(
-    self,
-    survivors,
-    failures,
-    msa,
-    pair_features,
-    n_dpo_steps=50,
-    learning_rate=1e-5,
-    best_context_batch_index=0,
-):
-    """Run canonical DPO against the model's actual autoregressive sequence policy.
-
-    DPO needs a common conditioning context for each chosen/rejected pair. The
-    frozen evolutionary trunk supplies that context directly, avoiding the old
-    behavior of generating a fresh random candidate library inside every DPO
-    likelihood evaluation.
-    """
+def merge_ready_update_from_proteus(self, survivors, failures, msa, pair_features, n_dpo_steps=50, learning_rate=1e-5, best_context_batch_index=0):
+    """Run canonical DPO on the actual autoregressive sequence policy."""
     if not survivors or not failures:
         raise ValueError("Need at least one survivor and one failure for DPO")
     if learning_rate <= 0 or n_dpo_steps < 1:
@@ -170,19 +135,12 @@ def merge_ready_update_from_proteus(
         raise ValueError("MSA and pair feature batch/length dimensions do not match")
     if not 0 <= best_context_batch_index < msa.shape[0]:
         raise ValueError("best_context_batch_index is outside the MSA batch")
-
     if self._reference_model is None:
         self.init_dpo_reference()
-
     with torch.no_grad():
         single_repr, _ = self.evoformer(msa, pair_features)
         context = single_repr[best_context_batch_index:best_context_batch_index + 1]
-
     def encode(sequences):
-        if not sequences:
-            raise ValueError("sequence list cannot be empty")
-        if any(not isinstance(seq, str) for seq in sequences):
-            raise TypeError("PROTEUS sequences must be strings")
         length = len(sequences[0])
         if length == 0 or any(len(seq) != length for seq in sequences):
             raise ValueError("all DPO sequences must have the same non-zero length")
@@ -190,18 +148,13 @@ def merge_ready_update_from_proteus(
         if invalid:
             raise ValueError(f"invalid amino-acid symbols in PROTEUS data: {invalid}")
         return torch.tensor([[AA_ORDER.index(aa) for aa in seq] for seq in sequences], device=context.device, dtype=torch.long)
-
-    # Pair each chosen sequence with a rejected sequence. Cycling the smaller
-    # side gives every observed preference example a training occurrence.
     n_pairs = max(len(survivors), len(failures))
     chosen = encode([survivors[i % len(survivors)] for i in range(n_pairs)])
     rejected = encode([failures[i % len(failures)] for i in range(n_pairs)])
     context_batch = context.expand(n_pairs, -1, -1).contiguous()
     mask = torch.ones_like(chosen, dtype=torch.bool)
     batch = DPOBatch(context_batch, chosen, rejected, mask, mask)
-
-    policy = self.sequence_policy
-    reference = self._reference_model.sequence_policy
+    policy, reference = self.sequence_policy, self._reference_model.sequence_policy
     optimizer = torch.optim.AdamW(policy.parameters(), lr=learning_rate)
     trainer = DPOTrainer(beta=0.1)
     metrics = {}
@@ -210,7 +163,6 @@ def merge_ready_update_from_proteus(
     return metrics
 
 
-# Install corrected implementations before CHIMERAv2 constructs child modules.
 _flow_matching.InvariantPointAttention = MergeReadyInvariantPointAttention
 _flow_matching.so3_log = merge_ready_so3_log
 _schrodinger_bridge.so3_log = merge_ready_so3_log
