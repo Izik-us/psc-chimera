@@ -874,7 +874,59 @@ class ExpressionPredictor(nn.Module):
             pooled
         ).squeeze(-1)
 
+class InspectableTransformerDecoderLayer(
+    nn.TransformerDecoderLayer
+):
+    """
+    TransformerDecoderLayer with optional cross-attention telemetry.
 
+    The underlying architecture and parameter names remain compatible with
+    nn.TransformerDecoderLayer. When telemetry is disabled, behavior is
+    identical to the standard PyTorch implementation.
+
+    When enabled, the layer stores:
+        (B, n_heads, target_length, memory_length)
+
+    cross-attention weights from the protein-conditioned attention block.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.capture_cross_attention = False
+        self.last_cross_attention = None
+
+    def _mha_block(
+        self,
+        x,
+        mem,
+        attn_mask,
+        key_padding_mask,
+        is_causal=False,
+    ):
+        if not self.capture_cross_attention:
+            return super()._mha_block(
+                x,
+                mem,
+                attn_mask,
+                key_padding_mask,
+                is_causal=is_causal,
+            )
+
+        x, weights = self.multihead_attn(
+            x,
+            mem,
+            mem,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+            need_weights=True,
+            average_attn_weights=False,
+            is_causal=is_causal,
+        )
+
+        self.last_cross_attention = weights.detach()
+
+        return self.dropout2(x)
 # ═══════════════════════════════════════════════════════════════════════════════
 # CODON OPTIMIZER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1059,7 +1111,7 @@ class CodonOptimizer(nn.Module):
             d_model,
         )
 
-        decoder_layer = nn.TransformerDecoderLayer(
+        decoder_layer = InspectableTransformerDecoderLayer(
             d_model=d_model,
             nhead=n_heads,
             dim_feedforward=dim_ff,
@@ -1143,7 +1195,69 @@ class CodonOptimizer(nn.Module):
                         parameter,
                         gain=0.1,
                     )
+    # ===================================================================
+    # VISUALIZATION TELEMETRY
+    # ===================================================================
 
+    def set_attention_capture(
+        self,
+        enabled: bool,
+        final_layer_only: bool = True,
+    ) -> None:
+        """
+        Enable/disable decoder cross-attention capture.
+
+        Attention capture is disabled during ordinary training because
+        retaining attention matrices adds memory overhead.
+        """
+
+        layers = list(self.decoder.layers)
+
+        for index, layer in enumerate(layers):
+
+            if not isinstance(
+                layer,
+                InspectableTransformerDecoderLayer,
+            ):
+                continue
+
+            layer.capture_cross_attention = (
+                enabled
+                and (
+                    not final_layer_only
+                    or index == len(layers) - 1
+                )
+            )
+
+            if not enabled:
+                layer.last_cross_attention = None
+
+    @torch.no_grad()
+    def get_cross_attention(
+        self,
+    ) -> Optional[torch.Tensor]:
+        """
+        Return the most recently captured final-layer cross-attention.
+
+        Shape:
+
+            (B, heads, decoder_position, protein_position)
+
+        Returns None when telemetry capture was disabled.
+        """
+
+        if not self.decoder.layers:
+            return None
+
+        layer = self.decoder.layers[-1]
+
+        if not isinstance(
+            layer,
+            InspectableTransformerDecoderLayer,
+        ):
+            return None
+
+        return layer.last_cross_attention
     # ===================================================================
     # CHECKPOINT
     # ===================================================================
