@@ -1,17 +1,8 @@
-"""Small compatibility implementations used by the public CHIMERAv2 entrypoint.
+"""Merge-safe runtime compatibility implementations for public CHIMERAv2.
 
-These classes keep the legacy large module source untouched while repairing two
-runtime contracts that changed when geometric edge features were upgraded:
-
-* MultiScaleNRPSDesigner now consumes the 28-dimensional ProteinMPNN geometry
-  edge representation (16 RBF + 3 local-direction + 9 relative-rotation terms).
-* SubstratePocketConditioner computes residue-to-atom distances directly,
-  rather than measuring distances to the centroid and then taking a coordinate
-  minimum.
-
-The public package entrypoint installs these implementations before users can
-construct CHIMERAv2. Direct imports from ``chimera.chimera_v2`` remain legacy
-compatibility imports and should be avoided for production code.
+The large historical ``chimera_v2.py`` module is retained for compatibility,
+while the package entrypoint substitutes corrected components before a model is
+constructed. This avoids maintaining two subtly different scientific paths.
 """
 
 from __future__ import annotations
@@ -20,11 +11,16 @@ import torch
 import torch.nn as nn
 
 from .multi_objective import MultiScaleNRPSDesigner as _LegacyDesigner
-from .chimera_v2 import SubstratePocketConditioner as _LegacyConditioner
+from .chimera_v2 import (
+    FlowMatchingBackbone as _LegacyFlowBackbone,
+    SubstratePocketConditioner as _LegacyConditioner,
+)
+from .flow_matching import SE3FlowMatching
+from .schrodinger_bridge import SE3SchrodingerBridge
 
 
 class MergeReadyMultiScaleNRPSDesigner(_LegacyDesigner):
-    """Legacy hierarchical designer with the corrected 28-D edge contract."""
+    """Hierarchical designer with the corrected 28-D geometry edge contract."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -33,7 +29,7 @@ class MergeReadyMultiScaleNRPSDesigner(_LegacyDesigner):
 
 
 class MergeReadySubstratePocketConditioner(_LegacyConditioner):
-    """Substrate conditioner with correct residue-to-atom distance gating."""
+    """Substrate conditioner with direct residue-to-atom distance gating."""
 
     def forward(
         self,
@@ -49,7 +45,6 @@ class MergeReadySubstratePocketConditioner(_LegacyConditioner):
 
         sub_cond = self.substrate_proj(self.substrate_emb(substrate_id))
         pair_repr = pair_repr + sub_cond[:, None, None, :]
-
         if substrate_coords is None or substrate_types is None:
             return pair_repr
         if substrate_coords.ndim != 3 or substrate_coords.shape[0] != B or substrate_coords.shape[-1] != 3:
@@ -66,10 +61,69 @@ class MergeReadySubstratePocketConditioner(_LegacyConditioner):
         if residue_coords is not None:
             if residue_coords.shape != (B, L, 3):
                 raise ValueError("residue_coords must have shape (B, L, 3)")
-            # Correct Euclidean residue-to-each-atom distances: (B,L,N_atoms).
             min_dist = torch.cdist(residue_coords, substrate_coords).amin(dim=-1)
             residue_gate = torch.exp(-min_dist / 8.0)
             pair_gate = residue_gate[:, :, None, None] * residue_gate[:, None, :, None]
             sub_pair = sub_pair * pair_gate
 
         return self.sub_norm(pair_repr + sub_pair)
+
+
+class MergeReadyFlowMatchingBackbone(_LegacyFlowBackbone):
+    """CHIMERAv2 structure backbone using the canonical stochastic SB path."""
+
+    def __init__(self, d_single: int = 256, d_pair: int = 256, n_blocks: int = 8):
+        super().__init__(d_single, d_pair, n_blocks)
+        # Keep the velocity network architecture, but use it as the learned SB
+        # drift rather than the historical heuristic noise-corrected CFM path.
+        self.sb_model = SE3SchrodingerBridge(
+            self.flow_model.velocity_field,
+            diffusion=0.05,
+            sinkhorn_iters=50,
+        )
+
+    def sample(
+        self,
+        R0,
+        t0,
+        pair_cond,
+        evol_single,
+        n_steps=20,
+        fixed_mask=None,
+        substrate_coords=None,
+        evol_conditioning_fn=None,
+    ):
+        del evol_conditioning_fn
+        evol_single = self.frozen_bridge(evol_single)
+        return self.sb_model.sample(
+            R0,
+            t0,
+            pair_cond,
+            evol_single,
+            n_steps=n_steps,
+            fixed_mask=fixed_mask,
+            substrate_coords=substrate_coords,
+        )
+
+    def loss(
+        self,
+        R0,
+        t0,
+        R1,
+        t1,
+        pair_cond,
+        evol_single,
+        fixed_mask=None,
+        substrate_coords=None,
+    ):
+        evol_single = self.frozen_bridge(evol_single)
+        return self.sb_model.bridge_loss(
+            R0,
+            t0,
+            R1,
+            t1,
+            pair_cond,
+            evol_single,
+            fixed_mask=fixed_mask,
+            substrate_coords=substrate_coords,
+        )
