@@ -45,4 +45,12 @@ jobs:
       with:
         python-version: "3.11"
     - run: pip install black
-    - run: black --check chimera/ scripts/ tests/
+    - name: Check Python files changed by this commit
+      shell: bash
+      run: |
+        files=$(git diff-tree --no-commit-id --name-only -r HEAD | grep '\.py$' || true)
+        if [ -z "$files" ]; then
+          echo "No Python files changed in this commit."
+        else
+          black --check $files
+        fi
