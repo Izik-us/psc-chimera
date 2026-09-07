@@ -98,6 +98,9 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
         protein_mask = batch["protein_padding_mask"].to(device)
         codon_mask = batch["codon_padding_mask"].to(device)
         expression = batch["expression"].to(device)
+        capture_now = (observatory is not None and (global_step % observatory.update_every == 0 or global_step == 0))
+        if capture_now: 
+            model.set_attention_capture(capture_now, final_layer_only=True)
         output = model(protein_tokens, codon_tokens, batch["aa_sequence"], protein_padding_mask=protein_mask, codon_padding_mask=codon_mask)
         loss, metrics = codon_optimizer_loss(output["logits"], codon_tokens, output["expression"], target_expression=expression, codon_padding_mask=codon_mask)
         optimizer.zero_grad(set_to_none=True)

@@ -586,8 +586,8 @@ class CodonObservatory:
             f"{telemetry.selected_amino_acid}\n"
             f"sample protein        : "
             f"{telemetry.sample_protein[:70]}\n"
-            f"sample codons         : "
-            f"{telemetry.sample_codons[:70]}"
+            f"predicted codons         : "
+            f"{' ' .join (telemetry.predicted_codons[:12])}"
         )
 
         self.ax_internals.text(
