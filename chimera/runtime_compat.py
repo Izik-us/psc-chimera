@@ -30,7 +30,6 @@ def merge_ready_so3_log(R: torch.Tensor) -> torch.Tensor:
     theta = torch.acos(((trace - 1.0) * 0.5).clamp(-1.0, 1.0))
     skew = 0.5 * (R - R.transpose(-1, -2))
     vee = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1)
-
     d0 = (1.0 + R[..., 0, 0] - R[..., 1, 1] - R[..., 2, 2]).clamp_min(0.0)
     d1 = (1.0 - R[..., 0, 0] + R[..., 1, 1] - R[..., 2, 2]).clamp_min(0.0)
     d2 = (1.0 - R[..., 0, 0] - R[..., 1, 1] + R[..., 2, 2]).clamp_min(0.0)
@@ -56,9 +55,7 @@ class MergeReadyInvariantPointAttention(_flow_matching.InvariantPointAttention):
         def split_heads(x, n):
             return x.view(B, L, n, -1).permute(0, 2, 1, 3)
 
-        Q_s = split_heads(self.q_s(s), self.n_head)
-        K_s = split_heads(self.k_s(s), self.n_head)
-        V_s = split_heads(self.v_s(s), self.n_head)
+        Q_s, K_s, V_s = split_heads(self.q_s(s), self.n_head), split_heads(self.k_s(s), self.n_head), split_heads(self.v_s(s), self.n_head)
 
         def transform_points(pts_local, R_frames, t_frames):
             pts = pts_local.view(B, L, -1, 3)
@@ -74,27 +71,21 @@ class MergeReadyInvariantPointAttention(_flow_matching.InvariantPointAttention):
         diff_p = Q_p.permute(0, 2, 1, 3, 4).unsqueeze(3) - K_p.permute(0, 2, 1, 3, 4).unsqueeze(2)
         attn_p = -(diff_p.norm(dim=-1) ** 2).sum(dim=-1)
         attn_z = self.pair_bias(z).permute(0, 3, 1, 2)
-
         if substrate_coords is not None:
             min_dist = (t.unsqueeze(2) - substrate_coords.unsqueeze(1)).norm(dim=-1).amin(dim=-1)
             gate = self.substrate_gate(s).permute(0, 2, 1).unsqueeze(-1)
             attn_z = attn_z + gate * torch.exp(-min_dist / 5.0).unsqueeze(1).unsqueeze(-1)
-
         attn = F.softmax(attn_s + F.softplus(self.gamma).view(1, self.n_head, 1, 1) * attn_p + attn_z, dim=-1)
         out_s = torch.einsum("bhij,bhjd->bhid", attn, V_s)
         relative = t.unsqueeze(1) - t.unsqueeze(2)
         out_p = torch.einsum("bhij,bijc->bhic", attn, relative)
         out_p_local = torch.einsum("blij,bhlj->bhli", R.transpose(-1, -2), out_p)
         out_z = torch.einsum("bhij,bijc->bhic", attn, z)
-        out = torch.cat(
-            [
-                out_s.permute(0, 2, 1, 3).reshape(B, L, -1),
-                out_p_local.permute(0, 2, 1, 3).reshape(B, L, -1),
-                out_z.permute(0, 2, 1, 3).reshape(B, L, -1),
-            ],
-            dim=-1,
-        )
-        return self.out(out)
+        return self.out(torch.cat([
+            out_s.permute(0, 2, 1, 3).reshape(B, L, -1),
+            out_p_local.permute(0, 2, 1, 3).reshape(B, L, -1),
+            out_z.permute(0, 2, 1, 3).reshape(B, L, -1),
+        ], dim=-1))
 
 
 class MergeReadyMultiScaleNRPSDesigner(_LegacyDesigner):
@@ -102,7 +93,7 @@ class MergeReadyMultiScaleNRPSDesigner(_LegacyDesigner):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        d_residue = kwargs.get("d_residue", 128)
+        d_residue = self.edge_proj.out_features
         self.edge_proj = nn.Linear(28, d_residue)
 
 
@@ -126,8 +117,7 @@ class MergeReadySubstratePocketConditioner(_LegacyConditioner):
         if residue_coords is not None:
             if residue_coords.shape != (B, L, 3):
                 raise ValueError("residue_coords must have shape (B, L, 3)")
-            min_dist = torch.cdist(residue_coords, substrate_coords).amin(dim=-1)
-            gate = torch.exp(-min_dist / 8.0)
+            gate = torch.exp(-torch.cdist(residue_coords, substrate_coords).amin(dim=-1) / 8.0)
             sub_pair = sub_pair * gate[:, :, None, None] * gate[:, None, :, None]
         return self.sub_norm(pair_repr + sub_pair)
 
