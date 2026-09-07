@@ -18,14 +18,14 @@ from chimera.schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 from chimera.geometry import GeometryReport, validate_backbone
 from chimera.evaluators import BiologicalObjectiveEvaluator
 from chimera.pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
-from chimera.dpo import DPOBatch, DPOTrainer as CorrectedDPOTrainer
-from chimera.bayesian import BayesianUncertaintyEstimator as CorrectedBayesianUncertaintyEstimator
+from chimera.dpo import DPOBatch, DPOTrainer
+from chimera.bayesian import BayesianUncertaintyEstimator
 from chimera.domain_schema import DomainType, DomainSpan, AssemblySchema
 from chimera.multi_objective import (
     StructuralRetriever,
-    DPOTrainer,
+    DPOTrainer as LegacyDPOTrainer,
     ParetoMultiObjectiveHead,
-    BayesianUncertaintyEstimator,
+    BayesianUncertaintyEstimator as LegacyBayesianUncertaintyEstimator,
     MultiScaleNRPSDesigner,
     AutoregressiveSequencePolicy,
 )
@@ -45,10 +45,10 @@ __all__ = [
     "ESMProteinFitnessScorer", "SE3FlowMatching", "SchrodingerBridge", "SE3SchrodingerBridge",
     "GeometryReport", "validate_backbone", "BiologicalObjectiveEvaluator",
     "PCGradOptimizer", "pcgrad_step", "project_conflicting_gradients",
-    "DPOBatch", "CorrectedDPOTrainer", "CorrectedBayesianUncertaintyEstimator",
-    "DomainType", "DomainSpan", "AssemblySchema", "StructuralRetriever", "DPOTrainer",
-    "ParetoMultiObjectiveHead", "BayesianUncertaintyEstimator", "MultiScaleNRPSDesigner",
-    "AutoregressiveSequencePolicy", "BackboneEncoder", "StructureGenerator", "SequenceDesigner",
-    "OpenFoldAdapter", "OpenFoldCLIAdapter", "RFdiffusionAdapter", "RFdiffusionCLIAdapter",
-    "ProteinMPNNAdapter",
+    "DPOBatch", "DPOTrainer", "BayesianUncertaintyEstimator",
+    "LegacyDPOTrainer", "LegacyBayesianUncertaintyEstimator",
+    "DomainType", "DomainSpan", "AssemblySchema", "StructuralRetriever",
+    "ParetoMultiObjectiveHead", "MultiScaleNRPSDesigner", "AutoregressiveSequencePolicy",
+    "BackboneEncoder", "StructureGenerator", "SequenceDesigner", "OpenFoldAdapter",
+    "OpenFoldCLIAdapter", "RFdiffusionAdapter", "RFdiffusionCLIAdapter", "ProteinMPNNAdapter",
 ]
