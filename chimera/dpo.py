@@ -4,10 +4,9 @@ Implements the original DPO objective on sequence-level log probabilities:
     -log sigmoid(beta * ((log pi_theta(y_w|x)-log pi_ref(y_w|x))
                        -(log pi_theta(y_l|x)-log pi_ref(y_l|x))))
 
-The implementation is deliberately policy-agnostic. A policy must expose
-``logprob(context, tokens)`` and may expose ``token_logprobs(context, tokens)``
-for masked sequence likelihoods. Padding or invalid-token positions must never
-contribute to the DPO preference signal.
+Policies may expose either ``logprob(context, tokens)`` or a callable forward
+that returns next-token logits. Sequence masks are applied to token-level log
+probabilities so padding never contributes to the preference signal.
 """
 
 from __future__ import annotations
@@ -43,26 +42,26 @@ class DPOTrainer:
 
     @staticmethod
     def _sequence_logprob(policy, context, tokens, mask=None):
-        """Return one masked sequence log-probability per sample.
-
-        Policies that implement ``token_logprobs`` should return ``(B, L)``
-        token log-probabilities. This path is required when a mask is supplied.
-        A policy-level ``logprob`` remains valid for unmasked sequences.
-        """
+        """Return one masked sequence log-probability per sample."""
         if mask is not None:
-            if not hasattr(policy, "token_logprobs"):
-                raise TypeError(
-                    "a sequence mask requires policy.token_logprobs(context, tokens)"
-                )
-            token_logp = policy.token_logprobs(context, tokens)
-            if token_logp.shape != tokens.shape:
-                raise ValueError("policy.token_logprobs must return shape (B,L)")
             if mask.shape != tokens.shape:
                 raise ValueError("sequence mask must have shape (B,L)")
+            # Prefer a policy-provided token-logprob implementation.
+            if hasattr(policy, "token_logprobs"):
+                token_logp = policy.token_logprobs(context, tokens)
+            elif callable(policy):
+                logits = policy(context, tokens)
+                if logits.shape != (*tokens.shape, logits.shape[-1]):
+                    raise ValueError("policy forward must return logits with shape (B,L,V)")
+                token_logp = F.log_softmax(logits, dim=-1).gather(
+                    -1, tokens.unsqueeze(-1)
+                ).squeeze(-1)
+            else:
+                raise TypeError("masked DPO requires token_logprobs or a callable policy")
             return (token_logp * mask.to(token_logp.dtype)).sum(dim=-1)
 
         if not hasattr(policy, "logprob"):
-            raise TypeError("policy must expose logprob(context, tokens)")
+            raise TypeError("policy must expose logprob(context, tokens) for unmasked DPO")
         logp = policy.logprob(context, tokens)
         if logp.ndim != 1 or logp.shape[0] != tokens.shape[0]:
             raise ValueError("policy.logprob must return shape (B,)")
