@@ -13,19 +13,30 @@ __author__ = "PSC Engineering Pipeline"
 from chimera import chimera_v2 as _chimera_v2
 from chimera.runtime_compat import (
     MergeReadyFlowMatchingBackbone,
+    MergeReadyInvariantPointAttention,
     MergeReadyMultiScaleNRPSDesigner,
     MergeReadySubstratePocketConditioner,
+    merge_ready_expected_improvement,
+    merge_ready_so3_log,
     merge_ready_update_from_proteus,
+    set_best_observed,
 )
 from chimera.pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 from chimera.bayesian import BayesianUncertaintyEstimator
+from chimera import flow_matching as _flow_matching
 
+# Keep the legacy source modules import-compatible while making the public
+# CHIMERAv2 entrypoint resolve to the corrected scientific components.
+_flow_matching.InvariantPointAttention = MergeReadyInvariantPointAttention
+_flow_matching.so3_log = merge_ready_so3_log
 _chimera_v2.FlowMatchingBackbone = MergeReadyFlowMatchingBackbone
 _chimera_v2.MultiScaleNRPSDesigner = MergeReadyMultiScaleNRPSDesigner
 _chimera_v2.SubstratePocketConditioner = MergeReadySubstratePocketConditioner
 _chimera_v2.ParetoMultiObjectiveHead = MergeReadyParetoMultiObjectiveHead
 _chimera_v2.BayesianUncertaintyEstimator = BayesianUncertaintyEstimator
 _chimera_v2.CHIMERAv2.update_from_proteus = merge_ready_update_from_proteus
+_chimera_v2.CHIMERAv2.set_best_observed = set_best_observed
+_chimera_v2.CHIMERAv2.compute_expected_improvement = merge_ready_expected_improvement
 CHIMERAv2 = _chimera_v2.CHIMERAv2
 NRPSConstraints = _chimera_v2.NRPSConstraints
 
