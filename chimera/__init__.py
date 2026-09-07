@@ -10,14 +10,16 @@ CHIMERA: Compositional Hierarchical Inference Model for
 __version__ = "2.0.0"
 __author__ = "PSC Engineering Pipeline"
 
-# Import the implementation module first so its global component references can
-# be repaired before a CHIMERAv2 instance is constructed.
+# Load the implementation module first. The public package then substitutes
+# corrected runtime components before CHIMERAv2 instances are constructed.
 from chimera import chimera_v2 as _chimera_v2
 from chimera.runtime_compat import (
+    MergeReadyFlowMatchingBackbone,
     MergeReadyMultiScaleNRPSDesigner,
     MergeReadySubstratePocketConditioner,
 )
 
+_chimera_v2.FlowMatchingBackbone = MergeReadyFlowMatchingBackbone
 _chimera_v2.MultiScaleNRPSDesigner = MergeReadyMultiScaleNRPSDesigner
 _chimera_v2.SubstratePocketConditioner = MergeReadySubstratePocketConditioner
 CHIMERAv2 = _chimera_v2.CHIMERAv2
