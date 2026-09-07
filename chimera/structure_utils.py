@@ -55,13 +55,18 @@ def load_backbone_coords_pdb(path: str | Path) -> torch.Tensor:
             continue
         key = (line[21].strip(), line[22:26].strip(), line[26].strip())
         atoms.setdefault(key, {})[atom] = [float(line[30:38]), float(line[38:46]), float(line[46:54])]
-    residues = [entry for entry in atoms.values() if {"N", "CA", "C"}.issubset(entry)]
+
+    # The return contract is explicitly N/CA/C/O. Silently accepting a residue
+    # without O and failing later with a KeyError makes malformed PDBs hard to
+    # diagnose, so reject incomplete residues here with a useful message.
+    residues = [entry for entry in atoms.values() if {"N", "CA", "C", "O"}.issubset(entry)]
     if not residues:
-        raise ValueError(f"No complete backbone residues found in {path}")
+        raise ValueError(f"No complete N/CA/C/O backbone residues found in {path}")
+    if len(residues) != len(atoms):
+        raise ValueError(f"Incomplete N/CA/C/O backbone residue found in {path}")
+
     coords = torch.tensor(
         [[entry[name] for name in ("N", "CA", "C", "O")] for entry in residues],
         dtype=torch.float32,
     ).unsqueeze(0)
-    if coords.shape[2] != 4:
-        raise ValueError("Every residue must contain N, CA, C, and O atoms")
     return coords
