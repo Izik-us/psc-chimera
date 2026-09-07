@@ -10,7 +10,19 @@ CHIMERA: Compositional Hierarchical Inference Model for
 __version__ = "2.0.0"
 __author__ = "PSC Engineering Pipeline"
 
-from chimera.chimera_v2 import CHIMERAv2, NRPSConstraints
+# Import the implementation module first so its global component references can
+# be repaired before a CHIMERAv2 instance is constructed.
+from chimera import chimera_v2 as _chimera_v2
+from chimera.runtime_compat import (
+    MergeReadyMultiScaleNRPSDesigner,
+    MergeReadySubstratePocketConditioner,
+)
+
+_chimera_v2.MultiScaleNRPSDesigner = MergeReadyMultiScaleNRPSDesigner
+_chimera_v2.SubstratePocketConditioner = MergeReadySubstratePocketConditioner
+CHIMERAv2 = _chimera_v2.CHIMERAv2
+NRPSConstraints = _chimera_v2.NRPSConstraints
+
 from chimera.codon_optimizer import CodonOptimizer, optimize_nrps_for_mammalian_expression
 from chimera.protein_fitness import ESMProteinFitnessScorer
 from chimera.flow_matching import SE3FlowMatching
@@ -26,7 +38,7 @@ from chimera.multi_objective import (
     DPOTrainer as LegacyDPOTrainer,
     ParetoMultiObjectiveHead,
     BayesianUncertaintyEstimator as LegacyBayesianUncertaintyEstimator,
-    MultiScaleNRPSDesigner,
+    MultiScaleNRPSDesigner as LegacyMultiScaleNRPSDesigner,
     AutoregressiveSequencePolicy,
 )
 from chimera.adapters import (
@@ -46,9 +58,9 @@ __all__ = [
     "GeometryReport", "validate_backbone", "BiologicalObjectiveEvaluator",
     "PCGradOptimizer", "pcgrad_step", "project_conflicting_gradients",
     "DPOBatch", "DPOTrainer", "BayesianUncertaintyEstimator",
-    "LegacyDPOTrainer", "LegacyBayesianUncertaintyEstimator",
+    "LegacyDPOTrainer", "LegacyBayesianUncertaintyEstimator", "LegacyMultiScaleNRPSDesigner",
     "DomainType", "DomainSpan", "AssemblySchema", "StructuralRetriever",
-    "ParetoMultiObjectiveHead", "MultiScaleNRPSDesigner", "AutoregressiveSequencePolicy",
+    "ParetoMultiObjectiveHead", "AutoregressiveSequencePolicy",
     "BackboneEncoder", "StructureGenerator", "SequenceDesigner", "OpenFoldAdapter",
     "OpenFoldCLIAdapter", "RFdiffusionAdapter", "RFdiffusionCLIAdapter", "ProteinMPNNAdapter",
 ]
