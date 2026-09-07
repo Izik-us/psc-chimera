@@ -1,5 +1,3 @@
-import math
-
 import pytest
 import torch
 
@@ -9,14 +7,16 @@ from chimera.structure_utils import load_backbone_coords_pdb
 
 
 def _ideal_backbone(length: int = 3) -> torch.Tensor:
-    """Construct a simple non-clashing backbone with the expected bond lengths."""
+    """Construct a simple peptide backbone with realistic local bond lengths."""
     coords = torch.zeros(1, length, 4, 3)
+    offsets = torch.tensor([
+        [-1.454, 0.132, 0.0],
+        [0.0, 0.0, 0.0],
+        [1.249, 0.884, 0.0],
+        [1.249, 0.884, 1.230],
+    ])
     for i in range(length):
-        ca = torch.tensor([3.8 * i, 0.0, 0.0])
-        coords[0, i, 1] = ca
-        coords[0, i, 0] = ca + torch.tensor([-1.46, 0.0, 0.0])
-        coords[0, i, 2] = ca + torch.tensor([1.53, 0.0, 0.0])
-        coords[0, i, 3] = ca + torch.tensor([1.53, 1.23, 0.0])
+        coords[0, i] = offsets + torch.tensor([3.8 * i, 0.0, 0.0])
     return coords
 
 
@@ -48,7 +48,6 @@ def test_pcgrad_rejects_empty_parameter_set():
 
 
 def test_pdb_loader_rejects_missing_oxygen(tmp_path):
-    # Minimal PDB with N/CA/C but no O.
     lines = [
         "ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00 20.00           N",
         "ATOM      2  CA  ALA A   1       1.460   0.000   0.000  1.00 20.00           C",
