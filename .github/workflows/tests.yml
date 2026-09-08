@@ -33,7 +33,11 @@ jobs:
         pip install torch --index-url https://download.pytorch.org/whl/cpu
         pip install einops numpy scipy pytest
 
-    - name: Run shape and import tests (CPU, no pretrained weights)
+    - name: Compile Python sources
+      run: |
+        python -m compileall -q chimera data scripts tests
+
+    - name: Run CPU scientific and integration tests
       run: |
         pytest tests/ -v --tb=short -m "not gpu and not requires_weights"
 
