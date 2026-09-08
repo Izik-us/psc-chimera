@@ -25,13 +25,18 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt') }}
 
-    - name: Install CPU-only dependencies
+    - name: Install CPU-only PyTorch
       run: |
         python -m pip install --upgrade pip
-        pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install einops numpy scipy pytest
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+    - name: Install repository dependencies
+      shell: bash
+      run: |
+        grep -Ev '^(torch|torchvision)([<>=]|$)' requirements.txt > /tmp/chimera-requirements.txt
+        pip install -r /tmp/chimera-requirements.txt
 
     - name: Compile Python sources
       run: |
