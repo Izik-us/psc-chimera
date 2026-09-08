@@ -55,19 +55,25 @@ def main():
     args = parse_args()
     if args.n_designs < 1 or args.n_pareto < 1:
         raise ValueError("--n-designs and --n-pareto must both be positive")
-    if args.flow_steps < 1:
-        raise ValueError("--flow-steps must be positive")
+    if args.flow_steps < 2:
+        raise ValueError("--flow-steps must be at least 2 for stochastic bridge integration")
     if args.n_pareto > args.n_designs:
         raise ValueError("--n-pareto cannot exceed --n-designs")
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
 
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    # Import through the package boundary so the repaired CHIMERAv2 wiring is used.
+    from chimera import CHIMERAv2
+    from chimera.reproducibility import seed_everything
+    from chimera.structure_utils import load_backbone_pdb, load_msa
+
+    seed_everything(args.seed, deterministic=True)
     device = torch.device(args.device)
 
-    print(f"PSC-CHIMERA Design Run")
+    print("PSC-CHIMERA Design Run")
     print(f"  Target substrate: {args.substrate}")
     print(f"  Designs to generate: {args.n_designs}")
     print(f"  Pareto samples to return: {args.n_pareto}")
@@ -75,13 +81,6 @@ def main():
     print(f"  SB integration steps: {args.flow_steps}")
     print(f"  Seed: {args.seed}")
     print()
-
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    # Import through the package boundary so the repaired CHIMERAv2 wiring is used.
-    from chimera import CHIMERAv2, NRPSConstraints
-    from chimera.structure_utils import load_backbone_pdb, load_msa
 
     model = CHIMERAv2.from_pretrained(
         evoformer_ckpt=args.evof_ckpt,
@@ -127,11 +126,12 @@ def main():
         use_rag=not args.no_rag,
     )
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    fasta_path = os.path.join(args.output_dir, "pareto_sequences.fasta")
+    fasta_path = output_dir / "pareto_sequences.fasta"
     AA = "ACDEFGHIKLMNPQRSTVWY"
-    with open(fasta_path, "w") as f:
+    with fasta_path.open("w", encoding="utf-8") as f:
         for i, seq in enumerate(results["pareto_sequences"]):
             scores = results["pareto_scores"][i]
             f.write(
@@ -141,7 +141,7 @@ def main():
             aa_str = "".join(AA[t] if t < 20 else "X" for t in seq.tolist())
             f.write(aa_str + "\n")
 
-    meta_path = os.path.join(args.output_dir, "design_metadata.json")
+    meta_path = output_dir / "design_metadata.json"
     meta = {
         "substrate": args.substrate,
         "n_generated": results["total_generated"],
@@ -153,15 +153,13 @@ def main():
         "rag_enabled": not args.no_rag,
         "demo": args.demo,
     }
-    with open(meta_path, "w") as f:
+    with meta_path.open("w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 
-    print(f"\nResults saved to {args.output_dir}")
-    print(
-        f"  {len(results['pareto_sequences'])} Pareto-optimal sequences → {fasta_path}"
-    )
+    print(f"\nResults saved to {output_dir}")
+    print(f"  {len(results['pareto_sequences'])} Pareto-optimal sequences → {fasta_path}")
     print(f"  Metadata → {meta_path}")
-    print(f"\nNext step: send sequences to PROTEUS for mammalian cell screening.")
+    print("\nNext step: send sequences to PROTEUS for mammalian cell screening.")
 
 
 if __name__ == "__main__":
