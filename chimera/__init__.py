@@ -77,7 +77,7 @@ from chimera.evaluators import BiologicalObjectiveEvaluator
 from chimera.pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from chimera.dpo import DPOBatch, DPOTrainer
 from chimera.bayesian import BayesianUncertaintyEstimator
-from chimera.reproducibility import seed_everything, make_generator
+from chimera.reproducibility import seed_everything, seed_worker, make_generator
 from chimera.domain_schema import DomainType, DomainSpan, AssemblySchema
 from chimera.multi_objective import (
     StructuralRetriever,
@@ -105,7 +105,7 @@ __all__ = [
     "GeometryReport", "validate_backbone", "BiologicalObjectiveEvaluator",
     "PCGradOptimizer", "pcgrad_step", "project_conflicting_gradients",
     "DPOBatch", "DPOTrainer", "BayesianUncertaintyEstimator",
-    "seed_everything", "make_generator",
+    "seed_everything", "seed_worker", "make_generator",
     "LegacyDPOTrainer", "LegacyBayesianUncertaintyEstimator", "LegacyMultiScaleNRPSDesigner",
     "DomainType", "DomainSpan", "AssemblySchema", "StructuralRetriever",
     "ParetoMultiObjectiveHead", "AutoregressiveSequencePolicy",
