@@ -50,12 +50,13 @@ def test_dpo_reference_is_not_updated():
 
 def test_pcgrad_optimizer_preserves_parameter_shape():
     model = nn.Linear(3, 1, bias=False)
-    optimizer = PCGradOptimizer(model.parameters(), lr=1e-2)
+    base_optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
+    optimizer = PCGradOptimizer(base_optimizer)
     x = torch.tensor([[1.0, 0.0, 0.0]])
     y1 = model(x).sum()
     y2 = -model(x).sum()
-    optimizer.pc_backward([y1, y2])
-    optimizer.step()
+    optimizer.zero_grad()
+    optimizer.step([y1, y2])
     assert model.weight.shape == (1, 3)
     assert torch.isfinite(model.weight).all()
 
