@@ -43,19 +43,13 @@ class DPOTrainer:
             raise ValueError("context sequence dimensions must match token dimensions")
 
         token_logp = None
+        # Prefer explicit probability interfaces. nn.Module instances are
+        # callable even when they intentionally expose only logprob(), so the
+        # generic callable path must not mask the explicit API.
         if hasattr(policy, "token_logprobs"):
             token_logp = policy.token_logprobs(context, tokens)
-        elif callable(policy):
-            logits = policy(context, tokens)
-            expected = (*tokens.shape, logits.shape[-1])
-            if logits.shape != expected:
-                raise ValueError("policy forward must return logits with shape (B,L,V)")
-            token_logp = F.log_softmax(logits, dim=-1).gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
         elif hasattr(policy, "logprob"):
             logp = policy.logprob(context, tokens)
-            # The canonical contract returns one scalar log-probability per
-            # sequence. Some lightweight policies expose token logits through
-            # logprob instead; accept that unambiguously and reduce over L.
             if logp.ndim == 3:
                 expected = (*tokens.shape, logp.shape[-1])
                 if logp.shape != expected:
@@ -66,14 +60,18 @@ class DPOTrainer:
             elif logp.ndim == 2 and logp.shape == tokens.shape:
                 token_logp = logp
             elif logp.ndim == 1 and logp.shape[0] == tokens.shape[0]:
-                if mask is None:
-                    return logp
                 return logp
             else:
                 raise ValueError("policy.logprob must return shape (B,), (B,L), or (B,L,V)")
+        elif callable(policy):
+            logits = policy(context, tokens)
+            expected = (*tokens.shape, logits.shape[-1])
+            if logits.shape != expected:
+                raise ValueError("policy forward must return logits with shape (B,L,V)")
+            token_logp = F.log_softmax(logits, dim=-1).gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
 
         if token_logp is None:
-            raise TypeError("policy must expose token_logprobs, callable logits, or logprob")
+            raise TypeError("policy must expose token_logprobs, logprob, or a forward returning logits")
         if token_logp.shape != tokens.shape:
             raise ValueError("token log-probabilities must have shape (B,L)")
         if mask is None:
