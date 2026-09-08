@@ -13,7 +13,7 @@ Expected Improvement uses the standard deviation sigma, not variance:
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Callable, Dict, Optional, Sequence
+from typing import Callable, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -45,7 +45,19 @@ class BayesianUncertaintyEstimator:
     acquisition functions cannot accidentally treat variance as sigma.
     """
 
-    def __init__(self, n_samples: int = 30):
+    def __init__(
+        self,
+        n_samples: int = 30,
+        *,
+        n_mc_samples: Optional[int] = None,
+    ):
+        # ``n_mc_samples`` is retained as an explicit compatibility alias for
+        # the historical CHIMERAv2 constructor. It maps to the canonical
+        # ``n_samples`` parameter rather than creating a second API.
+        if n_mc_samples is not None:
+            if n_samples != 30 and int(n_samples) != int(n_mc_samples):
+                raise ValueError("n_samples and n_mc_samples disagree")
+            n_samples = int(n_mc_samples)
         if n_samples < 2:
             raise ValueError("n_samples must be at least 2")
         self.n_samples = int(n_samples)
@@ -112,6 +124,7 @@ class BayesianUncertaintyEstimator:
         averaging pLDDT (0-100) directly with [0,1] scores. The returned
         ``per_candidate_uncertainty`` is a standard deviation, suitable for EI.
         """
+        del per_candidate
         objective_keys = (
             "evol_plausibility",
             "structural_stability",
