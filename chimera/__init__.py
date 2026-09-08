@@ -22,7 +22,7 @@ from chimera.runtime_compat import (
     set_best_observed,
 )
 from chimera.pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
-from chimera.bayesian import BayesianUncertaintyEstimator
+from chimera.bayesian_module import BayesianUncertaintyModule
 from chimera import flow_matching as _flow_matching
 
 # The corrected implementations remain isolated at the public v2 boundary
@@ -34,7 +34,7 @@ _chimera_v2.FlowMatchingBackbone = MergeReadyFlowMatchingBackbone
 _chimera_v2.MultiScaleNRPSDesigner = MergeReadyMultiScaleNRPSDesigner
 _chimera_v2.SubstratePocketConditioner = MergeReadySubstratePocketConditioner
 _chimera_v2.ParetoMultiObjectiveHead = MergeReadyParetoMultiObjectiveHead
-_chimera_v2.BayesianUncertaintyEstimator = BayesianUncertaintyEstimator
+_chimera_v2.BayesianUncertaintyEstimator = BayesianUncertaintyModule
 _chimera_v2.CHIMERAv2.update_from_proteus = merge_ready_update_from_proteus
 _chimera_v2.CHIMERAv2.set_best_observed = set_best_observed
 _chimera_v2.CHIMERAv2.compute_expected_improvement = merge_ready_expected_improvement
@@ -91,6 +91,7 @@ from chimera.adapters import (
 )
 
 ParetoMultiObjectiveHead = MergeReadyParetoMultiObjectiveHead
+BayesianUncertaintyEstimator = BayesianUncertaintyModule
 
 __all__ = [
     "CHIMERAv2", "NRPSConstraints", "CodonOptimizer", "optimize_nrps_for_mammalian_expression",
