@@ -25,8 +25,9 @@ from chimera.pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 from chimera.bayesian import BayesianUncertaintyEstimator
 from chimera import flow_matching as _flow_matching
 
-# Keep the legacy source modules import-compatible while making the public
-# CHIMERAv2 entrypoint resolve to the corrected scientific components.
+# The compatibility layer is intentionally isolated to the public v2 assembly
+# boundary until the corrected components are folded into their historical
+# modules without changing the legacy import contracts.
 _flow_matching.InvariantPointAttention = MergeReadyInvariantPointAttention
 _flow_matching.so3_log = merge_ready_so3_log
 _chimera_v2.FlowMatchingBackbone = MergeReadyFlowMatchingBackbone
@@ -48,6 +49,8 @@ from chimera.geometry import GeometryReport, validate_backbone
 from chimera.evaluators import BiologicalObjectiveEvaluator
 from chimera.pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from chimera.dpo import DPOBatch, DPOTrainer
+from chimera.bayesian import BayesianUncertaintyEstimator
+from chimera.reproducibility import seed_everything, make_generator
 from chimera.domain_schema import DomainType, DomainSpan, AssemblySchema
 from chimera.multi_objective import (
     StructuralRetriever,
@@ -75,6 +78,7 @@ __all__ = [
     "GeometryReport", "validate_backbone", "BiologicalObjectiveEvaluator",
     "PCGradOptimizer", "pcgrad_step", "project_conflicting_gradients",
     "DPOBatch", "DPOTrainer", "BayesianUncertaintyEstimator",
+    "seed_everything", "make_generator",
     "LegacyDPOTrainer", "LegacyBayesianUncertaintyEstimator", "LegacyMultiScaleNRPSDesigner",
     "DomainType", "DomainSpan", "AssemblySchema", "StructuralRetriever",
     "ParetoMultiObjectiveHead", "AutoregressiveSequencePolicy",
