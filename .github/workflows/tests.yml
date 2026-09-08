@@ -37,6 +37,9 @@ jobs:
       run: |
         python -m compileall -q chimera data scripts tests
 
+    - name: Validate documented architecture contract
+      run: python scripts/validate_repo_contract.py
+
     - name: Run CPU scientific and integration tests
       run: |
         pytest tests/ -v --tb=short -m "not gpu and not requires_weights"
