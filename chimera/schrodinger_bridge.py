@@ -1,4 +1,4 @@
-"""Schrödinger bridge utilities for conditional SE(3) backbone transport.
+"""Schrodinger bridge utilities for conditional SE(3) backbone transport.
 
 This module implements an entropic Brownian Schrödinger-bridge approximation in
 local SE(3) coordinates. Endpoint coupling is obtained with log-domain
@@ -132,23 +132,13 @@ class SE3SchrodingerBridge(nn.Module):
                 raise exc
 
     def _coupled_targets(self, R0, t0, R1, t1):
-        """Sample target endpoints from an SE(3)-aware entropic coupling.
-
-        The rotation cost for source i and target j must be computed from
-        R0_i^T R1_j. Computing one relative rotation per matching index and
-        reusing it for every source would silently corrupt the transport cost.
-        """
+        """Sample target endpoints from an SE(3)-aware entropic coupling."""
         B, L = R0.shape[:2]
-        # Pairwise translational cost.
         trans_cost = torch.cdist(t0.reshape(B, -1), t1.reshape(B, -1)).square()
-
-        # Pairwise rotational geodesic cost. For each source/target pair,
-        # R_ij = R0_i^T R1_j, then ||log(R_ij)||^2.
         rel = torch.einsum("a lij, b lkj -> a b lik", R0, R1)
         rel_log = so3_log(rel)
         rot_cost = rel_log.reshape(B, B, -1).square().sum(-1)
         cost = trans_cost + rot_cost
-
         coupling = self.bridge.sinkhorn_coupling(cost)
         row_probs = coupling / coupling.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(coupling.dtype).eps)
         target_idx = torch.multinomial(row_probs, num_samples=1).squeeze(-1)
@@ -240,8 +230,8 @@ class SE3SchrodingerBridge(nn.Module):
                 R0, t0, substrate_coords, evol_conditioning_fn
             )
             if step < n_steps - 1:
-                vr = vr + noise_scale * torch.randn_like(vr, generator=generator)
-                vt = vt + noise_scale * torch.randn_like(vt, generator=generator)
+                vr = vr + noise_scale * torch.randn(vr.shape, device=vr.device, dtype=vr.dtype, generator=generator)
+                vt = vt + noise_scale * torch.randn(vt.shape, device=vt.device, dtype=vt.dtype, generator=generator)
             R = R @ so3_exp(vr * dt)
             x = x + vt * dt
             if fixed_mask is not None:
