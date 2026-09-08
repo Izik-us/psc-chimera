@@ -33,6 +33,8 @@ class DPOTrainer:
     @staticmethod
     def _sequence_logprob(policy, context, tokens, mask=None):
         """Return one masked sequence log-probability per sample."""
+        if tokens.ndim != 2 or tokens.shape[1] < 1:
+            raise ValueError("tokens must have shape (B,L) with L >= 1")
         if context.ndim == 2:
             context = context.unsqueeze(1).expand(-1, tokens.shape[1], -1)
         elif context.ndim != 3:
@@ -40,30 +42,52 @@ class DPOTrainer:
         if context.shape[:2] != tokens.shape:
             raise ValueError("context sequence dimensions must match token dimensions")
 
-        if mask is not None:
-            if mask.shape != tokens.shape:
-                raise ValueError("sequence mask must have shape (B,L)")
-            if hasattr(policy, "token_logprobs"):
-                token_logp = policy.token_logprobs(context, tokens)
-            elif callable(policy):
-                logits = policy(context, tokens)
-                expected = (*tokens.shape, logits.shape[-1])
-                if logits.shape != expected:
-                    raise ValueError("policy forward must return logits with shape (B,L,V)")
-                token_logp = F.log_softmax(logits, dim=-1).gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
+        token_logp = None
+        if hasattr(policy, "token_logprobs"):
+            token_logp = policy.token_logprobs(context, tokens)
+        elif callable(policy):
+            logits = policy(context, tokens)
+            expected = (*tokens.shape, logits.shape[-1])
+            if logits.shape != expected:
+                raise ValueError("policy forward must return logits with shape (B,L,V)")
+            token_logp = F.log_softmax(logits, dim=-1).gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
+        elif hasattr(policy, "logprob"):
+            logp = policy.logprob(context, tokens)
+            # The canonical contract returns one scalar log-probability per
+            # sequence. Some lightweight policies expose token logits through
+            # logprob instead; accept that unambiguously and reduce over L.
+            if logp.ndim == 3:
+                expected = (*tokens.shape, logp.shape[-1])
+                if logp.shape != expected:
+                    raise ValueError("policy.logprob logits must have shape (B,L,V)")
+                token_logp = F.log_softmax(logp, dim=-1).gather(
+                    -1, tokens.unsqueeze(-1)
+                ).squeeze(-1)
+            elif logp.ndim == 2 and logp.shape == tokens.shape:
+                token_logp = logp
+            elif logp.ndim == 1 and logp.shape[0] == tokens.shape[0]:
+                if mask is None:
+                    return logp
+                return logp
             else:
-                raise TypeError("masked DPO requires token_logprobs or a callable policy")
-            return (token_logp * mask.to(token_logp.dtype)).sum(dim=-1)
+                raise ValueError("policy.logprob must return shape (B,), (B,L), or (B,L,V)")
 
-        if not hasattr(policy, "logprob"):
-            raise TypeError("policy must expose logprob(context, tokens) for unmasked DPO")
-        logp = policy.logprob(context, tokens)
-        if logp.ndim != 1 or logp.shape[0] != tokens.shape[0]:
-            raise ValueError("policy.logprob must return shape (B,)")
-        return logp
+        if token_logp is None:
+            raise TypeError("policy must expose token_logprobs, callable logits, or logprob")
+        if token_logp.shape != tokens.shape:
+            raise ValueError("token log-probabilities must have shape (B,L)")
+        if mask is None:
+            mask = torch.ones_like(tokens, dtype=torch.bool)
+        elif mask.shape != tokens.shape:
+            raise ValueError("sequence mask must have shape (B,L)")
+        if not mask.any(dim=-1).all():
+            raise ValueError("every DPO sequence must contain at least one unmasked token")
+        return (token_logp * mask.to(token_logp.dtype)).sum(dim=-1)
 
     def loss(self, policy, reference, batch: DPOBatch):
         """Return DPO loss and detached diagnostics."""
+        if batch.chosen.shape != batch.rejected.shape:
+            raise ValueError("chosen and rejected sequences must have identical shapes")
         policy.train()
         pi_chosen = self._sequence_logprob(policy, batch.context, batch.chosen, batch.chosen_mask)
         pi_rejected = self._sequence_logprob(policy, batch.context, batch.rejected, batch.rejected_mask)
@@ -102,6 +126,8 @@ class DPOTrainer:
 
     def step(self, optimizer, policy, reference, batch: DPOBatch, max_grad_norm: float = 1.0):
         """One optimizer step."""
+        if max_grad_norm <= 0:
+            raise ValueError("max_grad_norm must be positive")
         optimizer.zero_grad(set_to_none=True)
         loss, metrics = self.loss(policy, reference, batch)
         loss.backward()
