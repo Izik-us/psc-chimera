@@ -13,7 +13,6 @@ einops>=0.7.0                    # tensor rearrangement (flow_matching.py)
 
 # ── Bioinformatics ───────────────────────────────────────────────────────────
 biopython>=1.81                  # Entrez database access, SeqIO
-fair-esm>=2.0.0
 
 # ── Structural Retrieval ──────────────────────────────────────────────────────
 faiss-cpu>=1.7.4                 # structural RAG index (use faiss-gpu if available)
