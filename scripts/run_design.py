@@ -22,15 +22,13 @@ from pathlib import Path
 
 def parse_args():
     p = argparse.ArgumentParser(description="CHIMERA v2 NRPS Design")
-    p.add_argument(
-        "--substrate", default="PHE", help="Target substrate (3-letter code)"
-    )
+    p.add_argument("--substrate", default="PHE", help="Target substrate (3-letter code)")
     p.add_argument("--n-designs", type=int, default=500)
     p.add_argument("--n-pareto", type=int, default=50)
-    p.add_argument("--flow-ckpt", default=None, help="RFdiffusion checkpoint path")
-    p.add_argument("--mpnn-ckpt", default=None, help="ProteinMPNN checkpoint path")
+    p.add_argument("--flow-ckpt", default=None, help="Compatible local flow/SB checkpoint path")
+    p.add_argument("--mpnn-ckpt", default=None, help="Compatible local ProteinMPNN checkpoint path")
     p.add_argument(
-        "--evof-ckpt", default=None, help="EvoFormer/OpenFold checkpoint path"
+        "--evof-ckpt", default=None, help="Compatible local EvoFormer checkpoint path"
     )
     p.add_argument("--source-pdb", default=None, help="Source bacterial NRPS PDB file")
     p.add_argument(
@@ -39,7 +37,10 @@ def parse_args():
     p.add_argument("--output-dir", default="results/", help="Output directory")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument(
-        "--flow-steps", type=int, default=20, help="OT-Flow Matching NFE (default 20)"
+        "--flow-steps", type=int, default=20, help="Stochastic Schrödinger-bridge integration steps (default 20)"
+    )
+    p.add_argument(
+        "--seed", type=int, default=0, help="Random seed for reproducible demo/model initialization"
     )
     p.add_argument(
         "--no-rag", action="store_true", help="Disable structural retrieval RAG"
@@ -52,6 +53,18 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.n_designs < 1 or args.n_pareto < 1:
+        raise ValueError("--n-designs and --n-pareto must both be positive")
+    if args.flow_steps < 1:
+        raise ValueError("--flow-steps must be positive")
+    if args.n_pareto > args.n_designs:
+        raise ValueError("--n-pareto cannot exceed --n-designs")
+    if args.device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+
     device = torch.device(args.device)
 
     print(f"PSC-CHIMERA Design Run")
@@ -59,36 +72,34 @@ def main():
     print(f"  Designs to generate: {args.n_designs}")
     print(f"  Pareto samples to return: {args.n_pareto}")
     print(f"  Device: {args.device}")
-    print(f"  Flow steps: {args.flow_steps}")
+    print(f"  SB integration steps: {args.flow_steps}")
+    print(f"  Seed: {args.seed}")
     print()
 
-    # Import here so CLI works even if some deps missing
     import sys
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from chimera.chimera_v2 import CHIMERAv2, NRPSConstraints
     from chimera.structure_utils import load_backbone_pdb, load_msa
 
-    # Load model
     model = CHIMERAv2.from_pretrained(
         evoformer_ckpt=args.evof_ckpt,
         flow_ckpt=args.flow_ckpt,
         mpnn_ckpt=args.mpnn_ckpt,
     ).to(device)
 
-    # Load source backbone (bacterial NRPS)
     if args.source_pdb:
         print(f"Loading source backbone from {args.source_pdb}")
         source_R, source_t = load_backbone_pdb(args.source_pdb)
+        source_R, source_t = source_R.to(device), source_t.to(device)
     else:
         if not args.demo:
             raise ValueError("--source-pdb is required outside --demo mode")
         print("No source PDB provided — using identity frames (for testing)")
-        L = 600  # default A-domain length
-        source_R = torch.eye(3).view(1, 1, 3, 3).expand(1, L, -1, -1).to(device)
+        L = 600
+        source_R = torch.eye(3, device=device).view(1, 1, 3, 3).expand(1, L, -1, -1)
         source_t = torch.zeros(1, L, 3, device=device)
 
-    # Load or create MSA
     if args.msa_file:
         print(f"Loading MSA from {args.msa_file}")
         msa_tokens = load_msa(args.msa_file).to(device)
@@ -102,7 +113,6 @@ def main():
         L, N_seq = 600, 32
         msa_tokens = torch.randint(0, 23, (1, N_seq, L), device=device)
 
-    # Run design
     print(f"\nGenerating {args.n_designs} designs...")
     results = model.design(
         nrps_msa=msa_tokens,
@@ -116,10 +126,8 @@ def main():
         use_rag=not args.no_rag,
     )
 
-    # Save results
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Save Pareto sequences as FASTA
     fasta_path = os.path.join(args.output_dir, "pareto_sequences.fasta")
     AA = "ACDEFGHIKLMNPQRSTVWY"
     with open(fasta_path, "w") as f:
@@ -132,13 +140,17 @@ def main():
             aa_str = "".join(AA[t] if t < 20 else "X" for t in seq.tolist())
             f.write(aa_str + "\n")
 
-    # Save metadata
     meta_path = os.path.join(args.output_dir, "design_metadata.json")
     meta = {
         "substrate": args.substrate,
         "n_generated": results["total_generated"],
         "pareto_count": results["pareto_count"],
         "n_returned": len(results["pareto_sequences"]),
+        "device": str(device),
+        "sb_integration_steps": args.flow_steps,
+        "seed": args.seed,
+        "rag_enabled": not args.no_rag,
+        "demo": args.demo,
     }
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
