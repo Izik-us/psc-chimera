@@ -33,6 +33,10 @@ class CheckpointManifest:
             raise ValueError("checkpoint geometry contract must use 28-D ProteinMPNN-inspired edges")
         if self.objective_count != 5:
             raise ValueError("CHIMERA expects five objective channels")
+        if self.uncertainty != "mc_dropout_epistemic":
+            raise ValueError("checkpoint uncertainty contract must be MC-dropout epistemic")
+        if self.acquisition != "gaussian_expected_improvement":
+            raise ValueError("checkpoint acquisition contract must be Gaussian expected improvement")
         if expected is not None and asdict(self) != asdict(expected):
             raise ValueError("checkpoint manifest does not match the expected architecture contract")
 
