@@ -17,7 +17,7 @@ heat-kernel bridge on the group.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
@@ -47,6 +47,8 @@ class SchrodingerBridge(nn.Module):
             raise ValueError("endpoint coordinates must be rank-2 tensors")
         if omega0.shape[0] != x0.shape[0] or omega1.shape[0] != x1.shape[0]:
             raise ValueError("rotation and translation endpoint batches must agree")
+        if omega0.shape[1] != omega1.shape[1] or x0.shape[1] != x1.shape[1]:
+            raise ValueError("source and target endpoint feature dimensions must agree")
         if rotation_weight < 0:
             raise ValueError("rotation_weight must be non-negative")
         return rotation_weight * torch.cdist(omega0, omega1).square() + torch.cdist(x0, x1).square()
@@ -124,7 +126,7 @@ class SE3SchrodingerBridge(nn.Module):
         target_idx = torch.multinomial(row_probs, num_samples=1).squeeze(-1)
         return R1[target_idx], t1[target_idx]
 
-    def interpolate(self, R0, t0, R1, t1, time):
+    def interpolate(self, R0, t0, R1, t1, time, fixed_mask=None):
         """Sample an SE(3) Brownian bridge for a specified endpoint pairing."""
         B = R0.shape[0]
         delta_rot = self._relative_rotation(R0, R1)
@@ -134,7 +136,19 @@ class SE3SchrodingerBridge(nn.Module):
         rot_t, rot_drift = rot_t.reshape_as(delta_rot), rot_drift.reshape_as(delta_rot)
         R_t = R0 @ so3_exp(rot_t)
         trans_t, trans_drift = self.bridge.sample_bridge(t0.reshape(B, -1), t1.reshape(B, -1), time)
-        return R_t, trans_t.reshape_as(t0), rot_drift.reshape_as(t0), trans_drift.reshape_as(t0)
+        trans_t, trans_drift = trans_t.reshape_as(t0), trans_drift.reshape_as(t0)
+
+        # Fixed residues are true hard constraints during bridge training too.
+        # They must not be perturbed and then merely ignored by the loss, since
+        # that would expose the drift model to invalid intermediate geometry.
+        if fixed_mask is not None:
+            mR = fixed_mask[..., None, None]
+            mx = fixed_mask[..., None]
+            R_t = torch.where(mR, R0, R_t)
+            trans_t = torch.where(mx, t0, trans_t)
+            rot_drift = torch.where(fixed_mask[..., None], torch.zeros_like(rot_drift), rot_drift)
+            trans_drift = torch.where(mx, torch.zeros_like(trans_drift), trans_drift)
+        return R_t, trans_t, rot_drift.reshape_as(t0), trans_drift
 
     def bridge_loss(
         self,
@@ -153,10 +167,14 @@ class SE3SchrodingerBridge(nn.Module):
             raise ValueError("source and target SE(3) tensors must have matching shapes")
         if R0.ndim != 4 or t0.ndim != 3 or R0.shape[-2:] != (3, 3) or t0.shape[-1] != 3:
             raise ValueError("expected R=(B,L,3,3) and t=(B,L,3)")
+        if fixed_mask is not None and fixed_mask.shape != t0.shape[:2]:
+            raise ValueError("fixed_mask must have shape (B,L)")
         B = R0.shape[0]
         target_R, target_t = self._coupled_targets(R0, t0, R1, t1)
         time = torch.rand(B, device=R0.device, dtype=t0.dtype).clamp_(1e-4, 1.0 - 1e-4)
-        R_t, t_t, target_r, target_t_drift = self.interpolate(R0, t0, target_R, target_t, time)
+        R_t, t_t, target_r, target_t_drift = self.interpolate(
+            R0, t0, target_R, target_t, time, fixed_mask=fixed_mask
+        )
         pred_r, pred_t = self.drift_model(
             R_t, t_t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn
         )
@@ -182,6 +200,8 @@ class SE3SchrodingerBridge(nn.Module):
         """Sample the learned SB with Euler-Maruyama."""
         if n_steps < 2:
             raise ValueError("n_steps must be at least 2")
+        if fixed_mask is not None and fixed_mask.shape != t0.shape[:2]:
+            raise ValueError("fixed_mask must have shape (B,L)")
         R, x = R0.clone(), t0.clone()
         B = R.shape[0]
         dt = 1.0 / n_steps
