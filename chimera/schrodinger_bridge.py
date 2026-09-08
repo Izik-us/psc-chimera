@@ -120,16 +120,17 @@ class SE3SchrodingerBridge(nn.Module):
 
     @staticmethod
     def _call_drift(drift_model, R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn):
-        """Call the canonical drift signature, with a narrow legacy fallback."""
+        """Call the canonical drift signature, with narrow legacy fallbacks."""
         try:
-            return drift_model(
-                R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn
-            )
+            return drift_model(R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn)
         except TypeError as exc:
             try:
                 return drift_model(R, t, time, pair_cond, evol_single, R0)
             except TypeError:
-                raise exc
+                try:
+                    return drift_model(R, t, time, pair_cond, evol_single)
+                except TypeError:
+                    raise exc
 
     def _coupled_targets(self, R0, t0, R1, t1):
         """Sample target endpoints from an SE(3)-aware entropic coupling."""
@@ -148,14 +149,11 @@ class SE3SchrodingerBridge(nn.Module):
         """Sample an SE(3) Brownian bridge for a specified endpoint pairing."""
         B = R0.shape[0]
         delta_rot = self._relative_rotation(R0, R1)
-        rot_t, rot_drift = self.bridge.sample_bridge(
-            torch.zeros_like(delta_rot).reshape(B, -1), delta_rot.reshape(B, -1), time
-        )
+        rot_t, rot_drift = self.bridge.sample_bridge(torch.zeros_like(delta_rot).reshape(B, -1), delta_rot.reshape(B, -1), time)
         rot_t, rot_drift = rot_t.reshape_as(delta_rot), rot_drift.reshape_as(delta_rot)
         R_t = R0 @ so3_exp(rot_t)
         trans_t, trans_drift = self.bridge.sample_bridge(t0.reshape(B, -1), t1.reshape(B, -1), time)
         trans_t, trans_drift = trans_t.reshape_as(t0), trans_drift.reshape_as(t0)
-
         if fixed_mask is not None:
             mR = fixed_mask[..., None, None]
             mx = fixed_mask[..., None]
@@ -165,18 +163,7 @@ class SE3SchrodingerBridge(nn.Module):
             trans_drift = torch.where(mx, torch.zeros_like(trans_drift), trans_drift)
         return R_t, trans_t, rot_drift, trans_drift
 
-    def bridge_loss(
-        self,
-        R0,
-        t0,
-        R1,
-        t1,
-        pair_cond,
-        evol_single,
-        fixed_mask=None,
-        substrate_coords=None,
-        evol_conditioning_fn: Optional[Callable] = None,
-    ):
+    def bridge_loss(self, R0, t0, R1, t1, pair_cond, evol_single, fixed_mask=None, substrate_coords=None, evol_conditioning_fn: Optional[Callable] = None):
         """Train the marginal SB drift against coupled Brownian-bridge targets."""
         if R0.shape != R1.shape or t0.shape != t1.shape:
             raise ValueError("source and target SE(3) tensors must have matching shapes")
@@ -187,13 +174,8 @@ class SE3SchrodingerBridge(nn.Module):
         B = R0.shape[0]
         target_R, target_t = self._coupled_targets(R0, t0, R1, t1)
         time = torch.rand(B, device=R0.device, dtype=t0.dtype).clamp_(1e-4, 1.0 - 1e-4)
-        R_t, t_t, target_r, target_t_drift = self.interpolate(
-            R0, t0, target_R, target_t, time, fixed_mask=fixed_mask
-        )
-        pred_r, pred_t = self._call_drift(
-            self.drift_model, R_t, t_t, time, pair_cond, evol_single,
-            R0, t0, substrate_coords, evol_conditioning_fn
-        )
+        R_t, t_t, target_r, target_t_drift = self.interpolate(R0, t0, target_R, target_t, time, fixed_mask=fixed_mask)
+        pred_r, pred_t = self._call_drift(self.drift_model, R_t, t_t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn)
         valid = None if fixed_mask is None else (~fixed_mask).to(pred_r.dtype)
         rot_err = (pred_r - target_r).square().sum(-1)
         trans_err = (pred_t - target_t_drift).square().sum(-1)
@@ -202,18 +184,7 @@ class SE3SchrodingerBridge(nn.Module):
         return (rot_err + trans_err).mean()
 
     @torch.no_grad()
-    def sample(
-        self,
-        R0,
-        t0,
-        pair_cond,
-        evol_single,
-        n_steps=50,
-        fixed_mask=None,
-        substrate_coords=None,
-        evol_conditioning_fn: Optional[Callable] = None,
-        generator=None,
-    ):
+    def sample(self, R0, t0, pair_cond, evol_single, n_steps=50, fixed_mask=None, substrate_coords=None, evol_conditioning_fn: Optional[Callable] = None, generator=None):
         """Sample the learned SB with Euler-Maruyama."""
         if n_steps < 2:
             raise ValueError("n_steps must be at least 2")
@@ -225,10 +196,7 @@ class SE3SchrodingerBridge(nn.Module):
         noise_scale = (2.0 * self.bridge.diffusion * dt) ** 0.5
         for step in range(n_steps):
             tau = torch.full((B,), min(step * dt, 1.0 - 1e-4), device=R.device, dtype=x.dtype)
-            vr, vt = self._call_drift(
-                self.drift_model, R, x, tau, pair_cond, evol_single,
-                R0, t0, substrate_coords, evol_conditioning_fn
-            )
+            vr, vt = self._call_drift(self.drift_model, R, x, tau, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn)
             if step < n_steps - 1:
                 vr = vr + noise_scale * torch.randn(vr.shape, device=vr.device, dtype=vr.dtype, generator=generator)
                 vt = vt + noise_scale * torch.randn(vt.shape, device=vt.device, dtype=vt.dtype, generator=generator)
