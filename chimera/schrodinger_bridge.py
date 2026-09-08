@@ -116,6 +116,24 @@ class SE3SchrodingerBridge(nn.Module):
     def _relative_rotation(R0, R1):
         return so3_log(R0.transpose(-1, -2) @ R1)
 
+    @staticmethod
+    def _call_drift(drift_model, R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn):
+        """Call the canonical drift signature, with a narrow legacy fallback.
+
+        The production CHIMERA drift accepts the source frames, substrate
+        coordinates and evolutionary conditioning callback. Older lightweight
+        test doubles may expose only the original six-argument interface.
+        """
+        try:
+            return drift_model(
+                R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn
+            )
+        except TypeError as exc:
+            try:
+                return drift_model(R, t, time, pair_cond, evol_single, R0)
+            except TypeError:
+                raise exc
+
     def _coupled_targets(self, R0, t0, R1, t1):
         B = R0.shape[0]
         rot0 = torch.zeros(B, R0.shape[1] * 3, device=R0.device, dtype=R0.dtype)
@@ -138,9 +156,6 @@ class SE3SchrodingerBridge(nn.Module):
         trans_t, trans_drift = self.bridge.sample_bridge(t0.reshape(B, -1), t1.reshape(B, -1), time)
         trans_t, trans_drift = trans_t.reshape_as(t0), trans_drift.reshape_as(t0)
 
-        # Fixed residues are true hard constraints during bridge training too.
-        # They must not be perturbed and then merely ignored by the loss, since
-        # that would expose the drift model to invalid intermediate geometry.
         if fixed_mask is not None:
             mR = fixed_mask[..., None, None]
             mx = fixed_mask[..., None]
@@ -148,7 +163,7 @@ class SE3SchrodingerBridge(nn.Module):
             trans_t = torch.where(mx, t0, trans_t)
             rot_drift = torch.where(fixed_mask[..., None], torch.zeros_like(rot_drift), rot_drift)
             trans_drift = torch.where(mx, torch.zeros_like(trans_drift), trans_drift)
-        return R_t, trans_t, rot_drift.reshape_as(t0), trans_drift
+        return R_t, trans_t, rot_drift, trans_drift
 
     def bridge_loss(
         self,
@@ -175,8 +190,9 @@ class SE3SchrodingerBridge(nn.Module):
         R_t, t_t, target_r, target_t_drift = self.interpolate(
             R0, t0, target_R, target_t, time, fixed_mask=fixed_mask
         )
-        pred_r, pred_t = self.drift_model(
-            R_t, t_t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn
+        pred_r, pred_t = self._call_drift(
+            self.drift_model, R_t, t_t, time, pair_cond, evol_single,
+            R0, t0, substrate_coords, evol_conditioning_fn
         )
         valid = None if fixed_mask is None else (~fixed_mask).to(pred_r.dtype)
         rot_err = (pred_r - target_r).square().sum(-1)
@@ -208,8 +224,9 @@ class SE3SchrodingerBridge(nn.Module):
         noise_scale = (2.0 * self.bridge.diffusion * dt) ** 0.5
         for step in range(n_steps):
             tau = torch.full((B,), min(step * dt, 1.0 - 1e-4), device=R.device, dtype=x.dtype)
-            vr, vt = self.drift_model(
-                R, x, tau, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn
+            vr, vt = self._call_drift(
+                self.drift_model, R, x, tau, pair_cond, evol_single,
+                R0, t0, substrate_coords, evol_conditioning_fn
             )
             if step < n_steps - 1:
                 vr = vr + noise_scale * torch.randn_like(vr)
