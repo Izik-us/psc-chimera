@@ -57,6 +57,8 @@ class SchrodingerBridge(nn.Module):
         """Compute an entropic OT endpoint coupling in log space."""
         if cost.ndim != 2 or cost.numel() == 0:
             raise ValueError("cost must be a non-empty rank-2 tensor")
+        if not torch.isfinite(cost).all():
+            raise ValueError("cost must contain only finite values")
         n, m = cost.shape
         dtype, device = cost.dtype, cost.device
         eps = torch.finfo(dtype).eps
@@ -118,12 +120,7 @@ class SE3SchrodingerBridge(nn.Module):
 
     @staticmethod
     def _call_drift(drift_model, R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn):
-        """Call the canonical drift signature, with a narrow legacy fallback.
-
-        The production CHIMERA drift accepts the source frames, substrate
-        coordinates and evolutionary conditioning callback. Older lightweight
-        test doubles may expose only the original six-argument interface.
-        """
+        """Call the canonical drift signature, with a narrow legacy fallback."""
         try:
             return drift_model(
                 R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn
@@ -135,11 +132,24 @@ class SE3SchrodingerBridge(nn.Module):
                 raise exc
 
     def _coupled_targets(self, R0, t0, R1, t1):
-        B = R0.shape[0]
-        rot0 = torch.zeros(B, R0.shape[1] * 3, device=R0.device, dtype=R0.dtype)
-        rot1 = self._relative_rotation(R0, R1).reshape(B, -1)
-        cost = self.bridge.endpoint_cost(rot0, t0.reshape(B, -1), rot1, t1.reshape(B, -1))
-        coupling = self.bridge.sinkhorn_coupling(cost).to(dtype=torch.float32)
+        """Sample target endpoints from an SE(3)-aware entropic coupling.
+
+        The rotation cost for source i and target j must be computed from
+        R0_i^T R1_j. Computing one relative rotation per matching index and
+        reusing it for every source would silently corrupt the transport cost.
+        """
+        B, L = R0.shape[:2]
+        # Pairwise translational cost.
+        trans_cost = torch.cdist(t0.reshape(B, -1), t1.reshape(B, -1)).square()
+
+        # Pairwise rotational geodesic cost. For each source/target pair,
+        # R_ij = R0_i^T R1_j, then ||log(R_ij)||^2.
+        rel = torch.einsum("a lij, b lkj -> a b lik", R0, R1)
+        rel_log = so3_log(rel)
+        rot_cost = rel_log.reshape(B, B, -1).square().sum(-1)
+        cost = trans_cost + rot_cost
+
+        coupling = self.bridge.sinkhorn_coupling(cost)
         row_probs = coupling / coupling.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(coupling.dtype).eps)
         target_idx = torch.multinomial(row_probs, num_samples=1).squeeze(-1)
         return R1[target_idx], t1[target_idx]
@@ -212,6 +222,7 @@ class SE3SchrodingerBridge(nn.Module):
         fixed_mask=None,
         substrate_coords=None,
         evol_conditioning_fn: Optional[Callable] = None,
+        generator=None,
     ):
         """Sample the learned SB with Euler-Maruyama."""
         if n_steps < 2:
@@ -229,8 +240,8 @@ class SE3SchrodingerBridge(nn.Module):
                 R0, t0, substrate_coords, evol_conditioning_fn
             )
             if step < n_steps - 1:
-                vr = vr + noise_scale * torch.randn_like(vr)
-                vt = vt + noise_scale * torch.randn_like(vt)
+                vr = vr + noise_scale * torch.randn_like(vr, generator=generator)
+                vt = vt + noise_scale * torch.randn_like(vt, generator=generator)
             R = R @ so3_exp(vr * dt)
             x = x + vt * dt
             if fixed_mask is not None:
