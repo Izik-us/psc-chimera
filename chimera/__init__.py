@@ -40,9 +40,6 @@ _chimera_v2.CHIMERAv2.set_best_observed = set_best_observed
 _chimera_v2.CHIMERAv2.compute_expected_improvement = merge_ready_expected_improvement
 
 # Historical constructor names are accepted only as compatibility aliases.
-# They no longer create a second model implementation or override the current
-# architecture dimensions. This keeps old tests/configuration files loadable
-# while the canonical constructor remains d_* / n_* based.
 _original_chimera_init = _chimera_v2.CHIMERAv2.__init__
 
 
@@ -57,10 +54,6 @@ def _compat_chimera_init(self, *args, **kwargs):
             value = kwargs.pop(legacy_name)
             if canonical_name is not None and canonical_name not in kwargs:
                 kwargs[canonical_name] = value
-            # ``evoformer_layers`` and ``mpnn_layers`` were never faithful
-            # equivalents of the current local approximation constructors, so
-            # accepting them as no-op compatibility settings is safer than
-            # pretending they map to a different architecture.
     _original_chimera_init(self, *args, **kwargs)
 
 
@@ -76,8 +69,8 @@ from chimera.geometry import GeometryReport, validate_backbone
 from chimera.evaluators import BiologicalObjectiveEvaluator
 from chimera.pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from chimera.dpo import DPOBatch, DPOTrainer
-from chimera.bayesian import BayesianUncertaintyEstimator
 from chimera.reproducibility import seed_everything, seed_worker, make_generator
+from chimera.checkpoint import CheckpointManifest, save_manifest, load_manifest
 from chimera.domain_schema import DomainType, DomainSpan, AssemblySchema
 from chimera.multi_objective import (
     StructuralRetriever,
@@ -105,6 +98,7 @@ __all__ = [
     "GeometryReport", "validate_backbone", "BiologicalObjectiveEvaluator",
     "PCGradOptimizer", "pcgrad_step", "project_conflicting_gradients",
     "DPOBatch", "DPOTrainer", "BayesianUncertaintyEstimator",
+    "CheckpointManifest", "save_manifest", "load_manifest",
     "seed_everything", "seed_worker", "make_generator",
     "LegacyDPOTrainer", "LegacyBayesianUncertaintyEstimator", "LegacyMultiScaleNRPSDesigner",
     "DomainType", "DomainSpan", "AssemblySchema", "StructuralRetriever",
