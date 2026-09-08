@@ -79,7 +79,8 @@ def main():
     import sys
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from chimera.chimera_v2 import CHIMERAv2, NRPSConstraints
+    # Import through the package boundary so the repaired CHIMERAv2 wiring is used.
+    from chimera import CHIMERAv2, NRPSConstraints
     from chimera.structure_utils import load_backbone_pdb, load_msa
 
     model = CHIMERAv2.from_pretrained(
