@@ -22,16 +22,19 @@ PYTHON=".venv/bin/python"
 
 if [[ "$CPU_ONLY" -eq 1 ]]; then
   "$PYTHON" -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-else
-  "$PYTHON" -m pip install torch
 fi
 
-"$PYTHON" -m pip install -e . --no-deps
-"$PYTHON" -m pip install transformers fair-esm einops biopython faiss-cpu numpy scipy pandas h5py tqdm rich typer
+# Install the project from its declared dependency contract.  When --cpu-only
+# was requested, the already-installed CPU torch satisfies setup.py without
+# pulling a second PyTorch build.  This keeps the fast path complete rather
+# than maintaining a hand-copied dependency list that can drift from setup.py.
+"$PYTHON" -m pip install -e .
 
 if [[ "$WITH_DEV" -eq 1 ]]; then
-  "$PYTHON" -m pip install pytest 'black>=23.0.0'
+  "$PYTHON" -m pip install -r requirements-dev.txt
 fi
+
+"$PYTHON" scripts/check_install.py
 
 echo
 echo "PSC-CHIMERA fast environment ready."
