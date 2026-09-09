@@ -94,14 +94,14 @@ class SchrodingerBridge(nn.Module):
         return xt, drift
 
     def loss(self, pred_drift, target_drift, valid_mask=None):
-        """Bridge drift regression loss."""
+        """Bridge drift regression loss with correctly normalized masking."""
         if pred_drift.shape != target_drift.shape:
             raise ValueError("pred_drift and target_drift must have identical shapes")
         per_dim = F.mse_loss(pred_drift, target_drift, reduction="none")
         if valid_mask is not None:
             while valid_mask.ndim < per_dim.ndim:
                 valid_mask = valid_mask.unsqueeze(-1)
-            mask = valid_mask.to(per_dim.dtype)
+            mask = valid_mask.to(per_dim.dtype).expand_as(per_dim)
             return (per_dim * mask).sum() / mask.sum().clamp_min(1.0)
         return per_dim.mean()
 
@@ -116,27 +116,35 @@ class SE3SchrodingerBridge(nn.Module):
 
     @staticmethod
     def _relative_rotation(R0, R1):
+        if R0.shape != R1.shape or R0.shape[-2:] != (3, 3):
+            raise ValueError("R0 and R1 must have matching (...,3,3) shapes")
         return so3_log(R0.transpose(-1, -2) @ R1)
 
     @staticmethod
     def _call_drift(drift_model, R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn):
-        """Call the canonical drift signature, with narrow legacy fallbacks."""
+        """Call supported drift interfaces without swallowing internal TypeErrors."""
         try:
+            import inspect
+            signature = inspect.signature(drift_model.forward if isinstance(drift_model, nn.Module) else drift_model)
+            positional = [p for p in signature.parameters.values() if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+            has_varargs = any(p.kind == p.VAR_POSITIONAL for p in signature.parameters.values())
+        except (TypeError, ValueError):
+            positional, has_varargs = [], True
+
+        if has_varargs or len(positional) >= 9:
             return drift_model(R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn)
-        except TypeError as exc:
-            try:
-                return drift_model(R, t, time, pair_cond, evol_single, R0)
-            except TypeError:
-                try:
-                    return drift_model(R, t, time, pair_cond, evol_single)
-                except TypeError:
-                    raise exc
+        if len(positional) >= 6:
+            return drift_model(R, t, time, pair_cond, evol_single, R0)
+        if len(positional) >= 5:
+            return drift_model(R, t, time, pair_cond, evol_single)
+        raise TypeError("drift_model must accept at least 5 positional inputs")
 
     def _coupled_targets(self, R0, t0, R1, t1):
         """Sample target endpoints from an SE(3)-aware entropic coupling."""
-        B, L = R0.shape[:2]
+        B = R0.shape[0]
         trans_cost = torch.cdist(t0.reshape(B, -1), t1.reshape(B, -1)).square()
-        rel = torch.einsum("a lij, b lkj -> a b lik", R0, R1)
+        # Correct relative rotation is R0^T R1, not R0 R1^T.
+        rel = R0.transpose(-1, -2)[:, None] @ R1[None, :]
         rel_log = so3_log(rel)
         rot_cost = rel_log.reshape(B, B, -1).square().sum(-1)
         cost = trans_cost + rot_cost
