@@ -10,8 +10,8 @@ CHIMERA: Compositional Hierarchical Inference Model for
 __version__ = "2.0.0"
 __author__ = "PSC Engineering Pipeline"
 
-# The package boundary is intentionally side-effect free: importing chimera
-# must not monkey-patch classes in chimera_v2, flow_matching, or other modules.
+# The package boundary is intentionally side-effect free. Importing chimera
+# only exposes public classes and performs no import-time module mutation.
 from .architecture import CHIMERAv2, CanonicalCHIMERAv2
 from .chimera_v2 import NRPSConstraints
 from .codon_optimizer import CodonOptimizer, optimize_nrps_for_mammalian_expression
