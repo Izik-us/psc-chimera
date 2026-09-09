@@ -37,12 +37,15 @@ def _dropout_only(model: nn.Module):
             module.train(state)
 
 
-class BayesianUncertaintyEstimator:
+class BayesianUncertaintyEstimator(nn.Module):
     """MC-dropout posterior predictive uncertainty estimator.
 
     This is an approximate Bayesian method, not an exact posterior. The
     estimator intentionally exposes both variance and standard deviation so
     acquisition functions cannot accidentally treat variance as sigma.
+
+    The estimator is parameter-free but subclasses ``nn.Module`` so it can be
+    composed safely with CHIMERAv2's module-freezing and serialization code.
     """
 
     def __init__(
@@ -51,9 +54,7 @@ class BayesianUncertaintyEstimator:
         *,
         n_mc_samples: Optional[int] = None,
     ):
-        # ``n_mc_samples`` is retained as an explicit compatibility alias for
-        # the historical CHIMERAv2 constructor. It maps to the canonical
-        # ``n_samples`` parameter rather than creating a second API.
+        super().__init__()
         if n_mc_samples is not None:
             if n_samples != 30 and int(n_samples) != int(n_mc_samples):
                 raise ValueError("n_samples and n_mc_samples disagree")
@@ -143,7 +144,6 @@ class BayesianUncertaintyEstimator:
                     value = value.unsqueeze(-1)
                 values.append(value)
             stacked = torch.stack(values, dim=-1)
-            # Robust within-batch normalization removes the pLDDT 0-100 scale.
             lo = stacked.detach().amin(dim=1, keepdim=True)
             hi = stacked.detach().amax(dim=1, keepdim=True)
             return (stacked - lo) / (hi - lo).clamp_min(1e-6)
