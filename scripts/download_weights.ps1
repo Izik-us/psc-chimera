@@ -1,8 +1,8 @@
-$ErrorActionPreference = 'Stop'
-
 param(
     [string]$WeightsDir = '.\weights'
 )
+
+$ErrorActionPreference = 'Stop'
 
 New-Item -ItemType Directory -Force -Path $WeightsDir | Out-Null
 
