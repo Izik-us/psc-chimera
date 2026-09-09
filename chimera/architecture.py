@@ -8,9 +8,13 @@ from __future__ import annotations
 
 from typing import Optional
 
+import torch
+import torch.nn.functional as F
+
 from .chimera_v2 import CHIMERAv2 as _LegacyCHIMERAv2
 from .bayesian import BayesianUncertaintyEstimator
 from .dpo import DPOBatch, DPOTrainer
+from .multi_objective import ParetoObjectives
 from .pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 from .pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from .reproducibility import make_generator, seed_everything, seed_worker
@@ -40,61 +44,58 @@ class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
         n_domains = self.multi_scale_designer.n_domains
         n_modules = self.multi_scale_designer.n_modules
 
-        self.flow_model = FlowMatchingBackbone(
-            d_single=d_single,
-            d_pair=d_pair,
-            n_blocks=n_blocks,
-        )
+        self.flow_model = FlowMatchingBackbone(d_single=d_single, d_pair=d_pair, n_blocks=n_blocks)
         self.multi_scale_designer = MultiScaleNRPSDesigner(
-            d_residue=d_mpnn,
-            d_domain=256,
-            d_module=512,
-            d_assembly=256,
-            n_domains=n_domains,
-            n_modules=n_modules,
+            d_residue=d_mpnn, d_domain=256, d_module=512, d_assembly=256,
+            n_domains=n_domains, n_modules=n_modules,
         )
         self.substrate_conditioner = SubstratePocketConditioner(d_pair=d_pair)
         self.pareto_head = MergeReadyParetoMultiObjectiveHead(d_model=d_mpnn)
         self.uncertainty_estimator = BayesianUncertaintyEstimator(n_samples=30)
         self.sequence_policy = AutoregressiveSequencePolicy(d_mpnn)
         self._canonical_components = True
-
-        # Re-apply the intended frozen/trainable policy after replacing child modules.
         self.freeze_pretrained()
 
     def _autoregressive_context(self, logits: torch.Tensor) -> torch.Tensor:
-        """Convert candidate residue features into policy context."""
         if logits.ndim != 3 or logits.shape[-1] != self.sequence_policy.vocab_size:
             raise ValueError("sequence logits must have shape (B,L,vocab_size)")
         return self._seq_to_repr(logits)
 
     def forward(self, *args, **kwargs):
-        """Run the structural pipeline, then decode candidates causally.
-
-        The legacy structural designer remains useful as a geometric feature
-        extractor. Its per-position logits are converted to context features;
-        actual candidate sequences are sampled from the canonical causal policy.
-        """
+        """Generate structures and then sample sequences from the causal policy."""
+        generator = kwargs.pop("generator", None)
+        temperature = kwargs.pop("temperature", 1.0)
         outputs = super().forward(*args, **kwargs)
         logits = outputs["sequences"]
         B, n_seqs, L, V = logits.shape
         context = self._autoregressive_context(logits.reshape(B * n_seqs, L, V))
-        generator = kwargs.get("generator")
-        temperature = kwargs.get("temperature", 1.0)
+
         fixed_sequence = None
         constraints = kwargs.get("constraints")
         if constraints is not None and constraints.fixed_sequence is not None:
             fixed_sequence = constraints.fixed_sequence.to(logits.device)
             fixed_sequence = fixed_sequence[:, None, :].expand(B, n_seqs, L).reshape(B * n_seqs, L)
+
         sampled = self.sequence_policy.generate(
-            context,
-            length=L,
-            temperature=temperature,
-            generator=generator,
-            fixed_tokens=fixed_sequence,
+            context, length=L, temperature=temperature,
+            generator=generator, fixed_tokens=fixed_sequence,
         ).reshape(B, n_seqs, L)
+        sequence_features = self._seq_to_repr(F.one_hot(sampled, num_classes=V).to(logits.dtype))
+        objective_flat = self.pareto_head(sequence_features.reshape(B * n_seqs, L, -1))
         outputs["sequence_tokens"] = sampled
         outputs["sequences"] = F.one_hot(sampled, num_classes=V).to(logits.dtype)
+        outputs["evol_plausibility"] = objective_flat.evolutionary_plausibility.reshape(B, n_seqs)
+        outputs["structural_stability"] = objective_flat.structural_stability.reshape(B, n_seqs)
+        outputs["expression_efficiency"] = objective_flat.expression_efficiency.reshape(B, n_seqs)
+        outputs["substrate_selectivity"] = objective_flat.substrate_selectivity.reshape(B, n_seqs)
+        outputs["assembly_compat"] = objective_flat.assembly_compatibility.reshape(B, n_seqs)
+        outputs["pareto_objectives"] = ParetoObjectives(
+            evolutionary_plausibility=outputs["evol_plausibility"],
+            structural_stability=outputs["structural_stability"],
+            expression_efficiency=outputs["expression_efficiency"],
+            substrate_selectivity=outputs["substrate_selectivity"],
+            assembly_compatibility=outputs["assembly_compat"],
+        )
         return outputs
 
     def update_from_proteus(self, *args, **kwargs):
