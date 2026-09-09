@@ -36,16 +36,9 @@ setup(
     install_requires=RUNTIME_REQUIREMENTS,
     extras_require={
         "dev": ["pytest>=7.4.0", "black>=23.0.0"],
-        "viz": ["seaborn>=0.12.0"],
+        "viz": ["matplotlib>=3.7.0"],
         "md": ["openmm>=8.0.0", "mdtraj>=1.9.9"],
     },
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
-        "Topic :: Scientific/Engineering :: Bio-Informatics",
-        "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    ],
     entry_points={
         "console_scripts": [
             "chimera-design=scripts.run_design:main",
