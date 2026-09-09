@@ -29,11 +29,7 @@ from .runtime_compat import (
 
 
 class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
-    """CHIMERAv2 with explicit canonical component composition.
-
-    Corrected components are selected during construction, so importing the
-    package cannot mutate the semantics of unrelated legacy modules.
-    """
+    """CHIMERAv2 with explicit canonical component composition."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -58,12 +54,13 @@ class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
             n_domains=n_domains,
             n_modules=n_modules,
         )
-        self.substrate_conditioner = MergeReadySubstratePocketConditioner(
-            d_pair=d_pair,
-        )
+        self.substrate_conditioner = MergeReadySubstratePocketConditioner(d_pair=d_pair)
         self.pareto_head = MergeReadyParetoMultiObjectiveHead(d_model=d_mpnn)
         self.uncertainty_estimator = BayesianUncertaintyEstimator(n_samples=30)
         self._canonical_components = True
+
+        # Re-apply the intended frozen/trainable policy after replacing child modules.
+        self.freeze_pretrained()
 
     def update_from_proteus(self, *args, **kwargs):
         return merge_ready_update_from_proteus(self, *args, **kwargs)
@@ -78,22 +75,11 @@ class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
 CHIMERAv2 = CanonicalCHIMERAv2
 
 __all__ = [
-    "CHIMERAv2",
-    "CanonicalCHIMERAv2",
-    "BayesianUncertaintyEstimator",
-    "DPOBatch",
-    "DPOTrainer",
-    "MergeReadyParetoMultiObjectiveHead",
-    "PCGradOptimizer",
-    "pcgrad_step",
-    "project_conflicting_gradients",
-    "seed_everything",
-    "seed_worker",
-    "make_generator",
-    "SchrodingerBridge",
-    "SE3SchrodingerBridge",
-    "MergeReadyFlowMatchingBackbone",
-    "MergeReadyMultiScaleNRPSDesigner",
-    "MergeReadySubstratePocketConditioner",
+    "CHIMERAv2", "CanonicalCHIMERAv2", "BayesianUncertaintyEstimator",
+    "DPOBatch", "DPOTrainer", "MergeReadyParetoMultiObjectiveHead",
+    "PCGradOptimizer", "pcgrad_step", "project_conflicting_gradients",
+    "seed_everything", "seed_worker", "make_generator", "SchrodingerBridge",
+    "SE3SchrodingerBridge", "MergeReadyFlowMatchingBackbone",
+    "MergeReadyMultiScaleNRPSDesigner", "MergeReadySubstratePocketConditioner",
     "merge_ready_so3_log",
 ]
