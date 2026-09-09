@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import torch
+import torch.nn.functional as F
 
 
 def hat(v: torch.Tensor) -> torch.Tensor:
@@ -12,9 +13,7 @@ def hat(v: torch.Tensor) -> torch.Tensor:
         raise ValueError("v must have final dimension 3")
     x, y, z = v.unbind(-1)
     zero = torch.zeros_like(x)
-    return torch.stack(
-        (zero, -z, y, z, zero, -x, -y, x, zero), dim=-1
-    ).reshape(*v.shape[:-1], 3, 3)
+    return torch.stack((zero, -z, y, z, zero, -x, -y, x, zero), dim=-1).reshape(*v.shape[:-1], 3, 3)
 
 
 def so3_exp(omega: torch.Tensor) -> torch.Tensor:
@@ -42,7 +41,7 @@ def so3_exp(omega: torch.Tensor) -> torch.Tensor:
 
 
 def so3_log(R: torch.Tensor) -> torch.Tensor:
-    """Principal logarithm on SO(3), including a signed near-pi branch."""
+    """Principal logarithm on SO(3), with a stable signed near-pi branch."""
     if R.shape[-2:] != (3, 3):
         raise ValueError("R must end in (3,3)")
     trace = R.diagonal(dim1=-2, dim2=-1).sum(-1)
@@ -53,21 +52,18 @@ def so3_log(R: torch.Tensor) -> torch.Tensor:
     sin_theta = torch.sin(theta)
     regular = vee * (theta / sin_theta.clamp_min(1e-7)).unsqueeze(-1)
 
-    # For theta -> pi, vee loses the sign of the axis. Recover a signed axis
-    # from the largest diagonal term and use an off-diagonal sign.
-    diag = torch.diagonal(R, dim1=-2, dim2=-1)
-    axis_sq = ((diag + 1.0) * 0.5).clamp_min(0.0)
-    axis = axis_sq.sqrt()
-    idx = axis_sq.argmax(dim=-1)
-    basis = torch.nn.functional.one_hot(idx, num_classes=3).to(R.dtype)
-    dominant = axis.gather(-1, idx.unsqueeze(-1)).squeeze(-1).clamp_min(1e-7)
-    signs = torch.stack(
-        (R[..., 2, 1] - R[..., 1, 2], R[..., 0, 2] - R[..., 2, 0], R[..., 1, 0] - R[..., 0, 1]),
-        dim=-1,
-    )
-    sign = torch.where(signs.gather(-1, idx.unsqueeze(-1)).squeeze(-1) >= 0, 1.0, -1.0)
-    signed_axis = axis / dominant.unsqueeze(-1)
-    signed_axis = signed_axis * (basis * sign.unsqueeze(-1) + (1.0 - basis))
+    # Near pi, the diagonal determines axis magnitudes while the skew part
+    # retains the orientation sign for rotations approaching pi from below.
+    axis = (((torch.diagonal(R, dim1=-2, dim2=-1) + 1.0) * 0.5).clamp_min(0.0)).sqrt()
+    dominant = axis.argmax(dim=-1)
+    signs = torch.sign(vee)
+    dominant_sign = signs.gather(-1, dominant.unsqueeze(-1)).squeeze(-1)
+    dominant_sign = torch.where(dominant_sign == 0, torch.ones_like(dominant_sign), dominant_sign)
+    signed_axis = axis * dominant_sign.unsqueeze(-1)
+    nonzero = axis > 1e-6
+    signed_axis = torch.where(nonzero, signed_axis * torch.where(signs >= 0, 1.0, -1.0), signed_axis)
+    signed_axis = F.normalize(signed_axis, dim=-1, eps=1e-7)
+
     near_pi = theta > math.pi - 1e-4
     result = torch.where(near_pi.unsqueeze(-1), theta.unsqueeze(-1) * signed_axis, regular)
     small = theta < 1e-5
