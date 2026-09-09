@@ -31,17 +31,15 @@ def so3_log(R: torch.Tensor) -> torch.Tensor:
     theta = torch.acos(((trace - 1.0) * 0.5).clamp(-1.0, 1.0))
     skew = 0.5 * (R - R.transpose(-1, -2))
     vee = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1)
-    d0 = (1.0 + R[..., 0, 0] - R[..., 1, 1] - R[..., 2, 2]).clamp_min(0.0)
-    d1 = (1.0 - R[..., 0, 0] + R[..., 1, 1] - R[..., 2, 2]).clamp_min(0.0)
-    d2 = (1.0 - R[..., 0, 0] - R[..., 1, 1] + R[..., 2, 2]).clamp_min(0.0)
-    q = torch.stack([
-        0.5 * torch.sqrt(d0) * torch.where(R[..., 2, 1] - R[..., 1, 2] >= 0, 1.0, -1.0),
-        0.5 * torch.sqrt(d1) * torch.where(R[..., 0, 2] - R[..., 2, 0] >= 0, 1.0, -1.0),
-        0.5 * torch.sqrt(d2) * torch.where(R[..., 1, 0] - R[..., 0, 1] >= 0, 1.0, -1.0),
-    ], dim=-1)
-    sin_half = q.norm(dim=-1)
-    quat_omega = q * (theta / sin_half.clamp_min(1e-7)).unsqueeze(-1)
-    return torch.where((theta < 1e-4).unsqueeze(-1), vee, quat_omega)
+    sin_theta = torch.sin(theta)
+    regular = vee * (theta / sin_theta.clamp_min(1e-7)).unsqueeze(-1)
+    axis = (((torch.diagonal(R, dim1=-2, dim2=-1) + 1.0) * 0.5).clamp_min(0.0)).sqrt()
+    signs = torch.where(vee >= 0.0, torch.ones_like(vee), -torch.ones_like(vee))
+    signed_axis = axis * signs
+    signed_axis = signed_axis / signed_axis.norm(dim=-1, keepdim=True).clamp_min(1e-7)
+    near_pi = theta > torch.pi - 1e-4
+    result = torch.where(near_pi.unsqueeze(-1), theta.unsqueeze(-1) * signed_axis, regular)
+    return torch.where((theta < 1e-4).unsqueeze(-1), vee, result)
 
 
 class InvariantPointAttention(_flow_matching.InvariantPointAttention):
@@ -78,6 +76,9 @@ class InvariantPointAttention(_flow_matching.InvariantPointAttention):
         out_s = torch.einsum("bhij,bhjd->bhid", attn, V_s)
         relative = t.unsqueeze(1) - t.unsqueeze(2)
         out_p = torch.einsum("bhij,bijc->bhic", attn, relative)
+        # IPA values are represented relative to the residue frames.  Do not
+        # subtract the global translation a second time: doing so makes the
+        # result depend on the arbitrary origin of the coordinate system.
         out_p_local = torch.einsum("blij,bhlj->bhli", R.transpose(-1, -2), out_p)
         out_z = torch.einsum("bhij,bijc->bhic", attn, z)
         return self.out(torch.cat([
@@ -125,6 +126,12 @@ class FlowMatchingBackbone(_LegacyFlowBackbone):
 
     def __init__(self, d_single=256, d_pair=256, n_blocks=8):
         super().__init__(d_single, d_pair, n_blocks)
+        # Replace the legacy IPA inside the instantiated velocity network with
+        # the canonical SE(3)-invariant implementation.  This is composition,
+        # not import-time monkey-patching, and keeps the corrected math on the
+        # actual SB sampling path.
+        for block in self.flow_model.velocity_field.ipa_blocks:
+            block.ipa = InvariantPointAttention(d_single, d_pair, block.ipa.n_head)
         self.sb_model = SE3SchrodingerBridge(self.flow_model.velocity_field, diffusion=0.05, sinkhorn_iters=50)
 
     def sample(self, R0, t0, pair_cond, evol_single, n_steps=20, fixed_mask=None, substrate_coords=None, evol_conditioning_fn=None):
