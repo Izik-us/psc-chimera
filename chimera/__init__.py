@@ -26,7 +26,8 @@ from .bayesian import BayesianUncertaintyEstimator
 from .reproducibility import seed_everything, seed_worker, make_generator
 from .checkpoint import CheckpointManifest, save_manifest, load_manifest
 from .domain_schema import DomainType, DomainSpan, AssemblySchema
-from .multi_objective import StructuralRetriever, AutoregressiveSequencePolicy
+from .multi_objective import StructuralRetriever
+from .autoregressive_policy import AutoregressiveSequencePolicy
 from .pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 from .adapters import (
     BackboneEncoder,
