@@ -73,7 +73,7 @@ class AutoregressiveSequencePolicy(nn.Module):
         generator: Optional[torch.Generator] = None,
         fixed_tokens: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Causal left-to-right sampling from the policy itself."""
+        """Causal left-to-right sampling from the same policy used for DPO."""
         if length < 1:
             raise ValueError("length must be >= 1")
         if temperature <= 0:
@@ -83,15 +83,18 @@ class AutoregressiveSequencePolicy(nn.Module):
         if context.ndim != 3 or context.shape[1] != length:
             raise ValueError("context must have shape (B,length,D)")
         B = context.shape[0]
+        if fixed_tokens is not None and fixed_tokens.shape != (B, length):
+            raise ValueError("fixed_tokens must have shape (B,length)")
+
         tokens = torch.empty(B, 0, dtype=torch.long, device=context.device)
         for i in range(length):
-            # Pass only previously generated residues. _causal_logits adds BOS
-            # exactly once, so generation and teacher-forced training share the
-            # same conditional distribution.
-            logits = self._causal_logits(context[:, : i + 1], tokens)[:, -1]
+            # _causal_logits expects a target slot at the current position. The
+            # dummy value is never consumed by the current-position prediction;
+            # it only lets the decoder construct BOS + previously generated tokens.
+            dummy = torch.full((B, 1), 0, dtype=torch.long, device=context.device)
+            decoder_tokens = torch.cat([tokens, dummy], dim=1)
+            logits = self._causal_logits(context[:, : i + 1], decoder_tokens)[:, -1]
             if fixed_tokens is not None:
-                if fixed_tokens.shape != (B, length):
-                    raise ValueError("fixed_tokens must have shape (B,length)")
                 fixed = fixed_tokens[:, i].to(device=context.device, dtype=torch.long)
                 forced = fixed >= 0
                 if forced.any():
