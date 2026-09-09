@@ -111,6 +111,31 @@ class BayesianUncertaintyEstimator(nn.Module):
             result["total_variance"] = variance + aleatoric
         return result
 
+    @staticmethod
+    def _normalize_chimera_objectives(output: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Map CHIMERA's five heterogeneous objective channels into [0,1].
+
+        The transformation is fixed across MC samples. Per-sample min/max
+        normalization would manufacture disagreement and therefore corrupt
+        epistemic uncertainty.
+        """
+        keys = (
+            "evol_plausibility",
+            "structural_stability",
+            "expression_efficiency",
+            "substrate_selectivity",
+            "assembly_compat",
+        )
+        if any(k not in output for k in keys):
+            raise TypeError("CHIMERA uncertainty requires all five objective outputs")
+        evol = torch.sigmoid(output["evol_plausibility"])
+        stab = output["structural_stability"].clamp(0, 100) / 100.0
+        expr = output["expression_efficiency"].clamp(0, 1)
+        sel = output["substrate_selectivity"].clamp(0, 1)
+        asm = output["assembly_compat"].clamp(0, 1)
+        values = [evol, stab, expr, sel, asm]
+        return torch.stack([v.unsqueeze(-1) if v.ndim == 1 else v for v in values], dim=-1)
+
     def estimate_uncertainty(
         self,
         model: nn.Module,
@@ -118,37 +143,14 @@ class BayesianUncertaintyEstimator(nn.Module):
         n_samples: Optional[int] = None,
         per_candidate: bool = True,
     ) -> Dict[str, torch.Tensor]:
-        """Compatibility API for CHIMERA's candidate-generation path.
-
-        CHIMERA returns five objectives with different units. Uncertainty is
-        therefore computed after objective-wise normalization rather than
-        averaging pLDDT (0-100) directly with [0,1] scores. The returned
-        ``per_candidate_uncertainty`` is a standard deviation, suitable for EI.
-        """
+        """Return normalized five-objective uncertainty for CHIMERA candidates."""
         del per_candidate
-        objective_keys = (
-            "evol_plausibility",
-            "structural_stability",
-            "expression_efficiency",
-            "substrate_selectivity",
-            "assembly_compat",
+        result = self.predict(
+            model,
+            inputs,
+            output_getter=self._normalize_chimera_objectives,
+            n_samples=n_samples,
         )
-
-        def getter(output):
-            if not isinstance(output, dict) or any(k not in output for k in objective_keys):
-                raise TypeError("CHIMERA uncertainty requires all five objective outputs")
-            values = []
-            for key in objective_keys:
-                value = output[key]
-                if value.ndim == 1:
-                    value = value.unsqueeze(-1)
-                values.append(value)
-            stacked = torch.stack(values, dim=-1)
-            lo = stacked.detach().amin(dim=1, keepdim=True)
-            hi = stacked.detach().amax(dim=1, keepdim=True)
-            return (stacked - lo) / (hi - lo).clamp_min(1e-6)
-
-        result = self.predict(model, inputs, output_getter=getter, n_samples=n_samples)
         result["candidate_epistemic"] = result["epistemic_variance"].mean(dim=-1)
         result["per_candidate_uncertainty"] = result["epistemic_std"].mean(dim=-1)
         result["candidate_quality"] = result["mean"].mean(dim=-1)
@@ -171,7 +173,7 @@ class BayesianUncertaintyEstimator(nn.Module):
         z = improvement / sigma
         normal = torch.distributions.Normal(torch.zeros_like(z), torch.ones_like(z))
         ei = improvement * normal.cdf(z) + sigma * torch.exp(normal.log_prob(z))
-        deterministic = (mean - float(best_observed) - float(xi)).clamp_min(0)
+        deterministic = improvement.clamp_min(0)
         return torch.where(std > 1e-7, ei, deterministic)
 
     @staticmethod
