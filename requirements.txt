@@ -2,12 +2,12 @@
 # Python >= 3.10
 # Fast install: pip install -e .
 # Development tools: pip install -r requirements-dev.txt
+# Optional molecular-dynamics stack: pip install -e '.[md]'
 
 # Core ML
 # Install the platform-appropriate PyTorch build first when using a custom
 # CUDA/ROCm wheel index. pip install -e . will otherwise resolve PyTorch.
 torch>=2.1.0
-torchvision>=0.16.0
 transformers>=4.36.0
 fair-esm>=2.0.0
 einops>=0.7.0
