@@ -68,9 +68,7 @@ class InvariantPointAttention(_flow_matching.InvariantPointAttention):
         attn = F.softmax(attn_s + weights * attn_p + attn_z, dim=-1)
         out_s = torch.einsum("bhij,bhjd->bhid", attn, V_s)
         out_v_global = torch.einsum("bhij,bhjpc->bhlpc", attn, V_global)
-        # Average the configured value points into one equivariant vector per
-        # head. Mapping it back with R_i^T removes the arbitrary global frame.
-        out_v_local = torch.einsum("blji,bhljc->bhlic", R, out_v_global.mean(dim=3)).squeeze(3)
+        out_v_local = torch.einsum("blji,bhlj->bhli", R, out_v_global.mean(dim=3))
         out_z = torch.einsum("bhij,bijc->bhic", attn, z)
         return self.out(torch.cat([
             out_s.permute(0, 2, 1, 3).reshape(B, L, -1),
