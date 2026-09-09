@@ -33,5 +33,4 @@ Write-Host 'For optional molecular-dynamics validation:'
 Write-Host "  & '$Python' -m pip install -e '.[md]'"
 Write-Host ''
 Write-Host 'To download the supported native checkpoints:'
-Write-Host "  & '$Python' -c \"from pathlib import Path; import urllib.request; Path('weights').mkdir(exist_ok=True); print('Use scripts\\download_weights.ps1 .\\weights for checkpoint downloads.')\""
 Write-Host '  .\scripts\download_weights.ps1 .\weights'
