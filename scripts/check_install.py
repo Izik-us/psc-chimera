@@ -7,6 +7,7 @@ Run with the project's Python interpreter after installation:
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import torch
@@ -30,7 +31,7 @@ REQUIRED = {
 def main() -> int:
     print("PSC-CHIMERA environment diagnostic")
     print("=" * 40)
-    print(f"Python: {torch.__config__.show().splitlines()[0] if torch else 'unknown'}")
+    print(f"Python: {sys.version.split()[0]}")
     print(f"PyTorch: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
