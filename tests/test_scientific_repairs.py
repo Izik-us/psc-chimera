@@ -6,6 +6,7 @@ import torch.nn as nn
 from chimera.bayesian import BayesianUncertaintyEstimator
 from chimera.dpo import DPOBatch, DPOTrainer
 from chimera.flow_matching import so3_exp, so3_log
+from chimera.lie import relative_rotation, so3_exp as canonical_so3_exp, so3_log as canonical_so3_log
 from chimera.pcgrad import project_conflicting_gradients
 from chimera.schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 
@@ -17,6 +18,17 @@ def test_so3_log_exp_roundtrip():
     assert torch.allclose(recovered, omega, atol=1e-5)
     eye = R.transpose(-1, -2) @ R
     assert torch.allclose(eye, torch.eye(3).expand_as(eye), atol=1e-5)
+
+
+def test_canonical_so3_handles_near_pi_and_relative_order():
+    axis = torch.tensor([[1.0, 2.0, -1.0]])
+    axis = axis / axis.norm(dim=-1, keepdim=True)
+    omega = axis * (math.pi - 1e-5)
+    R0 = canonical_so3_exp(torch.tensor([[0.2, -0.1, 0.3]]))
+    R1 = R0 @ canonical_so3_exp(omega)
+    recovered = relative_rotation(R0, R1)
+    assert torch.allclose(recovered, omega, atol=5e-4)
+    assert torch.allclose(canonical_so3_log(R0.transpose(-1, -2) @ R1), omega, atol=5e-4)
 
 
 def test_brownian_bridge_endpoints_and_drift():
@@ -45,8 +57,6 @@ def test_pcgrad_removes_negative_component():
     l1 = p[0] - p[1]
     l2 = -p[0] - p[1]
     project_conflicting_gradients([l1, l2], [p])
-    # g1=(1,-1), g2=(-1,-1) are conflicting. After projection the
-    # resulting update must not contain the original conflicting component.
     assert p.grad is not None
     assert torch.isfinite(p.grad).all()
 
