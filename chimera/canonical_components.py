@@ -1,9 +1,4 @@
-"""Canonical CHIMERAv2 component implementations.
-
-This module contains the production repair implementations formerly kept in
-``runtime_compat.py``.  They are imported explicitly by the architecture
-composition root; no import-time monkey-patching is used.
-"""
+"""Canonical CHIMERAv2 component implementations."""
 
 from __future__ import annotations
 
@@ -24,114 +19,103 @@ AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
 
 
 def so3_log(R: torch.Tensor) -> torch.Tensor:
-    """Numerically stable principal SO(3) logarithm with signed pi branches."""
     if R.shape[-2:] != (3, 3):
         raise ValueError("R must end in (3,3)")
     trace = R.diagonal(dim1=-2, dim2=-1).sum(-1)
     theta = torch.acos(((trace - 1.0) * 0.5).clamp(-1.0, 1.0))
     skew = 0.5 * (R - R.transpose(-1, -2))
     vee = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1)
-    sin_theta = torch.sin(theta)
-    regular = vee * (theta / sin_theta.clamp_min(1e-7)).unsqueeze(-1)
+    regular = vee * (theta / torch.sin(theta).clamp_min(1e-7)).unsqueeze(-1)
     axis = (((torch.diagonal(R, dim1=-2, dim2=-1) + 1.0) * 0.5).clamp_min(0.0)).sqrt()
     signs = torch.where(vee >= 0.0, torch.ones_like(vee), -torch.ones_like(vee))
     signed_axis = axis * signs
     signed_axis = signed_axis / signed_axis.norm(dim=-1, keepdim=True).clamp_min(1e-7)
-    near_pi = theta > torch.pi - 1e-4
-    result = torch.where(near_pi.unsqueeze(-1), theta.unsqueeze(-1) * signed_axis, regular)
+    result = torch.where((theta > torch.pi - 1e-4).unsqueeze(-1), theta.unsqueeze(-1) * signed_axis, regular)
     return torch.where((theta < 1e-4).unsqueeze(-1), vee, result)
 
 
 class InvariantPointAttention(_flow_matching.InvariantPointAttention):
-    """IPA with translation-safe local vector aggregation."""
+    """SE(3)-invariant IPA using local-frame query/key/value points."""
 
     def forward(self, s, z, R, t, substrate_coords: Optional[torch.Tensor] = None):
         B, L, _ = s.shape
 
-        def split_heads(x, n):
-            return x.view(B, L, n, -1).permute(0, 2, 1, 3)
+        def split_heads(x):
+            return x.view(B, L, self.n_head, -1).permute(0, 2, 1, 3)
 
-        Q_s = split_heads(self.q_s(s), self.n_head)
-        K_s = split_heads(self.k_s(s), self.n_head)
-        V_s = split_heads(self.v_s(s), self.n_head)
+        Q_s, K_s, V_s = split_heads(self.q_s(s)), split_heads(self.k_s(s)), split_heads(self.v_s(s))
+        Q_local = self.q_p(s).view(B, L, self.n_head, self.n_qk_pts, 3)
+        K_local = self.k_p(s).view(B, L, self.n_head, self.n_qk_pts, 3)
+        V_local = self.v_p(s).view(B, L, self.n_head, self.n_v_pts, 3)
 
-        def transform_points(pts_local, R_frames, t_frames):
-            pts = pts_local.view(B, L, -1, 3)
-            R_exp = R_frames.unsqueeze(2).expand(-1, -1, pts.shape[2], -1, -1)
-            t_exp = t_frames.unsqueeze(2).expand(-1, -1, pts.shape[2], -1)
-            return torch.einsum("blnij,blnj->blni", R_exp, pts) + t_exp
+        Q_global = torch.einsum("blij,bhlpj->bhlpi", R, Q_local.permute(0, 2, 1, 3, 4)) + t[:, None, :, None, :]
+        K_global = torch.einsum("blij,bhlpj->bhlpi", R, K_local.permute(0, 2, 1, 3, 4)) + t[:, None, :, None, :]
+        V_global = torch.einsum("blij,bhlpj->bhlpi", R, V_local.permute(0, 2, 1, 3, 4)) + t[:, None, :, None, :]
 
-        Q_p = transform_points(self.q_p(s).view(B, L, self.n_head * self.n_qk_pts, 3), R, t).view(B, L, self.n_head, self.n_qk_pts, 3)
-        K_p = transform_points(self.k_p(s).view(B, L, self.n_head * self.n_qk_pts, 3), R, t).view(B, L, self.n_head, self.n_qk_pts, 3)
-        V_p = transform_points(self.v_p(s).view(B, L, self.n_head * self.n_v_pts, 3), R, t).view(B, L, self.n_head, self.n_v_pts, 3)
         attn_s = torch.einsum("bhid,bhjd->bhij", Q_s, K_s) * (Q_s.shape[-1] ** -0.5)
-        diff_p = Q_p.permute(0, 2, 1, 3, 4).unsqueeze(3) - K_p.permute(0, 2, 1, 3, 4).unsqueeze(2)
-        attn_p = -(diff_p.norm(dim=-1) ** 2).sum(dim=-1)
+        diff = Q_global.unsqueeze(3) - K_global.unsqueeze(2)
+        attn_p = -(diff.square().sum(-1)).sum(-1)
         attn_z = self.pair_bias(z).permute(0, 3, 1, 2)
+
         if substrate_coords is not None:
-            min_dist = (t.unsqueeze(2) - substrate_coords.unsqueeze(1)).norm(dim=-1).amin(dim=-1)
+            if substrate_coords.ndim != 3 or substrate_coords.shape[0] != B or substrate_coords.shape[-1] != 3:
+                raise ValueError("substrate_coords must have shape (B,K,3)")
+            min_dist = torch.cdist(t, substrate_coords).amin(dim=-1)
             gate = self.substrate_gate(s).permute(0, 2, 1).unsqueeze(-1)
             attn_z = attn_z + gate * torch.exp(-min_dist / 5.0).unsqueeze(1).unsqueeze(-1)
-        attn = F.softmax(attn_s + F.softplus(self.gamma).view(1, self.n_head, 1, 1) * attn_p + attn_z, dim=-1)
+
+        weights = F.softplus(self.gamma).view(1, self.n_head, 1, 1)
+        attn = F.softmax(attn_s + weights * attn_p + attn_z, dim=-1)
         out_s = torch.einsum("bhij,bhjd->bhid", attn, V_s)
-        relative = t.unsqueeze(1) - t.unsqueeze(2)
-        out_p = torch.einsum("bhij,bijc->bhic", attn, relative)
-        # IPA values are represented relative to the residue frames.  Do not
-        # subtract the global translation a second time: doing so makes the
-        # result depend on the arbitrary origin of the coordinate system.
-        out_p_local = torch.einsum("blij,bhlj->bhli", R.transpose(-1, -2), out_p)
+        out_v_global = torch.einsum("bhij,bhjpc->bhlpc", attn, V_global)
+        # Average the configured value points into one equivariant vector per
+        # head. Mapping it back with R_i^T removes the arbitrary global frame.
+        out_v_local = torch.einsum("blji,bhljc->bhlic", R, out_v_global.mean(dim=3)).squeeze(3)
         out_z = torch.einsum("bhij,bijc->bhic", attn, z)
         return self.out(torch.cat([
             out_s.permute(0, 2, 1, 3).reshape(B, L, -1),
-            out_p_local.permute(0, 2, 1, 3).reshape(B, L, -1),
+            out_v_local.permute(0, 2, 1, 3).reshape(B, L, -1),
             out_z.permute(0, 2, 1, 3).reshape(B, L, -1),
         ], dim=-1))
 
 
 class MultiScaleNRPSDesigner(_LegacyDesigner):
-    """Hierarchical designer with the corrected 28-D geometry edge contract."""
-
+    """Hierarchical designer consuming the canonical 28-D edge representation."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.edge_proj = nn.Linear(28, self.edge_proj.out_features)
 
 
 class SubstratePocketConditioner(_LegacyConditioner):
-    """Substrate conditioner with direct residue-to-atom distance gating."""
-
+    """Substrate conditioner with explicit residue/pocket geometry gating."""
     def forward(self, pair_repr, substrate_id, substrate_coords=None, substrate_types=None, residue_coords=None):
         B, L, _, d = pair_repr.shape
-        if substrate_id.ndim != 1 or substrate_id.shape[0] != B:
+        if substrate_id.shape != (B,):
             raise ValueError(f"substrate_id must have shape ({B},)")
         pair_repr = pair_repr + self.substrate_proj(self.substrate_emb(substrate_id))[:, None, None, :]
         if substrate_coords is None or substrate_types is None:
             return pair_repr
         if substrate_coords.ndim != 3 or substrate_coords.shape[0] != B or substrate_coords.shape[-1] != 3:
-            raise ValueError("substrate_coords must have shape (B, N_atoms, 3)")
+            raise ValueError("substrate_coords must have shape (B,N,3)")
         if substrate_types.shape[:2] != substrate_coords.shape[:2] or substrate_types.shape[-1] != 8:
-            raise ValueError("substrate_types must have shape (B, N_atoms, 8)")
+            raise ValueError("substrate_types must have shape (B,N,8)")
         atom_repr = self.atom_encoder(torch.cat([substrate_coords, substrate_types.to(pair_repr.dtype)], dim=-1))
-        sub_pair, _ = self.sub_cross_attn(pair_repr.reshape(B, L * L, d), atom_repr, atom_repr)
-        sub_pair = sub_pair.reshape(B, L, L, d)
+        enriched, _ = self.sub_cross_attn(pair_repr.reshape(B, L * L, d), atom_repr, atom_repr)
+        enriched = enriched.reshape(B, L, L, d)
         if residue_coords is not None:
             if residue_coords.shape != (B, L, 3):
-                raise ValueError("residue_coords must have shape (B, L, 3)")
+                raise ValueError("residue_coords must have shape (B,L,3)")
             gate = torch.exp(-torch.cdist(residue_coords, substrate_coords).amin(dim=-1) / 8.0)
-            sub_pair = sub_pair * gate[:, :, None, None] * gate[:, None, :, None]
-        return self.sub_norm(pair_repr + sub_pair)
+            enriched = enriched * gate[:, :, None, None] * gate[:, None, :, None]
+        return self.sub_norm(pair_repr + enriched)
 
 
 class FlowMatchingBackbone(_LegacyFlowBackbone):
-    """CHIMERAv2 structure backbone using the canonical stochastic SB path."""
-
+    """Structure backbone whose instantiated SB velocity field uses canonical IPA."""
     def __init__(self, d_single=256, d_pair=256, n_blocks=8):
         super().__init__(d_single, d_pair, n_blocks)
-        # Replace the legacy IPA inside the instantiated velocity network with
-        # the canonical SE(3)-invariant implementation.  This is composition,
-        # not import-time monkey-patching, and keeps the corrected math on the
-        # actual SB sampling path.
         for block in self.flow_model.velocity_field.ipa_blocks:
-            block.ipa = InvariantPointAttention(d_single, d_pair, block.ipa.n_head)
+            block.ipa = InvariantPointAttention(d_single, d_pair, block.ipa.n_head, block.ipa.n_qk_pts, block.ipa.n_v_pts)
         self.sb_model = SE3SchrodingerBridge(self.flow_model.velocity_field, diffusion=0.05, sinkhorn_iters=50)
 
     def sample(self, R0, t0, pair_cond, evol_single, n_steps=20, fixed_mask=None, substrate_coords=None, evol_conditioning_fn=None):
@@ -144,14 +128,11 @@ class FlowMatchingBackbone(_LegacyFlowBackbone):
 
 
 def update_from_proteus(self, survivors, failures, msa, pair_features, n_dpo_steps=50, learning_rate=1e-5, best_context_batch_index=0):
-    """Run canonical DPO on the actual autoregressive sequence policy."""
     if not survivors or not failures:
         raise ValueError("Need at least one survivor and one failure for DPO")
     if learning_rate <= 0 or n_dpo_steps < 1:
         raise ValueError("learning_rate must be positive and n_dpo_steps must be >= 1")
-    if msa.ndim != 3 or pair_features.ndim != 4:
-        raise ValueError("msa must be (B,N_seq,L) and pair_features must be (B,L,L,C)")
-    if msa.shape[0] != pair_features.shape[0] or msa.shape[2] != pair_features.shape[1] or pair_features.shape[1] != pair_features.shape[2]:
+    if msa.ndim != 3 or pair_features.ndim != 4 or msa.shape[0] != pair_features.shape[0] or msa.shape[2] != pair_features.shape[1] or pair_features.shape[1] != pair_features.shape[2]:
         raise ValueError("MSA and pair feature batch/length dimensions do not match")
     if not 0 <= best_context_batch_index < msa.shape[0]:
         raise ValueError("best_context_batch_index is outside the MSA batch")
@@ -163,45 +144,35 @@ def update_from_proteus(self, survivors, failures, msa, pair_features, n_dpo_ste
 
     def encode(sequences):
         length = len(sequences[0])
-        if length == 0 or any(len(seq) != length for seq in sequences):
+        if length == 0 or any(len(s) != length for s in sequences):
             raise ValueError("all DPO sequences must have the same non-zero length")
-        invalid = sorted({aa for seq in sequences for aa in seq if aa not in AA_ORDER})
+        invalid = sorted({aa for s in sequences for aa in s if aa not in AA_ORDER})
         if invalid:
             raise ValueError(f"invalid amino-acid symbols in PROTEUS data: {invalid}")
-        return torch.tensor([[AA_ORDER.index(aa) for aa in seq] for seq in sequences], device=context.device, dtype=torch.long)
+        return torch.tensor([[AA_ORDER.index(aa) for aa in s] for s in sequences], device=context.device, dtype=torch.long)
 
     n_pairs = max(len(survivors), len(failures))
     chosen = encode([survivors[i % len(survivors)] for i in range(n_pairs)])
     rejected = encode([failures[i % len(failures)] for i in range(n_pairs)])
-    context_batch = context.expand(n_pairs, -1, -1).contiguous()
+    context = context.expand(n_pairs, -1, -1).contiguous()
     mask = torch.ones_like(chosen, dtype=torch.bool)
-    batch = DPOBatch(context_batch, chosen, rejected, mask, mask)
-    policy, reference = self.sequence_policy, self._reference_model.sequence_policy
-    optimizer = torch.optim.AdamW(policy.parameters(), lr=learning_rate)
+    batch = DPOBatch(context, chosen, rejected, mask, mask)
+    optimizer = torch.optim.AdamW(self.sequence_policy.parameters(), lr=learning_rate)
     trainer = DPOTrainer(beta=0.1)
     metrics = {}
     for _ in range(n_dpo_steps):
-        metrics = trainer.step(optimizer, policy, reference, batch)
+        metrics = trainer.step(optimizer, self.sequence_policy, self._reference_model.sequence_policy, batch)
     return metrics
 
 
 def set_best_observed(self, value: Optional[float]) -> None:
-    """Set the experimentally observed EI baseline in normalized utility space."""
     if value is not None and not 0.0 <= float(value) <= 1.0:
-        raise ValueError("best_observed must be in the normalized [0,1] utility space")
+        raise ValueError("best_observed must be in normalized [0,1] utility space")
     self.best_observed = None if value is None else float(value)
 
 
 def expected_improvement(self, mean, std, best_observed):
-    """Use the canonical Gaussian EI implementation and observed baseline."""
-    effective_best = getattr(self, "best_observed", None)
-    if effective_best is None:
-        effective_best = float(best_observed)
-    return BayesianUncertaintyEstimator.expected_improvement(mean, std, effective_best)
+    return BayesianUncertaintyEstimator.expected_improvement(mean, std, getattr(self, "best_observed", best_observed))
 
 
-__all__ = [
-    "so3_log", "InvariantPointAttention", "MultiScaleNRPSDesigner",
-    "SubstratePocketConditioner", "FlowMatchingBackbone", "update_from_proteus",
-    "set_best_observed", "expected_improvement",
-]
+__all__ = ["so3_log", "InvariantPointAttention", "MultiScaleNRPSDesigner", "SubstratePocketConditioner", "FlowMatchingBackbone", "update_from_proteus", "set_best_observed", "expected_improvement"]
