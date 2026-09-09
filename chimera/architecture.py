@@ -1,8 +1,8 @@
 """Canonical public architecture boundary for PSC-CHIMERA v2.
 
-The supported CHIMERAv2 entry point is assembled explicitly here.  The package
-initializer must not mutate classes in other modules at import time.  Legacy
-implementations remain importable for backwards compatibility, but the
+The supported CHIMERAv2 entry point is assembled explicitly here. The package
+initializer does not mutate classes in other modules at import time. Legacy
+implementations remain importable for backwards compatibility, while the
 canonical model is constructed through :class:`CanonicalCHIMERAv2`.
 """
 
@@ -19,7 +19,6 @@ from .reproducibility import make_generator, seed_everything, seed_worker
 from .schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 from .runtime_compat import (
     MergeReadyFlowMatchingBackbone,
-    MergeReadyInvariantPointAttention,
     MergeReadyMultiScaleNRPSDesigner,
     MergeReadySubstratePocketConditioner,
     merge_ready_expected_improvement,
@@ -32,7 +31,6 @@ from .runtime_compat import (
 class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
     """CHIMERAv2 with explicit canonical component composition.
 
-    This class replaces the previous import-time monkey-patching strategy.
     Corrected components are selected during construction, so importing the
     package cannot mutate the semantics of unrelated legacy modules.
     """
@@ -40,45 +38,43 @@ class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Preserve the dimensions selected by the parent constructor while
-        # replacing only components whose repaired implementations have a
-        # different public contract.
+        d_single = self.evoformer.d_single
+        d_pair = self.pair_connector.input_proj.out_features
+        d_mpnn = self.base_mpnn.node_features
+        n_blocks = getattr(self.flow_model.flow_model.velocity_field, "n_blocks", 8)
+        n_domains = self.multi_scale_designer.n_domains
+        n_modules = self.multi_scale_designer.n_modules
+
         self.flow_model = MergeReadyFlowMatchingBackbone(
-            d_single=self.evoformer.d_single,
-            d_pair=self.pair_connector.input_proj.out_features,
-            n_blocks=self.flow_model.flow_model.n_blocks,
+            d_single=d_single,
+            d_pair=d_pair,
+            n_blocks=n_blocks,
         )
         self.multi_scale_designer = MergeReadyMultiScaleNRPSDesigner(
-            d_residue=self.base_mpnn.node_features,
+            d_residue=d_mpnn,
             d_domain=256,
             d_module=512,
             d_assembly=256,
-            n_domains=self.multi_scale_designer.n_domains,
-            n_modules=self.multi_scale_designer.n_modules,
+            n_domains=n_domains,
+            n_modules=n_modules,
         )
         self.substrate_conditioner = MergeReadySubstratePocketConditioner(
-            d_pair=self.pair_connector.input_proj.out_features,
+            d_pair=d_pair,
         )
-        self.pareto_head = MergeReadyParetoMultiObjectiveHead(
-            d_model=self.base_mpnn.node_features,
-        )
-        self.uncertainty_estimator = BayesianUncertaintyEstimator(
-            n_samples=getattr(self, "n_mc_dropout", 30),
-        )
+        self.pareto_head = MergeReadyParetoMultiObjectiveHead(d_model=d_mpnn)
+        self.uncertainty_estimator = BayesianUncertaintyEstimator(n_samples=30)
         self._canonical_components = True
 
     def update_from_proteus(self, *args, **kwargs):
         return merge_ready_update_from_proteus(self, *args, **kwargs)
 
     def set_best_observed(self, value: Optional[float]) -> None:
-        return set_best_observed(self, value)
+        set_best_observed(self, value)
 
     def compute_expected_improvement(self, mean, std, best_observed):
         return merge_ready_expected_improvement(self, mean, std, best_observed)
 
 
-# Explicit aliases used by new code.  No class attributes are rewritten in
-# legacy modules at import time.
 CHIMERAv2 = CanonicalCHIMERAv2
 
 __all__ = [
@@ -97,7 +93,6 @@ __all__ = [
     "SchrodingerBridge",
     "SE3SchrodingerBridge",
     "MergeReadyFlowMatchingBackbone",
-    "MergeReadyInvariantPointAttention",
     "MergeReadyMultiScaleNRPSDesigner",
     "MergeReadySubstratePocketConditioner",
     "merge_ready_so3_log",
