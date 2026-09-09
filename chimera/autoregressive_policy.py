@@ -85,15 +85,18 @@ class AutoregressiveSequencePolicy(nn.Module):
         B = context.shape[0]
         tokens = torch.empty(B, 0, dtype=torch.long, device=context.device)
         for i in range(length):
-            prefix = torch.full((B, 1), self.vocab_size, dtype=torch.long, device=context.device)
-            decoder_tokens = torch.cat([prefix, tokens], dim=1)
-            # Evaluate only the next position. This preserves the same causal
-            # policy used by training and DPO without exposing future tokens.
-            logits = self._causal_logits(context[:, : i + 1], decoder_tokens)[:, -1]
+            # Pass only previously generated residues. _causal_logits adds BOS
+            # exactly once, so generation and teacher-forced training share the
+            # same conditional distribution.
+            logits = self._causal_logits(context[:, : i + 1], tokens)[:, -1]
             if fixed_tokens is not None:
+                if fixed_tokens.shape != (B, length):
+                    raise ValueError("fixed_tokens must have shape (B,length)")
                 fixed = fixed_tokens[:, i].to(device=context.device, dtype=torch.long)
                 forced = fixed >= 0
                 if forced.any():
+                    if fixed[forced].min() < 0 or fixed[forced].max() >= self.vocab_size:
+                        raise ValueError("fixed token IDs are outside the policy vocabulary")
                     logits = logits.clone()
                     logits[forced] = -torch.inf
                     logits[forced, fixed[forced]] = 0.0
