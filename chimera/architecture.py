@@ -32,9 +32,23 @@ from .canonical_components import (
 
 
 class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
-    """CHIMERAv2 with explicit canonical component composition."""
+    """CHIMERAv2 with explicit canonical component composition.
+
+    ``evoformer_layers``, ``flow_blocks`` and ``mpnn_layers`` are retained only
+    as construction-time compatibility aliases.  The current prototype does
+    not expose those legacy knobs as independent architecture controls.
+    """
 
     def __init__(self, *args, **kwargs):
+        legacy_evoformer_layers = kwargs.pop("evoformer_layers", None)
+        legacy_flow_blocks = kwargs.pop("flow_blocks", None)
+        legacy_mpnn_layers = kwargs.pop("mpnn_layers", None)
+        if legacy_flow_blocks is not None:
+            kwargs["n_flow_blocks"] = int(legacy_flow_blocks)
+        # The approximation's EvoFormer/MPNN depths are fixed internally.  Do
+        # not silently reinterpret obsolete layer-count arguments as unrelated
+        # hyperparameters.  Accept them only so old callers can migrate.
+        del legacy_evoformer_layers, legacy_mpnn_layers
         super().__init__(*args, **kwargs)
 
         d_single = self.evoformer.d_single
