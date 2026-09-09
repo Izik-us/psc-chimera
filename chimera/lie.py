@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 
 import torch
-import torch.nn.functional as F
 
 
 def hat(v: torch.Tensor) -> torch.Tensor:
@@ -52,17 +51,12 @@ def so3_log(R: torch.Tensor) -> torch.Tensor:
     sin_theta = torch.sin(theta)
     regular = vee * (theta / sin_theta.clamp_min(1e-7)).unsqueeze(-1)
 
-    # Near pi, the diagonal determines axis magnitudes while the skew part
-    # retains the orientation sign for rotations approaching pi from below.
+    # Near pi the trace formula is ill-conditioned.  The diagonal terms give
+    # |axis|, while the antisymmetric part gives its signs for theta -> pi-.
     axis = (((torch.diagonal(R, dim1=-2, dim2=-1) + 1.0) * 0.5).clamp_min(0.0)).sqrt()
-    dominant = axis.argmax(dim=-1)
-    signs = torch.sign(vee)
-    dominant_sign = signs.gather(-1, dominant.unsqueeze(-1)).squeeze(-1)
-    dominant_sign = torch.where(dominant_sign == 0, torch.ones_like(dominant_sign), dominant_sign)
-    signed_axis = axis * dominant_sign.unsqueeze(-1)
-    nonzero = axis > 1e-6
-    signed_axis = torch.where(nonzero, signed_axis * torch.where(signs >= 0, 1.0, -1.0), signed_axis)
-    signed_axis = F.normalize(signed_axis, dim=-1, eps=1e-7)
+    signs = torch.where(vee >= 0.0, torch.ones_like(vee), -torch.ones_like(vee))
+    signed_axis = axis * signs
+    signed_axis = signed_axis / signed_axis.norm(dim=-1, keepdim=True).clamp_min(1e-7)
 
     near_pi = theta > math.pi - 1e-4
     result = torch.where(near_pi.unsqueeze(-1), theta.unsqueeze(-1) * signed_axis, regular)
