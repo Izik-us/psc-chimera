@@ -32,24 +32,33 @@ class DPOTrainer:
 
     @staticmethod
     def _sequence_logprob(policy, context, tokens, mask=None):
-        """Return one masked sequence log-probability per sample."""
+        """Return one masked sequence log-probability per sample.
+
+        Context dimensionality is preserved for ``logprob`` implementations.
+        Some policies consume a single conditioning vector ``(B,D)`` while the
+        canonical token-level interface consumes ``(B,L,D)``.  Expanding the
+        former before calling it changes its semantics and can create a rank-4
+        tensor inside otherwise valid reference policies.
+        """
         if tokens.ndim != 2 or tokens.shape[1] < 1:
             raise ValueError("tokens must have shape (B,L) with L >= 1")
+        original_context = context
         if context.ndim == 2:
-            context = context.unsqueeze(1).expand(-1, tokens.shape[1], -1)
-        elif context.ndim != 3:
+            sequence_context = context.unsqueeze(1).expand(-1, tokens.shape[1], -1)
+        elif context.ndim == 3:
+            sequence_context = context
+        else:
             raise ValueError("context must have shape (B,D) or (B,L,D)")
-        if context.shape[:2] != tokens.shape:
+        if sequence_context.shape[:2] != tokens.shape:
             raise ValueError("context sequence dimensions must match token dimensions")
 
         token_logp = None
-        # Prefer explicit probability interfaces. nn.Module instances are
-        # callable even when they intentionally expose only logprob(), so the
-        # generic callable path must not mask the explicit API.
         if hasattr(policy, "token_logprobs"):
-            token_logp = policy.token_logprobs(context, tokens)
+            token_logp = policy.token_logprobs(sequence_context, tokens)
         elif hasattr(policy, "logprob"):
-            logp = policy.logprob(context, tokens)
+            # Preserve the caller's context rank.  A policy exposing logprob()
+            # owns its conditioning contract and may intentionally expect (B,D).
+            logp = policy.logprob(original_context, tokens)
             if logp.ndim == 3:
                 expected = (*tokens.shape, logp.shape[-1])
                 if logp.shape != expected:
@@ -64,7 +73,7 @@ class DPOTrainer:
             else:
                 raise ValueError("policy.logprob must return shape (B,), (B,L), or (B,L,V)")
         elif callable(policy):
-            logits = policy(context, tokens)
+            logits = policy(sequence_context, tokens)
             expected = (*tokens.shape, logits.shape[-1])
             if logits.shape != expected:
                 raise ValueError("policy forward must return logits with shape (B,L,V)")
