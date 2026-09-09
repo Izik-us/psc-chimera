@@ -7,8 +7,8 @@ Usage:
         --substrate PHE \
         --n-designs 500 \
         --n-pareto 50 \
-        --flow-ckpt weights/rfdiffusion_base.pt \
-        --mpnn-ckpt weights/proteinmpnn_v48_020.pt \
+        --flow-ckpt path/to/chimera_flow.pt \
+        --mpnn-ckpt path/to/chimera_mpnn.pt \
         --source-pdb data/1AMU.pdb \
         --output-dir results/phe_designs/
 """
@@ -24,11 +24,11 @@ def parse_args():
     p.add_argument("--substrate", default="PHE", help="Target substrate (3-letter code)")
     p.add_argument("--n-designs", type=int, default=500)
     p.add_argument("--n-pareto", type=int, default=50)
-    p.add_argument("--weights-dir", default="weights", help="Directory containing supported native checkpoint artifacts")
-    p.add_argument("--flow-ckpt", default=None, help="Compatible local flow/SB checkpoint path")
-    p.add_argument("--mpnn-ckpt", default=None, help="Compatible local ProteinMPNN checkpoint path")
+    p.add_argument("--weights-dir", default="weights", help="Directory containing local CHIMERA-compatible checkpoints")
+    p.add_argument("--flow-ckpt", default=None, help="Compatible local CHIMERA flow/SB checkpoint path")
+    p.add_argument("--mpnn-ckpt", default=None, help="Compatible local CHIMERA sequence checkpoint path")
     p.add_argument(
-        "--evof-ckpt", default=None, help="Compatible local EvoFormer checkpoint path"
+        "--evof-ckpt", default=None, help="Compatible local CHIMERA EvoFormer checkpoint path"
     )
     p.add_argument("--source-pdb", default=None, help="Source bacterial NRPS PDB file")
     p.add_argument(
@@ -52,7 +52,7 @@ def parse_args():
 
 
 def _resolve_checkpoint(explicit: str | None, weights_dir: Path, filename: str) -> str | None:
-    """Prefer an explicit path; otherwise use the standard downloaded artifact if present."""
+    """Prefer an explicit compatible checkpoint; never infer native-backend weights."""
     if explicit:
         return explicit
     candidate = weights_dir / filename
@@ -73,7 +73,6 @@ def main():
     import sys
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    # Import through the package boundary so the repaired CHIMERAv2 wiring is used.
     from chimera import CHIMERAv2
     from chimera.reproducibility import seed_everything
     from chimera.structure_utils import load_backbone_pdb, load_msa
@@ -81,8 +80,11 @@ def main():
     seed_everything(args.seed, deterministic=True)
     device = torch.device(args.device)
     weights_dir = Path(args.weights_dir)
-    flow_ckpt = _resolve_checkpoint(args.flow_ckpt, weights_dir, "rfdiffusion_base.pt")
-    mpnn_ckpt = _resolve_checkpoint(args.mpnn_ckpt, weights_dir, "proteinmpnn_v48_020.pt")
+    # These filenames are intentionally distinct from the native ProteinMPNN and
+    # RFdiffusion artifacts downloaded by download_weights.*. Native checkpoints
+    # are not silently loaded into local approximation modules.
+    flow_ckpt = _resolve_checkpoint(args.flow_ckpt, weights_dir, "chimera_flow.pt")
+    mpnn_ckpt = _resolve_checkpoint(args.mpnn_ckpt, weights_dir, "chimera_mpnn.pt")
 
     print("PSC-CHIMERA Design Run")
     print(f"  Target substrate: {args.substrate}")
