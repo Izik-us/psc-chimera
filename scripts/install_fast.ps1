@@ -16,15 +16,18 @@ $Python = Join-Path $Root '.venv\Scripts\python.exe'
 
 if ($CpuOnly) {
     & $Python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-} else {
-    & $Python -m pip install torch
 }
-& $Python -m pip install -e . --no-deps
-& $Python -m pip install transformers fair-esm einops biopython faiss-cpu numpy scipy pandas h5py tqdm rich typer
+
+# Install from setup.py so the fast path cannot drift from the repository's
+# declared runtime dependencies.  The preinstalled CPU torch satisfies the
+# torch requirement when -CpuOnly is selected.
+& $Python -m pip install -e .
 
 if ($WithDev) {
-    & $Python -m pip install pytest 'black>=23.0.0'
+    & $Python -m pip install -r requirements-dev.txt
 }
+
+& $Python scripts\check_install.py
 
 Write-Host ''
 Write-Host 'PSC-CHIMERA fast environment ready.' -ForegroundColor Green
