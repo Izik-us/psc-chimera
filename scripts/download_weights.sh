@@ -1,72 +1,90 @@
 #!/usr/bin/env bash
 # PSC-CHIMERA Weight Downloader
-# Run this script to download upstream checkpoint files for later adapter work.
-# Usage: bash scripts/download_weights.sh [--weights-dir /path/to/weights]
+#
+# Usage:
+#   bash scripts/download_weights.sh [WEIGHTS_DIR]
+#   bash scripts/download_weights.sh ./weights
+#
+# The script is deliberately idempotent and resumable. It downloads only
+# missing artifacts, verifies that each transfer produced a non-empty file,
+# and uses curl retries so interrupted/slow connections are less painful.
 
-set -e
+set -euo pipefail
 
-WEIGHTS_DIR=${1:-"./weights"}
+WEIGHTS_DIR="${1:-./weights}"
 mkdir -p "$WEIGHTS_DIR"
 
-echo "========================================================"
-echo " PSC-CHIMERA Upstream Checkpoint Downloader"
-echo " Downloading to: $WEIGHTS_DIR"
-echo "========================================================"
+CURL_ARGS=(
+  --fail
+  --location
+  --retry 5
+  --retry-delay 2
+  --retry-all-errors
+  --continue-at -
+  --progress-bar
+)
 
-# ── 1. ProteinMPNN (smallest, fastest) ──────────────────────────────────────
-echo ""
-echo "[1/4] ProteinMPNN weights..."
-if [ ! -f "$WEIGHTS_DIR/proteinmpnn_v48_020.pt" ]; then
-    curl -L --progress-bar \
-        "https://github.com/dauparas/ProteinMPNN/raw/main/vanilla_model_weights/v_48_020.pt" \
-        -o "$WEIGHTS_DIR/proteinmpnn_v48_020.pt"
-    echo "  ✓ ProteinMPNN downloaded (~3MB)"
-else
-    echo "  ✓ ProteinMPNN already present"
-fi
+download() {
+  local url="$1"
+  local out="$2"
+  local label="$3"
 
-# ── 2. RFdiffusion ──────────────────────────────────────────────────────────
-echo ""
-echo "[2/4] RFdiffusion Base model..."
-if [ ! -f "$WEIGHTS_DIR/rfdiffusion_base.pt" ]; then
-    curl -L --progress-bar \
-        "http://files.ipd.uw.edu/pub/RFdiffusion/6f5902ac237024bdd0c176cb93063dc6/Base_ckpt.pt" \
-        -o "$WEIGHTS_DIR/rfdiffusion_base.pt"
-    echo "  ✓ RFdiffusion downloaded (~440MB)"
-else
-    echo "  ✓ RFdiffusion already present"
-fi
+  if [[ -s "$out" ]]; then
+    printf '  ✓ %s already present: %s\n' "$label" "$out"
+    return 0
+  fi
 
-# ── 3. OpenFold / AlphaFold2 weights ────────────────────────────────────────
-echo ""
-echo "[3/4] AlphaFold2 parameters (for EvoFormer)..."
-echo "  NOTE: AlphaFold2 weights require manual download."
-echo "  1. Go to: https://github.com/google-deepmind/alphafold"
-echo "  2. Run: bash scripts/download_alphafold_params.sh $WEIGHTS_DIR/alphafold/"
-echo "  3. OR use ESMFold instead (automatic, see README):"
-echo "     python -c \"import esm; esm.pretrained.esmfold_v1()\""
-echo "  Skipping — see instructions above."
+  printf '  ↓ %s\n' "$label"
+  printf '    %s\n' "$out"
+  curl "${CURL_ARGS[@]}" "$url" -o "$out"
 
-# ── 4. PoET weights ─────────────────────────────────────────────────────────
-echo ""
-echo "[4/4] PoET weights..."
-if [ ! -f "$WEIGHTS_DIR/poet_weights.pt" ]; then
-    echo "  Downloading PoET from Zenodo (CC BY-NC-SA 4.0)..."
-    curl -L --progress-bar \
-        "https://zenodo.org/record/10061322/files/poet.ckpt" \
-        -o "$WEIGHTS_DIR/poet_weights.pt" 2>/dev/null || \
-    echo "  PoET weights available at: https://zenodo.org/record/10061322"
-    echo "  ✓ PoET downloaded (~1.2GB)"
-else
-    echo "  ✓ PoET already present"
-fi
+  if [[ ! -s "$out" ]]; then
+    echo "ERROR: download completed but produced an empty file: $out" >&2
+    rm -f "$out"
+    return 1
+  fi
+  printf '  ✓ %s ready\n' "$label"
+}
 
-echo ""
-echo "========================================================"
-echo " Download complete. These files are not loadable by the local approximation classes."
-echo ""
-echo "   CHIMERAv2.from_pretrained("
-echo "       flow_ckpt = '$WEIGHTS_DIR/rfdiffusion_base.pt',"
-echo "       mpnn_ckpt = '$WEIGHTS_DIR/proteinmpnn_v48_020.pt',"
-echo "   )"
-echo "========================================================"
+cat <<EOF
+========================================================
+ PSC-CHIMERA Weight Downloader
+ Destination: $WEIGHTS_DIR
+========================================================
+EOF
+
+# ProteinMPNN is small and directly usable by the native adapter.
+download \
+  "https://github.com/dauparas/ProteinMPNN/raw/main/vanilla_model_weights/v_48_020.pt" \
+  "$WEIGHTS_DIR/proteinmpnn_v48_020.pt" \
+  "ProteinMPNN v_48_020"
+
+# RFdiffusion checkpoint. The native adapter verifies compatibility before use.
+download \
+  "https://files.ipd.uw.edu/pub/RFdiffusion/6f5902ac237024bdd0c176cb93063dc6/Base_ckpt.pt" \
+  "$WEIGHTS_DIR/rfdiffusion_base.pt" \
+  "RFdiffusion Base_ckpt"
+
+cat <<EOF
+
+[3/4] OpenFold / AlphaFold parameters
+  CHIMERA's local EvoFormer is an approximation and is NOT checkpoint-compatible
+  with OpenFold/AlphaFold parameters. Do not load those weights into the local
+  approximation. Use an official OpenFold installation/checkpoint when the
+  native adapter is enabled.
+
+[4/4] PoET
+  PoET is optional for the current local pipeline. Its checkpoint is not
+  downloaded automatically because licensing and artifact hosting can change.
+  See the README for the supported native-backend workflow.
+
+========================================================
+ Downloaded native checkpoint artifacts:
+   $WEIGHTS_DIR/proteinmpnn_v48_020.pt
+   $WEIGHTS_DIR/rfdiffusion_base.pt
+
+Next:
+  pip install -e .
+  python scripts/run_design.py --help
+========================================================
+EOF
