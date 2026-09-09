@@ -10,7 +10,7 @@ Stage 1 computational design prototype for the theoretical Pharmacosynthetic Con
 
 ## Architecture contract
 
-The public `chimera.CHIMERAv2` entry point installs the current merge-safe component contracts before model construction. The intended pipeline is:
+The public `chimera.CHIMERAv2` entry point is assembled explicitly by the canonical architecture composition root. Importing the package performs no runtime monkey-patching. The intended pipeline is:
 
 ```text
 Animal / target-family MSA
@@ -122,7 +122,7 @@ The repository no longer treats loss-magnitude differences as a substitute for g
 
 The reference policy is frozen. If sequence masks are supplied, padding positions are excluded from the sequence log probability. A policy can provide `logprob(context, tokens)` or callable token logits for masked likelihoods.
 
-The older DPO implementation in `multi_objective.py` remains available as `LegacyDPOTrainer` for compatibility, but it is not the canonical API.
+The legacy preference-training implementation remains isolated from the canonical DPO API and is not used by the public CHIMERAv2 path.
 
 ### Bayesian uncertainty and Expected Improvement
 
@@ -238,130 +238,3 @@ from chimera import (
     pcgrad_step,
 )
 ```
-
-For multi-objective supervised training, obtain independent task losses and pass them to `pcgrad_step` instead of summing them and calling ordinary `backward()`.
-
-For DPO, initialize a frozen reference policy **before** the preference update. Do not update the reference during the same DPO round.
-
-For active learning, `best_observed` must represent the best **experimentally observed** scalarized objective in the same normalized utility space as the candidate predictions. It should not silently be replaced by the maximum predicted candidate.
-
----
-
-## Native upstream integrations
-
-The repository exposes explicit adapter boundaries for:
-
-| Component | Local implementation | Production boundary |
-|---|---|---|
-| Evolutionary trunk | small Transformer approximation | `OpenFoldAdapter` / `OpenFoldCLIAdapter` |
-| Backbone generation | local SE(3) SB/velocity architecture | `RFdiffusionAdapter` / `RFdiffusionCLIAdapter` |
-| Sequence design | ProteinMPNN-inspired model | `ProteinMPNNAdapter` |
-
-The adapters fail closed rather than loading an incompatible checkpoint into a different architecture.
-
----
-
-## Installation
-
-```bash
-git clone https://github.com/Izik-us/psc-chimera.git
-cd psc-chimera
-pip install -e .
-```
-
-Optional native upstream projects must be installed in their own supported environments. Their checkpoints must be consumed by compatible upstream code or explicit adapters. A file merely being named `rfdiffusion_weights.pt` or `proteinmpnn_weights.pt` does not make it compatible with a local approximation.
-
-Run the CPU-safe test suite with:
-
-```bash
-pytest tests/ -v
-```
-
----
-
-## Testing philosophy
-
-The test suite is designed to reject silent scientific regressions, not merely import errors. It covers:
-
-- SO(3) exponential/logarithmic-map consistency;
-- SE(3) interpolation;
-- geometric frame covariance/invariance;
-- fixed-residue constraints;
-- covalent-bond-aware clash detection;
-- PDB completeness validation;
-- Sinkhorn marginal constraints;
-- Brownian bridge statistics;
-- canonical PCGrad conflict handling;
-- DPO preference behavior and masking;
-- MC-dropout mode restoration;
-- EI numerical behavior;
-- ProteinMPNN geometric invariance and shape contracts;
-- CHIMERAv2 integration shapes.
-
-CI runs the CPU test suite on supported Python versions without requiring pretrained biological weights.
-
----
-
-## What is not yet scientifically validated
-
-The following are deliberately **not** claimed as experimentally validated:
-
-- mammalian NRPS functional prediction;
-- pLDDT or structural stability from the local proxy heads;
-- PoET/evolutionary likelihood calibration;
-- substrate selectivity prediction without validated A-domain labels;
-- icosahedral assembly compatibility;
-- de novo catalytic chemistry;
-- wet-lab expression, PPant loading, product yield, or intracellular assembly.
-
-These require domain-specific datasets, calibrated predictors, native structural backbones, controlled experimental evaluation, and external validation.
-
----
-
-## Repository status
-
-### Implemented
-
-- [x] Strict foundation-model adapter boundaries
-- [x] Geometric clash validation repair
-- [x] ProteinMPNN fixed-residue constraints
-- [x] Rigid-transform-invariant ProteinMPNN edge geometry
-- [x] Canonical PCGrad
-- [x] Entropic Sinkhorn endpoint coupling
-- [x] Brownian Schrödinger-bridge training/sampling approximation
-- [x] Canonical DPO objective
-- [x] Mask-aware DPO likelihoods
-- [x] MC-dropout epistemic uncertainty
-- [x] Analytic Gaussian Expected Improvement
-- [x] Regression and scientific-contract tests
-- [x] Incremental CI linting and CPU test execution
-
-### Still required before a production biological claim
-
-- [ ] Native OpenFold integration and checkpoint compatibility validation
-- [ ] Native RFdiffusion integration or validated bridge training data
-- [ ] Native ProteinMPNN integration
-- [ ] Domain-specific animal NRPS datasets and labels
-- [ ] Calibrated biological objective evaluators
-- [ ] Experimental PROTEUS data pipeline
-- [ ] External validation of generated structures and sequences
-- [ ] Wet-lab validation
-
----
-
-## References
-
-- Lipman et al., *Flow Matching for Generative Modeling*, 2022/2023.
-- Yim et al., *SE(3) Diffusion Model with Application to Protein Backbone Generation*, 2023.
-- Liu et al., *I²SB: Image-to-Image Schrödinger Bridge*, 2023.
-- Bose et al., *SE(3)-Stochastic Flow Matching for Protein Backbone Generation*, 2023.
-- Yu et al., *Gradient Surgery for Multi-Task Learning*, NeurIPS 2020.
-- Rafailov et al., *Direct Preference Optimization: Your Language Model is Secretly a Reward Model*, NeurIPS 2023.
-- Gal & Ghahramani, *Dropout as a Bayesian Approximation*, 2016.
-- Jones et al., *Efficient Global Optimization of Expensive Black-Box Functions*, 1998.
-
----
-
-## License
-
-MIT
