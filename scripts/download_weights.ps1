@@ -20,12 +20,12 @@ function Download-Artifact {
     }
 
     Write-Host "  [DOWN] $Label"
-    try {
-        Start-BitsTransfer -Source $Url -Destination $part -DisplayName "PSC-CHIMERA: $Label" -Description $Url
-    }
-    catch {
-        Write-Warning "BITS failed; falling back to Invoke-WebRequest"
-        Invoke-WebRequest -Uri $Url -OutFile $part -UseBasicParsing
+    # Windows 10/11 ship curl.exe. It gives us the same resumable, retrying
+    # semantics as the Unix downloader while the .part file preserves atomicity.
+    & curl.exe --fail --location --retry 5 --retry-delay 2 --retry-all-errors --continue-at - --progress-bar $Url --output $part
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -Force -ErrorAction SilentlyContinue $part
+        throw "Download failed for $Label (curl exit code $LASTEXITCODE)"
     }
 
     if (-not (Test-Path $part) -or ((Get-Item $part).Length -eq 0)) {
