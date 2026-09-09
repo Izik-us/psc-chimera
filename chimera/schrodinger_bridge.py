@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .flow_matching import so3_exp, so3_log
+from .lie import so3_exp, so3_log, relative_rotation
 
 
 class SchrodingerBridge(nn.Module):
@@ -116,9 +116,7 @@ class SE3SchrodingerBridge(nn.Module):
 
     @staticmethod
     def _relative_rotation(R0, R1):
-        if R0.shape != R1.shape or R0.shape[-2:] != (3, 3):
-            raise ValueError("R0 and R1 must have matching (...,3,3) shapes")
-        return so3_log(R0.transpose(-1, -2) @ R1)
+        return relative_rotation(R0, R1)
 
     @staticmethod
     def _call_drift(drift_model, R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn):
@@ -143,7 +141,6 @@ class SE3SchrodingerBridge(nn.Module):
         """Sample target endpoints from an SE(3)-aware entropic coupling."""
         B = R0.shape[0]
         trans_cost = torch.cdist(t0.reshape(B, -1), t1.reshape(B, -1)).square()
-        # Correct relative rotation is R0^T R1, not R0 R1^T.
         rel = R0.transpose(-1, -2)[:, None] @ R1[None, :]
         rel_log = so3_log(rel)
         rot_cost = rel_log.reshape(B, B, -1).square().sum(-1)
