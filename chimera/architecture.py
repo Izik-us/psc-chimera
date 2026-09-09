@@ -1,9 +1,8 @@
 """Canonical public architecture boundary for PSC-CHIMERA v2.
 
-The supported CHIMERAv2 entry point is assembled explicitly here. The package
-initializer does not mutate classes in other modules at import time. Legacy
-implementations remain importable for backwards compatibility, while the
-canonical model is constructed through :class:`CanonicalCHIMERAv2`.
+The supported CHIMERAv2 entry point is assembled explicitly here.  The package
+initializer is side-effect free: corrected components are ordinary imports,
+not runtime monkey-patches.
 """
 
 from __future__ import annotations
@@ -17,14 +16,14 @@ from .pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 from .pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from .reproducibility import make_generator, seed_everything, seed_worker
 from .schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
-from .runtime_compat import (
-    MergeReadyFlowMatchingBackbone,
-    MergeReadyMultiScaleNRPSDesigner,
-    MergeReadySubstratePocketConditioner,
-    merge_ready_expected_improvement,
-    merge_ready_update_from_proteus,
+from .canonical_components import (
+    FlowMatchingBackbone,
+    MultiScaleNRPSDesigner,
+    SubstratePocketConditioner,
+    expected_improvement,
+    update_from_proteus,
     set_best_observed,
-    merge_ready_so3_log,
+    so3_log,
 )
 
 
@@ -41,12 +40,12 @@ class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
         n_domains = self.multi_scale_designer.n_domains
         n_modules = self.multi_scale_designer.n_modules
 
-        self.flow_model = MergeReadyFlowMatchingBackbone(
+        self.flow_model = FlowMatchingBackbone(
             d_single=d_single,
             d_pair=d_pair,
             n_blocks=n_blocks,
         )
-        self.multi_scale_designer = MergeReadyMultiScaleNRPSDesigner(
+        self.multi_scale_designer = MultiScaleNRPSDesigner(
             d_residue=d_mpnn,
             d_domain=256,
             d_module=512,
@@ -54,7 +53,7 @@ class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
             n_domains=n_domains,
             n_modules=n_modules,
         )
-        self.substrate_conditioner = MergeReadySubstratePocketConditioner(d_pair=d_pair)
+        self.substrate_conditioner = SubstratePocketConditioner(d_pair=d_pair)
         self.pareto_head = MergeReadyParetoMultiObjectiveHead(d_model=d_mpnn)
         self.uncertainty_estimator = BayesianUncertaintyEstimator(n_samples=30)
         self._canonical_components = True
@@ -63,13 +62,13 @@ class CanonicalCHIMERAv2(_LegacyCHIMERAv2):
         self.freeze_pretrained()
 
     def update_from_proteus(self, *args, **kwargs):
-        return merge_ready_update_from_proteus(self, *args, **kwargs)
+        return update_from_proteus(self, *args, **kwargs)
 
     def set_best_observed(self, value: Optional[float]) -> None:
         set_best_observed(self, value)
 
     def compute_expected_improvement(self, mean, std, best_observed):
-        return merge_ready_expected_improvement(self, mean, std, best_observed)
+        return expected_improvement(self, mean, std, best_observed)
 
 
 CHIMERAv2 = CanonicalCHIMERAv2
@@ -79,7 +78,6 @@ __all__ = [
     "DPOBatch", "DPOTrainer", "MergeReadyParetoMultiObjectiveHead",
     "PCGradOptimizer", "pcgrad_step", "project_conflicting_gradients",
     "seed_everything", "seed_worker", "make_generator", "SchrodingerBridge",
-    "SE3SchrodingerBridge", "MergeReadyFlowMatchingBackbone",
-    "MergeReadyMultiScaleNRPSDesigner", "MergeReadySubstratePocketConditioner",
-    "merge_ready_so3_log",
+    "SE3SchrodingerBridge", "FlowMatchingBackbone", "MultiScaleNRPSDesigner",
+    "SubstratePocketConditioner", "so3_log",
 ]
