@@ -13,6 +13,7 @@ function Download-Artifact {
         [string]$Label
     )
 
+    $part = "$Output.part"
     if ((Test-Path $Output) -and ((Get-Item $Output).Length -gt 0)) {
         Write-Host "  [OK] $Label already present: $Output"
         return
@@ -20,17 +21,19 @@ function Download-Artifact {
 
     Write-Host "  [DOWN] $Label"
     try {
-        Start-BitsTransfer -Source $Url -Destination $Output -DisplayName "PSC-CHIMERA: $Label" -Description $Url
+        Start-BitsTransfer -Source $Url -Destination $part -DisplayName "PSC-CHIMERA: $Label" -Description $Url
     }
     catch {
         Write-Warning "BITS failed; falling back to Invoke-WebRequest"
-        Invoke-WebRequest -Uri $Url -OutFile $Output -UseBasicParsing
+        Invoke-WebRequest -Uri $Url -OutFile $part -UseBasicParsing
     }
 
-    if (-not (Test-Path $Output) -or ((Get-Item $Output).Length -eq 0)) {
-        Remove-Item -Force -ErrorAction SilentlyContinue $Output
-        throw "Download failed or produced an empty file: $Output"
+    if (-not (Test-Path $part) -or ((Get-Item $part).Length -eq 0)) {
+        Remove-Item -Force -ErrorAction SilentlyContinue $part
+        throw "Download failed or produced an empty partial file: $part"
     }
+
+    Move-Item -Force $part $Output
     Write-Host "  [OK] $Label ready"
 }
 
