@@ -16,6 +16,7 @@ from .pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 from .pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from .reproducibility import make_generator, seed_everything, seed_worker
 from .schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
+from .lie import so3_log
 from .canonical_components import (
     FlowMatchingBackbone,
     MultiScaleNRPSDesigner,
@@ -23,7 +24,6 @@ from .canonical_components import (
     expected_improvement,
     update_from_proteus,
     set_best_observed,
-    so3_log,
 )
 
 
