@@ -15,7 +15,6 @@ Usage:
 
 import argparse
 import torch
-import os
 import json
 from pathlib import Path
 
@@ -25,6 +24,7 @@ def parse_args():
     p.add_argument("--substrate", default="PHE", help="Target substrate (3-letter code)")
     p.add_argument("--n-designs", type=int, default=500)
     p.add_argument("--n-pareto", type=int, default=50)
+    p.add_argument("--weights-dir", default="weights", help="Directory containing supported native checkpoint artifacts")
     p.add_argument("--flow-ckpt", default=None, help="Compatible local flow/SB checkpoint path")
     p.add_argument("--mpnn-ckpt", default=None, help="Compatible local ProteinMPNN checkpoint path")
     p.add_argument(
@@ -51,6 +51,14 @@ def parse_args():
     return p.parse_args()
 
 
+def _resolve_checkpoint(explicit: str | None, weights_dir: Path, filename: str) -> str | None:
+    """Prefer an explicit path; otherwise use the standard downloaded artifact if present."""
+    if explicit:
+        return explicit
+    candidate = weights_dir / filename
+    return str(candidate) if candidate.is_file() and candidate.stat().st_size > 0 else None
+
+
 def main():
     args = parse_args()
     if args.n_designs < 1 or args.n_pareto < 1:
@@ -72,6 +80,9 @@ def main():
 
     seed_everything(args.seed, deterministic=True)
     device = torch.device(args.device)
+    weights_dir = Path(args.weights_dir)
+    flow_ckpt = _resolve_checkpoint(args.flow_ckpt, weights_dir, "rfdiffusion_base.pt")
+    mpnn_ckpt = _resolve_checkpoint(args.mpnn_ckpt, weights_dir, "proteinmpnn_v48_020.pt")
 
     print("PSC-CHIMERA Design Run")
     print(f"  Target substrate: {args.substrate}")
@@ -80,12 +91,13 @@ def main():
     print(f"  Device: {args.device}")
     print(f"  SB integration steps: {args.flow_steps}")
     print(f"  Seed: {args.seed}")
+    print(f"  Weights directory: {weights_dir}")
     print()
 
     model = CHIMERAv2.from_pretrained(
         evoformer_ckpt=args.evof_ckpt,
-        flow_ckpt=args.flow_ckpt,
-        mpnn_ckpt=args.mpnn_ckpt,
+        flow_ckpt=flow_ckpt,
+        mpnn_ckpt=mpnn_ckpt,
     ).to(device)
 
     if args.source_pdb:
@@ -152,6 +164,9 @@ def main():
         "seed": args.seed,
         "rag_enabled": not args.no_rag,
         "demo": args.demo,
+        "weights_dir": str(weights_dir),
+        "flow_checkpoint": flow_ckpt,
+        "mpnn_checkpoint": mpnn_ckpt,
     }
     with meta_path.open("w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
