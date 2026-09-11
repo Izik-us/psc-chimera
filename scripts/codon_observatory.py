@@ -82,7 +82,7 @@ class CodonObservatory:
         # Restore the original Observatory figure allocation while retaining
         # the later decoding-trace and attention panels.
         self.fig = plt.figure(
-            figsize=(16, 24),
+            figsize=(18, 18),
             constrained_layout=True,
         )
 
