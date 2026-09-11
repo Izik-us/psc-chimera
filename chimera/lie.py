@@ -16,7 +16,7 @@ def hat(v: torch.Tensor) -> torch.Tensor:
 
 
 def so3_exp(omega: torch.Tensor) -> torch.Tensor:
-    """Rodrigues exponential map with a stable small-angle branch."""
+    """Rodrigues exponential map with stable small-angle coefficients."""
     if omega.shape[-1] != 3:
         raise ValueError("omega must have final dimension 3")
     theta2 = (omega * omega).sum(-1, keepdim=True)
@@ -25,11 +25,12 @@ def so3_exp(omega: torch.Tensor) -> torch.Tensor:
     I = torch.eye(3, device=omega.device, dtype=omega.dtype)
     while I.ndim < K.ndim:
         I = I.unsqueeze(0)
-    theta2_safe = theta2.clamp_min(torch.finfo(omega.dtype).eps)
+    eps = torch.finfo(omega.dtype).eps
+    theta2_safe = theta2.clamp_min(eps)
     a = torch.where(
         theta2 < 1e-8,
         1.0 - theta2 / 6.0 + theta2 * theta2 / 120.0,
-        torch.sin(theta) / theta.clamp_min(torch.finfo(omega.dtype).eps),
+        torch.sin(theta) / theta.clamp_min(eps),
     )
     b = torch.where(
         theta2 < 1e-8,
@@ -39,8 +40,19 @@ def so3_exp(omega: torch.Tensor) -> torch.Tensor:
     return I + a.unsqueeze(-1) * K + b.unsqueeze(-1) * (K @ K)
 
 
+def _near_pi_axis(R: torch.Tensor) -> torch.Tensor:
+    """Recover an unoriented rotation axis from the symmetric pi-limit matrix."""
+    # At theta=pi, (R + I)/2 = a a^T. The dominant eigenvector is therefore
+    # the rotation axis. The sign is immaterial exactly at pi because +a and -a
+    # exponentiate to the same rotation.
+    symmetric = 0.5 * (R + torch.eye(3, device=R.device, dtype=R.dtype))
+    eigenvalues, eigenvectors = torch.linalg.eigh(symmetric)
+    axis = eigenvectors[..., :, -1]
+    return axis / axis.norm(dim=-1, keepdim=True).clamp_min(1e-7)
+
+
 def so3_log(R: torch.Tensor) -> torch.Tensor:
-    """Principal logarithm on SO(3), with a stable signed near-pi branch."""
+    """Principal logarithm on SO(3), stable for small angles and theta≈pi."""
     if R.shape[-2:] != (3, 3):
         raise ValueError("R must end in (3,3)")
     trace = R.diagonal(dim1=-2, dim2=-1).sum(-1)
@@ -48,18 +60,16 @@ def so3_log(R: torch.Tensor) -> torch.Tensor:
     theta = torch.acos(cos_theta)
     skew = 0.5 * (R - R.transpose(-1, -2))
     vee = torch.stack((skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]), dim=-1)
+
     sin_theta = torch.sin(theta)
     regular = vee * (theta / sin_theta.clamp_min(1e-7)).unsqueeze(-1)
 
-    # Near pi the trace formula is ill-conditioned.  The diagonal terms give
-    # |axis|, while the antisymmetric part gives its signs for theta -> pi-.
-    axis = (((torch.diagonal(R, dim1=-2, dim2=-1) + 1.0) * 0.5).clamp_min(0.0)).sqrt()
-    signs = torch.where(vee >= 0.0, torch.ones_like(vee), -torch.ones_like(vee))
-    signed_axis = axis * signs
-    signed_axis = signed_axis / signed_axis.norm(dim=-1, keepdim=True).clamp_min(1e-7)
-
     near_pi = theta > math.pi - 1e-4
-    result = torch.where(near_pi.unsqueeze(-1), theta.unsqueeze(-1) * signed_axis, regular)
+    axis = _near_pi_axis(R)
+    near_pi_result = theta.unsqueeze(-1) * axis
+    result = torch.where(near_pi.unsqueeze(-1), near_pi_result, regular)
+
+    # The first-order limit is log(R)≈vee.
     small = theta < 1e-5
     return torch.where(small.unsqueeze(-1), vee, result)
 
