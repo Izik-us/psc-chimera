@@ -40,8 +40,13 @@ class MergeReadyParetoMultiObjectiveHead(_LegacyParetoHead):
             losses["asm"] = F.mse_loss(objectives.assembly_compatibility, labels["asm"])
         return losses
 
-    def pcgrad_loss(self, objectives, labels, weights=None):
-        """Return a scalar whose backward gradient is canonical PCGrad."""
+    def pcgrad_loss(self, objectives, labels, weights=None, generator: Optional[torch.Generator] = None):
+        """Return a scalar whose backward gradient is canonical PCGrad.
+
+        ``generator`` makes task ordering reproducible without coupling PCGrad
+        to unrelated global RNG consumption. Conflict telemetry counts each
+        unordered task pair once.
+        """
         del weights
         losses = self._task_losses(objectives, labels)
         if not losses:
@@ -51,9 +56,6 @@ class MergeReadyParetoMultiObjectiveHead(_LegacyParetoHead):
         parameters = [p for p in self.parameters() if p.requires_grad]
         variables = [self._last_repr] + parameters
 
-        # Each row is one complete task gradient over the input representation
-        # plus Pareto-head parameters. ``allow_unused`` is required because a
-        # head can be absent from a particular task configuration.
         flat_grads = []
         for loss in task_losses:
             grads = torch.autograd.grad(
@@ -64,27 +66,31 @@ class MergeReadyParetoMultiObjectiveHead(_LegacyParetoHead):
             )
             pieces = []
             for variable, grad in zip(variables, grads):
-                if grad is None:
-                    pieces.append(torch.zeros_like(variable).reshape(-1))
-                else:
-                    pieces.append(grad.reshape(-1))
+                pieces.append(
+                    torch.zeros_like(variable).reshape(-1)
+                    if grad is None
+                    else grad.reshape(-1)
+                )
             flat_grads.append(torch.cat(pieces))
         G = torch.stack(flat_grads)
 
-        # Track each projected gradient as a linear combination of original
-        # task gradients. The coefficient matrix starts as identity and is
-        # transformed alongside the gradient vectors.
         projected = G.clone()
         coefficients = torch.eye(len(names), device=G.device, dtype=G.dtype)
-        order = torch.randperm(len(names), device=G.device)
-        for i in order.tolist():
-            others = torch.randperm(len(names), device=G.device).tolist()
-            for j in others:
+        conflicts = set()
+
+        def permutation(n: int):
+            if generator is None:
+                return torch.randperm(n, device=G.device).tolist()
+            return torch.randperm(n, generator=generator, device=G.device).tolist()
+
+        for i in permutation(len(names)):
+            for j in permutation(len(names)):
                 if i == j:
                     continue
                 dot = torch.dot(projected[i], G[j])
-                denom = torch.dot(G[j], G[j]).clamp_min(1e-12)
                 if dot < 0:
+                    conflicts.add((min(i, j), max(i, j)))
+                    denom = torch.dot(G[j], G[j]).clamp_min(torch.finfo(G.dtype).eps)
                     correction = dot / denom
                     projected[i] = projected[i] - correction * G[j]
                     coefficients[i] = coefficients[i] - correction * coefficients[j]
@@ -93,7 +99,5 @@ class MergeReadyParetoMultiObjectiveHead(_LegacyParetoHead):
         total = sum(c * loss for c, loss in zip(combined_coefficients, task_losses))
         metrics = {name: float(loss.detach()) for name, loss in losses.items()}
         metrics["pcgrad_task_count"] = len(names)
-        metrics["pcgrad_conflict_pairs"] = int(
-            sum(1 for i in range(len(names)) for j in range(len(names)) if i != j and torch.dot(G[i], G[j]) < 0)
-        )
+        metrics["pcgrad_conflict_pairs"] = len(conflicts)
         return total, metrics
