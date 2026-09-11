@@ -83,14 +83,14 @@ class CodonObservatory:
         # the compact metric panels. The decoding trace is full-width so
         # amino-acid labels do not get crushed against one another.
         self.fig = plt.figure(
-            figsize=(18, 18),
+            figsize=(16, 24),
             constrained_layout=True,
         )
 
         gs = self.fig.add_gridspec(
             5,
             4,
-            height_ratios=[1.0, 1.0, 2.5, 2.5, 1.5],
+            height_ratios=[2.0, 2.0, 5.0, 2.0, 1.5],
         )
 
         self.ax_loss = self.fig.add_subplot(gs[0, :2])
