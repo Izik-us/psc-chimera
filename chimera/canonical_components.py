@@ -14,28 +14,17 @@ from .chimera_v2 import FlowMatchingBackbone as _LegacyFlowBackbone, SubstratePo
 from .dpo import DPOBatch, DPOTrainer
 from .bayesian import BayesianUncertaintyEstimator
 from .schrodinger_bridge import SE3SchrodingerBridge
+from .lie import so3_exp, so3_log
 
 AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
 
 
-def so3_log(R: torch.Tensor) -> torch.Tensor:
-    if R.shape[-2:] != (3, 3):
-        raise ValueError("R must end in (3,3)")
-    trace = R.diagonal(dim1=-2, dim2=-1).sum(-1)
-    theta = torch.acos(((trace - 1.0) * 0.5).clamp(-1.0, 1.0))
-    skew = 0.5 * (R - R.transpose(-1, -2))
-    vee = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1)
-    regular = vee * (theta / torch.sin(theta).clamp_min(1e-7)).unsqueeze(-1)
-    axis = (((torch.diagonal(R, dim1=-2, dim2=-1) + 1.0) * 0.5).clamp_min(0.0)).sqrt()
-    signs = torch.where(vee >= 0.0, torch.ones_like(vee), -torch.ones_like(vee))
-    signed_axis = axis * signs
-    signed_axis = signed_axis / signed_axis.norm(dim=-1, keepdim=True).clamp_min(1e-7)
-    result = torch.where((theta > torch.pi - 1e-4).unsqueeze(-1), theta.unsqueeze(-1) * signed_axis, regular)
-    return torch.where((theta < 1e-4).unsqueeze(-1), vee, result)
-
-
 class InvariantPointAttention(_flow_matching.InvariantPointAttention):
-    """SE(3)-invariant IPA using local-frame query/key/value points."""
+    """SE(3)-invariant IPA using local-frame query/key/value points.
+
+    SO(3) operations are sourced from the canonical ``chimera.lie`` module;
+    this module does not maintain a second logarithm implementation.
+    """
 
     def forward(self, s, z, R, t, substrate_coords: Optional[torch.Tensor] = None):
         B, L, _ = s.shape
@@ -48,13 +37,19 @@ class InvariantPointAttention(_flow_matching.InvariantPointAttention):
         K_local = self.k_p(s).view(B, L, self.n_head, self.n_qk_pts, 3)
         V_local = self.v_p(s).view(B, L, self.n_head, self.n_v_pts, 3)
 
-        Q_global = torch.einsum("blij,bhlpj->bhlpi", R, Q_local.permute(0, 2, 1, 3, 4)) + t[:, None, :, None, :]
-        K_global = torch.einsum("blij,bhlpj->bhlpi", R, K_local.permute(0, 2, 1, 3, 4)) + t[:, None, :, None, :]
-        V_global = torch.einsum("blij,bhlpj->bhlpi", R, V_local.permute(0, 2, 1, 3, 4)) + t[:, None, :, None, :]
+        Q_global = torch.einsum(
+            "blij,bhlpj->bhlpi", R, Q_local.permute(0, 2, 1, 3, 4)
+        ) + t[:, None, :, None, :]
+        K_global = torch.einsum(
+            "blij,bhlpj->bhlpi", R, K_local.permute(0, 2, 1, 3, 4)
+        ) + t[:, None, :, None, :]
+        V_global = torch.einsum(
+            "blij,bhlpj->bhlpi", R, V_local.permute(0, 2, 1, 3, 4)
+        ) + t[:, None, :, None, :]
 
         attn_s = torch.einsum("bhid,bhjd->bhij", Q_s, K_s) * (Q_s.shape[-1] ** -0.5)
         diff = Q_global.unsqueeze(3) - K_global.unsqueeze(2)
-        attn_p = -(diff.square().sum(-1)).sum(-1)
+        attn_p = -diff.square().sum(-1).sum(-1)
         attn_z = self.pair_bias(z).permute(0, 3, 1, 2)
 
         if substrate_coords is not None:
@@ -67,8 +62,8 @@ class InvariantPointAttention(_flow_matching.InvariantPointAttention):
         weights = F.softplus(self.gamma).view(1, self.n_head, 1, 1)
         attn = F.softmax(attn_s + weights * attn_p + attn_z, dim=-1)
         out_s = torch.einsum("bhij,bhjd->bhid", attn, V_s)
-        out_v_global = torch.einsum("bhij,bhjpc->bhlpc", attn, V_global)
-        out_v_local = torch.einsum("blji,bhlj->bhli", R, out_v_global.mean(dim=3))
+        out_v_global = torch.einsum("bhij,bhjpc->bhipc", attn, V_global)
+        out_v_local = torch.einsum("blij,bhlj->bhli", R.transpose(-1, -2), out_v_global.mean(dim=3))
         out_z = torch.einsum("bhij,bijc->bhic", attn, z)
         return self.out(torch.cat([
             out_s.permute(0, 2, 1, 3).reshape(B, L, -1),
@@ -79,6 +74,7 @@ class InvariantPointAttention(_flow_matching.InvariantPointAttention):
 
 class MultiScaleNRPSDesigner(_LegacyDesigner):
     """Hierarchical designer consuming the canonical 28-D edge representation."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.edge_proj = nn.Linear(28, self.edge_proj.out_features)
@@ -86,6 +82,7 @@ class MultiScaleNRPSDesigner(_LegacyDesigner):
 
 class SubstratePocketConditioner(_LegacyConditioner):
     """Substrate conditioner with explicit residue/pocket geometry gating."""
+
     def forward(self, pair_repr, substrate_id, substrate_coords=None, substrate_types=None, residue_coords=None):
         B, L, _, d = pair_repr.shape
         if substrate_id.shape != (B,):
@@ -110,19 +107,32 @@ class SubstratePocketConditioner(_LegacyConditioner):
 
 class FlowMatchingBackbone(_LegacyFlowBackbone):
     """Structure backbone whose instantiated SB velocity field uses canonical IPA."""
+
     def __init__(self, d_single=256, d_pair=256, n_blocks=8):
         super().__init__(d_single, d_pair, n_blocks)
         for block in self.flow_model.velocity_field.ipa_blocks:
-            block.ipa = InvariantPointAttention(d_single, d_pair, block.ipa.n_head, block.ipa.n_qk_pts, block.ipa.n_v_pts)
-        self.sb_model = SE3SchrodingerBridge(self.flow_model.velocity_field, diffusion=0.05, sinkhorn_iters=50)
+            old_ipa = block.ipa
+            block.ipa = InvariantPointAttention(
+                d_single, d_pair, old_ipa.n_head, old_ipa.n_qk_pts, old_ipa.n_v_pts
+            )
+        self.sb_model = SE3SchrodingerBridge(
+            self.flow_model.velocity_field, diffusion=0.05, sinkhorn_iters=50
+        )
 
-    def sample(self, R0, t0, pair_cond, evol_single, n_steps=20, fixed_mask=None, substrate_coords=None, evol_conditioning_fn=None):
+    def sample(self, R0, t0, pair_cond, evol_single, n_steps=20, fixed_mask=None, substrate_coords=None, evol_conditioning_fn=None, generator=None):
         evol_single = self.frozen_bridge(evol_single)
-        return self.sb_model.sample(R0, t0, pair_cond, evol_single, n_steps=n_steps, fixed_mask=fixed_mask, substrate_coords=substrate_coords, evol_conditioning_fn=evol_conditioning_fn)
+        return self.sb_model.sample(
+            R0, t0, pair_cond, evol_single, n_steps=n_steps,
+            fixed_mask=fixed_mask, substrate_coords=substrate_coords,
+            evol_conditioning_fn=evol_conditioning_fn, generator=generator,
+        )
 
     def loss(self, R0, t0, R1, t1, pair_cond, evol_single, fixed_mask=None, substrate_coords=None):
         evol_single = self.frozen_bridge(evol_single)
-        return self.sb_model.bridge_loss(R0, t0, R1, t1, pair_cond, evol_single, fixed_mask=fixed_mask, substrate_coords=substrate_coords)
+        return self.sb_model.bridge_loss(
+            R0, t0, R1, t1, pair_cond, evol_single,
+            fixed_mask=fixed_mask, substrate_coords=substrate_coords,
+        )
 
 
 def update_from_proteus(self, survivors, failures, msa, pair_features, n_dpo_steps=50, learning_rate=1e-5, best_context_batch_index=0):
@@ -149,9 +159,11 @@ def update_from_proteus(self, survivors, failures, msa, pair_features, n_dpo_ste
             raise ValueError(f"invalid amino-acid symbols in PROTEUS data: {invalid}")
         return torch.tensor([[AA_ORDER.index(aa) for aa in s] for s in sequences], device=context.device, dtype=torch.long)
 
-    n_pairs = max(len(survivors), len(failures))
-    chosen = encode([survivors[i % len(survivors)] for i in range(n_pairs)])
-    rejected = encode([failures[i % len(failures)] for i in range(n_pairs)])
+    # Never duplicate scarce experimental preference examples merely to equalize
+    # class counts. A DPO update should preserve the empirical observations.
+    n_pairs = min(len(survivors), len(failures))
+    chosen = encode(survivors[:n_pairs])
+    rejected = encode(failures[:n_pairs])
     context = context.expand(n_pairs, -1, -1).contiguous()
     mask = torch.ones_like(chosen, dtype=torch.bool)
     batch = DPOBatch(context, chosen, rejected, mask, mask)
@@ -173,4 +185,8 @@ def expected_improvement(self, mean, std, best_observed):
     return BayesianUncertaintyEstimator.expected_improvement(mean, std, getattr(self, "best_observed", best_observed))
 
 
-__all__ = ["so3_log", "InvariantPointAttention", "MultiScaleNRPSDesigner", "SubstratePocketConditioner", "FlowMatchingBackbone", "update_from_proteus", "set_best_observed", "expected_improvement"]
+__all__ = [
+    "so3_exp", "so3_log", "InvariantPointAttention", "MultiScaleNRPSDesigner",
+    "SubstratePocketConditioner", "FlowMatchingBackbone", "update_from_proteus",
+    "set_best_observed", "expected_improvement",
+]
