@@ -33,6 +33,7 @@ ENV/
 weights/
 checkpoints/
 models/
+Models/
 
 # Data (large files)
 data/raw/
