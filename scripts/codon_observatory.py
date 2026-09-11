@@ -79,18 +79,17 @@ class CodonObservatory:
 
         plt.ion()
 
-        # Give the sequence-oriented panels substantially more room than
-        # the compact metric panels. The decoding trace is full-width so
-        # amino-acid labels do not get crushed against one another.
+        # Restore the original Observatory figure allocation while retaining
+        # the later decoding-trace and attention panels.
         self.fig = plt.figure(
-            figsize=(16, 10),
+            figsize=(16, 24),
             constrained_layout=True,
         )
 
         gs = self.fig.add_gridspec(
             5,
             4,
-            height_ratios=[2.0, 2.0, 5.0, 2.0, 1.5],
+            height_ratios=[1.0, 1.0, 2.5, 2.5, 1.5],
         )
 
         self.ax_loss = self.fig.add_subplot(gs[0, :2])
@@ -202,9 +201,6 @@ class CodonObservatory:
         protein = telemetry.sample_protein
 
         if predicted:
-            # Keep the trace readable while allowing long sequences to be
-            # inspected. The enlarged full-width panel gives each residue
-            # substantially more vertical space.
             display_limit = min(48, len(predicted), len(protein))
             positions = np.arange(display_limit)
 
@@ -245,7 +241,6 @@ class CodonObservatory:
         if attention is not None:
             attention = np.asarray(attention)
             if attention.ndim == 3:
-                # heads × target × memory
                 attention = attention.mean(axis=0)
 
             if attention.ndim == 2:
