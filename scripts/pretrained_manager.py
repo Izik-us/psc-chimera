@@ -76,14 +76,39 @@ def ensure_public_assets(root=None) -> dict[str, Path]:
     return {key: ensure_asset(key, root) for key in PUBLIC_ASSETS}
 
 
+def load_esm2(root=None, checkpoint: Optional[os.PathLike[str] | str] = None):
+    """Ensure and load the CodonOptimizer's ESM-2 150M checkpoint.
+
+    Returns the standard ``(model, alphabet)`` pair from fair-esm.  The
+    checkpoint is loaded explicitly from the managed cache, so no unrelated
+    ESM variant can be selected by filename convention.
+    """
+    path = Path(checkpoint) if checkpoint is not None else ensure_asset("esm2_t30_150m", root)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise FileNotFoundError(f"ESM-2 checkpoint is missing or empty: {path}")
+    try:
+        import esm
+    except ImportError as exc:
+        raise RuntimeError("fair-esm is required to load ESM-2; install requirements.txt") from exc
+    model, alphabet = esm.pretrained.load_model_and_alphabet_local(str(path))
+    model.eval()
+    for parameter in model.parameters():
+        parameter.requires_grad_(False)
+    return model, alphabet, path
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="PSC-CHIMERA pretrained asset manager")
     parser.add_argument("--root", default=None)
     parser.add_argument("--asset", choices=[*PUBLIC_ASSETS, "all"], default="all")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--load-esm", action="store_true")
     args = parser.parse_args()
-    if args.asset == "all":
+    if args.load_esm:
+        _, _, path = load_esm2(args.root)
+        print(f"esm2_t30_150m loaded: {path}")
+    elif args.asset == "all":
         for key, path in ensure_public_assets(args.root).items():
             print(f"{key}: {path}")
     else:
