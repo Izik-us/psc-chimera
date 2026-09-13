@@ -1,0 +1,1 @@
+Temporary audit marker. This file is intentionally created only to validate repository write access and will be removed in the next commit.
