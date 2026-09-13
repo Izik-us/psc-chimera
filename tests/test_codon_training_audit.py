@@ -1,3 +1,6 @@
+import sys
+import types
+
 import torch
 
 from scripts.train_codon_optimizer import split_dataset
@@ -54,9 +57,7 @@ def test_translation_round_trip_for_synonymous_targets():
 def test_causal_mask_blocks_future_positions():
     # CodonOptimizer uses PyTorch's canonical additive causal mask directly.
     # Convert it to a boolean forbidden-position mask for the invariant check.
-    mask = torch.triu(
-        torch.ones((5, 5), dtype=torch.bool), diagonal=1
-    )
+    mask = torch.triu(torch.ones((5, 5), dtype=torch.bool), diagonal=1)
     assert mask.dtype == torch.bool
     assert not mask[0, 0]
     assert mask[0, 1]
@@ -65,3 +66,40 @@ def test_causal_mask_blocks_future_positions():
 
 def test_pad_token_is_not_a_valid_codon():
     assert PAD_TOKEN not in CODON_TO_IDX.values()
+
+
+def test_loaded_esm_is_fully_frozen_and_stays_eval():
+    class FakeESM(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(4, 4))
+            self.embed_dim = 4
+
+    fake_model = FakeESM()
+    fake_alphabet = types.SimpleNamespace(get_batch_converter=lambda: object())
+    fake_esm = types.SimpleNamespace(
+        pretrained=types.SimpleNamespace(
+            load_model_and_alphabet_local=lambda _: (fake_model, fake_alphabet)
+        )
+    )
+    original = sys.modules.get("esm")
+    sys.modules["esm"] = fake_esm
+    try:
+        model = CodonOptimizer(
+            d_model=8,
+            n_heads=2,
+            n_dec_layers=1,
+            dim_ff=16,
+            dropout=0.0,
+            esm_model_path="fake-esm.pt",
+        )
+        assert all(not p.requires_grad for p in model.esm_model.parameters())
+        assert not model.esm_model.training
+        model.train()
+        assert not model.esm_model.training
+        assert all(not p.requires_grad for p in model.esm_model.parameters())
+    finally:
+        if original is None:
+            sys.modules.pop("esm", None)
+        else:
+            sys.modules["esm"] = original
