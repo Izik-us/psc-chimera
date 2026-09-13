@@ -339,12 +339,12 @@ def main() -> None:
     model = CodonOptimizer(**model_config).to(device)
     total_parameters = sum(p.numel() for p in model.parameters())
     trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    esm_trainable = sum(p.numel() for p in model.esm_model.parameters() if p.requires_grad) if getattr(model, "esm_model", None) is not None else 0
+    esm_parameters = sum(p.numel() for p in model.esm_model.parameters() if p.requires_grad) if getattr(model, "esm_model", None) is not None else 0
     print("\nMODEL PARAMETERS", flush=True)
     print(f"  total       = {total_parameters:,}", flush=True)
     print(f"  trainable   = {trainable_parameters:,}", flush=True)
-    print(f"  ESM trainable = {esm_trainable:,}", flush=True)
-    if model.esm_model is not None and esm_trainable == 0:
+    print(f"  ESM = {esm_parameters:,}", flush=True)
+    if model.esm_model is not None and esm_parameters == 0:
         print("  warning     = ESM is fully frozen", flush=True)
 
     optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
