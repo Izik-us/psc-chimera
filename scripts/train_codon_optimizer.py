@@ -114,7 +114,7 @@ def validate_model_config(config: dict[str, Any]) -> None:
 
 
 def build_model_config(args: argparse.Namespace, checkpoint_config: dict[str, Any] | None = None) -> dict[str, Any]:
-    config = {"d_model": 72, "n_heads": 4, "n_dec_layers": 2, "dim_ff": 288}
+    config = {"d_model": 768, "n_heads": 12, "n_dec_layers": 8, "dim_ff": 1064}
     if checkpoint_config:
         config.update({k: checkpoint_config[k] for k in config if k in checkpoint_config})
     for key in ("d_model", "n_heads", "n_dec_layers", "dim_ff"):
