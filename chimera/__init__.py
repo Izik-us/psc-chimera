@@ -13,7 +13,7 @@ __author__ = "PSC Engineering Pipeline"
 # The package boundary is intentionally side-effect free. Importing chimera
 # only exposes public classes and performs no import-time module mutation.
 from .architecture import CHIMERAv2, CanonicalCHIMERAv2
-from .chimera_v2 import NRPSConstraints
+from .domain_schema import NRPSConstraints
 from .codon_optimizer import CodonOptimizer, optimize_nrps_for_mammalian_expression
 from .protein_fitness import ESMProteinFitnessScorer
 from .flow_matching import SE3FlowMatching, FlowMatchingBackbone, InvariantPointAttention

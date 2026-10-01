@@ -17,8 +17,7 @@ import warnings
 
 from .bayesian import BayesianUncertaintyEstimator
 from .conditioning import SubstratePocketConditioner
-from .chimera_v2 import (
-    NRPSConstraints,
+from .components import (
     EvoFormerBackbone,
     TriangularPairUpdateConnector,
     EvolCrossAttentionConnector,
@@ -27,7 +26,7 @@ from .chimera_v2 import (
     ProteinMPNNBackbone,
 )
 from .dpo import DPOBatch, DPOTrainer
-from .domain_schema import AssemblySchema, DomainSpan, DomainType
+from .domain_schema import AssemblySchema, DomainSpan, DomainType, NRPSConstraints
 from .evaluators import BiologicalObjectiveEvaluator
 from .flow_matching import FlowMatchingBackbone
 from .geometry import validate_backbone
@@ -673,10 +672,17 @@ class CanonicalCHIMERAv2(nn.Module):
                 self.best_observed,
             ).detach().cpu()
             acquisition_status = "fixed-candidate MC-dropout EI using explicit utility weights and historical best"
-        selected = pareto_indices[:n_pareto_samples]
+        if acquisition_status.startswith("fixed-candidate"):
+            frontier_order = torch.argsort(
+                acquisition_scores.index_select(0, pareto_indices),
+                descending=True,
+            )
+            selected = pareto_indices.index_select(0, frontier_order[:n_pareto_samples])
+        else:
+            selected = pareto_indices[:n_pareto_samples]
         return {
-            "pareto_sequences": all_sequences[selected],
-            "pareto_scores": pareto_front[:n_pareto_samples],
+            "pareto_sequences": all_sequences.index_select(0, selected),
+            "pareto_scores": all_objectives.index_select(0, selected),
             "pareto_count": int(pareto_indices.numel()),
             "all_sequences": all_sequences,
             "all_objectives": all_objectives,
@@ -708,6 +714,11 @@ class CanonicalCHIMERAv2(nn.Module):
             module_name = "_seq_to_repr" if name == "seq_to_repr" else name
             if not hasattr(self, module_name):
                 raise ValueError(f"checkpoint contains unknown module {name!r}")
+            if module_name == "flow_model":
+                values = self._migrate_flow_state_dict(
+                    values,
+                    self.flow_model.state_dict(),
+                )
             if module_name == "multi_scale_designer":
                 values = dict(values)
                 legacy_edge_weight = values.get("edge_proj.weight")

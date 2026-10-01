@@ -11,6 +11,9 @@ from chimera.bayesian import BayesianUncertaintyEstimator
 def test_public_chimera_is_independent_canonical_composition():
     import chimera
     import chimera.architecture as architecture
+    import chimera.components as components
+    import chimera.domain_schema as domain_schema
+    import chimera.chimera_v2 as legacy_module
     from chimera.flow_matching import FlowMatchingBackbone, InvariantPointAttention
     from chimera.multi_objective import MultiScaleNRPSDesigner
 
@@ -18,11 +21,14 @@ def test_public_chimera_is_independent_canonical_composition():
     assert CHIMERAv2 is not LegacyCHIMERAv2
     assert LegacyCHIMERAv2 not in architecture.CanonicalCHIMERAv2.__bases__
     assert not (Path(__file__).resolve().parents[1] / "chimera" / "canonical_components.py").exists()
+    assert legacy_module.NRPSConstraints is domain_schema.NRPSConstraints
+    assert legacy_module.EvoFormerBackbone is components.EvoFormerBackbone
+    assert legacy_module.TriangularPairUpdateConnector is components.TriangularPairUpdateConnector
     model = CHIMERAv2(
         d_evo_single=32,
         d_evo_pair=16,
         d_se3=32,
-        d_pair_out=32,
+        d_pair_out=16,
         d_mpnn=16,
         n_flow_blocks=1,
         n_domains=2,
@@ -117,6 +123,25 @@ def test_expected_improvement_requires_historical_best():
     )
     with pytest.raises(ValueError, match="historical best"):
         model.compute_expected_improvement(torch.tensor([0.8]), torch.tensor([0.1]))
+
+
+def test_legacy_best_observed_is_explicit_history():
+    legacy = LegacyCHIMERAv2(
+        d_evo_single=32,
+        d_evo_pair=16,
+        d_se3=32,
+        d_pair_out=32,
+        d_mpnn=16,
+        n_flow_blocks=1,
+        n_domains=2,
+        n_modules=2,
+        n_mc_dropout=2,
+    )
+    assert legacy.best_observed is None
+    legacy.set_best_observed(0.72)
+    assert legacy.best_observed == pytest.approx(0.72)
+    with pytest.raises(ValueError, match="historical utility"):
+        legacy.set_best_observed(1.2)
 
 
 def test_canonical_forward_rejects_empty_domain_spans():
@@ -234,7 +259,7 @@ def test_canonical_component_state_dict_shapes_match_legacy_layout():
                 assert torch.equal(value, flow_state[alias])
 
 
-def test_flow_checkpoint_migration_fills_bridge_alias():
+def test_flow_checkpoint_migration_fills_bridge_alias(tmp_path):
     from chimera.flow_matching import FlowMatchingBackbone
 
     model = FlowMatchingBackbone(d_single=32, d_pair=16, n_blocks=1)
@@ -248,6 +273,21 @@ def test_flow_checkpoint_migration_fills_bridge_alias():
     incompatible = model.load_state_dict(migrated, strict=True)
     assert not incompatible.missing_keys
     assert not incompatible.unexpected_keys
+
+    canonical = CHIMERAv2(
+        d_evo_single=32,
+        d_evo_pair=16,
+        d_se3=32,
+        d_pair_out=16,
+        d_mpnn=16,
+        n_flow_blocks=1,
+        n_domains=2,
+        n_modules=2,
+        n_mc_dropout=2,
+    )
+    connector_path = tmp_path / "legacy_flow_connector.pt"
+    torch.save({"flow_model": historical}, connector_path)
+    canonical.load_connectors(str(connector_path))
 
 
 def test_legacy_designer_checkpoint_migrates_edge_projection(tmp_path):
