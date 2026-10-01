@@ -57,15 +57,24 @@ def so3_log(R: torch.Tensor) -> torch.Tensor:
         raise ValueError("R must end in (3,3)")
     trace = R.diagonal(dim1=-2, dim2=-1).sum(-1)
     cos_theta = ((trace - 1.0) * 0.5).clamp(-1.0, 1.0)
-    theta = torch.acos(cos_theta)
     skew = 0.5 * (R - R.transpose(-1, -2))
     vee = torch.stack((skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]), dim=-1)
 
-    sin_theta = torch.sin(theta)
+    sin_theta = vee.norm(dim=-1)
+    theta = torch.atan2(sin_theta, cos_theta)
     regular = vee * (theta / sin_theta.clamp_min(1e-7)).unsqueeze(-1)
 
     near_pi = theta > math.pi - 1e-4
-    axis = _near_pi_axis(R)
+    eigen_axis = _near_pi_axis(R)
+    skew_axis = vee / sin_theta.clamp_min(torch.finfo(R.dtype).eps).unsqueeze(-1)
+    axis_sign = (eigen_axis * vee).sum(dim=-1, keepdim=True)
+    eigen_axis = torch.where(axis_sign < 0.0, -eigen_axis, eigen_axis)
+    skew_is_resolvable = sin_theta > (torch.finfo(R.dtype).eps ** 0.5) * 0.1
+    axis = torch.where(
+        skew_is_resolvable.unsqueeze(-1),
+        skew_axis,
+        eigen_axis,
+    )
     near_pi_result = theta.unsqueeze(-1) * axis
     result = torch.where(near_pi.unsqueeze(-1), near_pi_result, regular)
 

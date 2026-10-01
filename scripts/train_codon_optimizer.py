@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Sampler, Subset
 
 from chimera.codon_optimizer import (
     CodonOptimizer,
@@ -19,6 +19,7 @@ from chimera.codon_optimizer import (
     PAD_TOKEN,
     ALL_CODONS,
     CODON_TABLE,
+    ESM_T30_MAX_PROTEIN_LENGTH,
 )
 from data.codon_dataset import CodonJSONLDataset
 from scripts.codon_observatory import CodonObservatory, TrainingTelemetry, read_system_stats
@@ -59,7 +60,80 @@ def collate_records(batch: list[dict]) -> dict[str, torch.Tensor | list[str]]:
         "codon_padding_mask": codon_padding_mask,
         "aa_sequence": [item["aa_sequence"][0] for item in batch],
         "expression": torch.stack([item["expression"] for item in batch]),
+        "label_type": [str(item.get("label_type", "unknown")).lower() for item in batch],
     }
+
+
+class LengthBucketBatchSampler(Sampler[list[int]]):
+    """Shuffle within nearby lengths to reduce padding and peak attention memory."""
+
+    def __init__(
+        self,
+        dataset,
+        batch_size: int,
+        max_protein_length: int = ESM_T30_MAX_PROTEIN_LENGTH,
+        max_attention_elements: int = 4_194_304,
+        oversize_policy: str = "error",
+    ) -> None:
+        if batch_size <= 0 or max_protein_length <= 0 or max_attention_elements <= 0:
+            raise ValueError(
+                "batch_size, max_protein_length and max_attention_elements "
+                "must be positive"
+            )
+        if oversize_policy not in {"error", "skip"}:
+            raise ValueError("oversize_policy must be 'error' or 'skip'")
+        self.batch_size = batch_size
+        self.max_attention_elements = max_attention_elements
+        self.excluded_indices: list[int] = []
+        indexed_lengths = []
+        oversized = []
+        for index in range(len(dataset)):
+            length = int(dataset[index]["protein_tokens"].numel())
+            if length > max_protein_length or length * length > max_attention_elements:
+                oversized.append((index, length))
+                continue
+            indexed_lengths.append((index, length))
+        if oversized and oversize_policy == "error":
+            examples = ", ".join(
+                f"index={index}:length={length}"
+                for index, length in oversized[:8]
+            )
+            raise ValueError(
+                f"{len(oversized)} examples exceed configured sequence or "
+                f"attention limits ({examples}). Set --oversize-policy skip "
+                "to exclude them explicitly; sequences are never truncated."
+            )
+        self.excluded_indices = [index for index, _ in oversized]
+        if not indexed_lengths:
+            raise ValueError("No examples fit the configured batch limits.")
+
+        indexed_lengths.sort(key=lambda pair: pair[1])
+        self.batches: list[list[int]] = []
+        batch: list[int] = []
+        batch_max_length = 0
+        for index, length in indexed_lengths:
+            candidate_max_length = max(batch_max_length, length)
+            exceeds_count = len(batch) >= batch_size
+            exceeds_attention = (
+                (len(batch) + 1) * candidate_max_length * candidate_max_length
+                > max_attention_elements
+            )
+            if batch and (exceeds_count or exceeds_attention):
+                self.batches.append(batch)
+                batch = []
+                batch_max_length = 0
+            batch.append(index)
+            batch_max_length = max(batch_max_length, length)
+        if batch:
+            self.batches.append(batch)
+
+    def __iter__(self):
+        batches = self.batches.copy()
+        random.shuffle(batches)
+        yield from batches
+
+    def __len__(self) -> int:
+        return len(self.batches)
 
 
 def set_seed(seed: int) -> None:
@@ -114,10 +188,22 @@ def validate_model_config(config: dict[str, Any]) -> None:
 
 
 def build_model_config(args: argparse.Namespace, checkpoint_config: dict[str, Any] | None = None) -> dict[str, Any]:
-    config = {"d_model": 768, "n_heads": 12, "n_dec_layers": 8, "dim_ff": 1064}
+    config = {
+        "d_model": 768,
+        "n_heads": 12,
+        "n_dec_layers": 8,
+        "dim_ff": 1064,
+        "max_protein_length": ESM_T30_MAX_PROTEIN_LENGTH,
+    }
     if checkpoint_config:
         config.update({k: checkpoint_config[k] for k in config if k in checkpoint_config})
-    for key in ("d_model", "n_heads", "n_dec_layers", "dim_ff"):
+    for key in (
+        "d_model",
+        "n_heads",
+        "n_dec_layers",
+        "dim_ff",
+        "max_protein_length",
+    ):
         value = getattr(args, key)
         if value is not None:
             config[key] = value
@@ -166,6 +252,8 @@ def _named_grad_norms(model: torch.nn.Module) -> dict[str, float]:
 def _run_eval(model, loader, device) -> dict[str, float]:
     model.eval()
     totals: dict[str, float] = {}
+    label_totals: dict[str, dict[str, float]] = {}
+    label_counts: dict[str, int] = {}
     with torch.no_grad():
         for batch in loader:
             protein_tokens = batch["protein_tokens"].to(device)
@@ -189,8 +277,32 @@ def _run_eval(model, loader, device) -> dict[str, float]:
             )
             for name, value in metrics.items():
                 totals[name] = totals.get(name, 0.0) + float(value)
+            labels = batch.get("label_type", ["unknown"] * len(batch["aa_sequence"]))
+            for label in sorted(set(labels)):
+                indices = [i for i, item_label in enumerate(labels) if item_label == label]
+                selected = torch.tensor(indices, dtype=torch.long, device=device)
+                _, grouped_metrics = codon_optimizer_loss(
+                    output["logits"].index_select(0, selected),
+                    codon_tokens.index_select(0, selected),
+                    output["expression"].index_select(0, selected),
+                    target_expression=expression.index_select(0, selected),
+                    codon_padding_mask=codon_mask.index_select(0, selected),
+                )
+                group_totals = label_totals.setdefault(label, {})
+                for name, value in grouped_metrics.items():
+                    group_totals[name] = group_totals.get(name, 0.0) + float(value) * len(indices)
+                label_counts[label] = label_counts.get(label, 0) + len(indices)
     count = max(1, len(loader))
-    return {name: value / count for name, value in totals.items()}
+    result = {name: value / count for name, value in totals.items()}
+    for label, values in label_totals.items():
+        group_count = max(1, label_counts[label])
+        result.update(
+            {
+                f"{label}_{name}": value / group_count
+                for name, value in values.items()
+            }
+        )
+    return result
 
 
 def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_step, total_steps, observatory=None):
@@ -203,7 +315,10 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
         protein_mask = batch["protein_padding_mask"].to(device)
         codon_mask = batch["codon_padding_mask"].to(device)
         expression = batch["expression"].to(device)
-        capture_now = observatory is not None and (global_step % observatory.update_every == 0 or global_step == 0)
+        capture_now = observatory is not None and observatory.should_capture_attention(
+            global_step,
+            int(codon_tokens.shape[1]),
+        )
         model.set_attention_capture(capture_now, final_layer_only=True)
         optimizer.zero_grad(set_to_none=True)
         output = model(protein_tokens, codon_tokens, batch["aa_sequence"], protein_padding_mask=protein_mask, codon_padding_mask=codon_mask)
@@ -270,6 +385,7 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path)
+    parser.add_argument("--validation-dataset", type=Path)
     parser.add_argument("--checkpoint", type=Path, default=Path("checkpoints/codon_optimizer.pt"))
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--epochs", type=int, default=1)
@@ -282,7 +398,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-heads", type=int, default=None)
     parser.add_argument("--n-dec-layers", type=int, default=None)
     parser.add_argument("--dim-ff", type=int, default=None)
-    parser.add_argument("--val-fraction", type=float, default=0.1)
+    parser.add_argument("--max-protein-length", type=int, default=None)
+    parser.add_argument(
+        "--max-attention-elements",
+        type=int,
+        default=4_194_304,
+        help="Maximum batch_size * padded_length^2 for self-attention.",
+    )
+    parser.add_argument(
+        "--oversize-policy",
+        choices=("error", "skip"),
+        default="error",
+        help="Reject over-limit records, or explicitly exclude them from this run.",
+    )
+    parser.add_argument("--val-fraction", type=float)
     parser.add_argument("--visualize", action="store_true", help="Enable live matplotlib training observatory.")
     parser.add_argument("--visualize-interval", type=int, default=5, help="Render dashboard every N optimizer steps.")
     parser.add_argument("--smoke", action="store_true")
@@ -307,9 +436,27 @@ def main() -> None:
     else:
         dataset = CodonJSONLDataset(args.dataset)
 
-    train_dataset, val_dataset = split_dataset(dataset, args.val_fraction, args.seed)
-    loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_records)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_records) if val_dataset is not None else None
+    validation_path = args.validation_dataset
+    if validation_path is None and args.dataset is not None:
+        sibling_validation = args.dataset.with_name("validation.jsonl")
+        if sibling_validation.is_file():
+            validation_path = sibling_validation
+
+    if validation_path is not None:
+        if args.val_fraction is not None:
+            raise ValueError(
+                "Use either --validation-dataset or --val-fraction, not both."
+            )
+        train_dataset = dataset
+        val_dataset = CodonJSONLDataset(validation_path)
+        validation_source = str(validation_path)
+    else:
+        train_dataset, val_dataset = split_dataset(
+            dataset,
+            0.1 if args.val_fraction is None else args.val_fraction,
+            args.seed,
+        )
+        validation_source = "protein-identity holdout" if val_dataset is not None else "none"
 
     checkpoint_state = None
     checkpoint_config = None
@@ -320,6 +467,13 @@ def main() -> None:
         checkpoint_config = checkpoint_state.get("config")
         if checkpoint_config is None:
             raise ValueError("Checkpoint does not contain saved model config")
+        positional_embedding = checkpoint_state.get("model", {}).get("pos_encoding.weight")
+        if torch.is_tensor(positional_embedding):
+            checkpoint_config.setdefault("max_codons", int(positional_embedding.shape[0]))
+            checkpoint_config.setdefault(
+                "max_protein_length",
+                max(1, (int(positional_embedding.shape[0]) + 2) // 3),
+            )
 
     model_config = build_model_config(args, checkpoint_config)
     print("\n" + "=" * 72 + "\nPSC CODON OPTIMIZER TRAINING\n" + "=" * 72, flush=True)
@@ -331,12 +485,57 @@ def main() -> None:
     print(f"epochs        : {args.epochs}", flush=True)
     print(f"learning_rate : {args.lr}", flush=True)
     print(f"val_fraction  : {args.val_fraction}", flush=True)
+    print(f"validation    : {validation_source}", flush=True)
     print("\nMODEL CONFIG", flush=True)
     for key in ("d_model", "n_heads", "n_dec_layers", "dim_ff"):
         print(f"  {key:<12}= {model_config[key]}", flush=True)
     print(f"  ESM         = {model_config.get('esm_model_path')}", flush=True)
 
     model = CodonOptimizer(**model_config).to(device)
+    train_batch_sampler = LengthBucketBatchSampler(
+        train_dataset,
+        args.batch_size,
+        max_protein_length=model.max_protein_length,
+        max_attention_elements=args.max_attention_elements,
+        oversize_policy=args.oversize_policy,
+    )
+    loader = DataLoader(
+        train_dataset,
+        batch_sampler=train_batch_sampler,
+        collate_fn=collate_records,
+    )
+    val_batch_sampler = (
+        LengthBucketBatchSampler(
+            val_dataset,
+            args.batch_size,
+            max_protein_length=model.max_protein_length,
+            max_attention_elements=args.max_attention_elements,
+            oversize_policy=args.oversize_policy,
+        )
+        if val_dataset is not None
+        else None
+    )
+    val_loader = (
+        DataLoader(
+            val_dataset,
+            batch_sampler=val_batch_sampler,
+            collate_fn=collate_records,
+        )
+        if val_dataset is not None
+        else None
+    )
+    if train_batch_sampler.excluded_indices:
+        print(
+            f"skipped_train_examples={len(train_batch_sampler.excluded_indices)} "
+            "(explicit oversize policy)",
+            flush=True,
+        )
+    if val_batch_sampler is not None and val_batch_sampler.excluded_indices:
+        print(
+            f"skipped_validation_examples={len(val_batch_sampler.excluded_indices)} "
+            "(explicit oversize policy)",
+            flush=True,
+        )
     total_parameters = sum(p.numel() for p in model.parameters())
     trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     esm_parameters = sum(p.numel() for p in model.esm_model.parameters() if p.requires_grad) if getattr(model, "esm_model", None) is not None else 0
@@ -374,6 +573,21 @@ def main() -> None:
             if val_loader is not None:
                 val_metrics = _run_eval(model, val_loader, device)
                 print(f"validation epoch={epoch} loss={val_metrics.get('total', 0.0):.6f} ce={val_metrics.get('ce', 0.0):.6f} cai={val_metrics.get('cai', 0.0):.4f} gc={val_metrics.get('gc', 0.0):.4f} motif={val_metrics.get('motif', 0.0):.4f} expr={val_metrics.get('expression', 0.0):.4f}", flush=True)
+                for label in sorted(
+                    {
+                        key.rsplit("_", 1)[0]
+                        for key in val_metrics
+                        if key.endswith("_ce")
+                    }
+                ):
+                    print(
+                        f"validation_{label} epoch={epoch} "
+                        f"ce={val_metrics.get(f'{label}_ce', 0.0):.6f} "
+                        f"cai={val_metrics.get(f'{label}_cai', 0.0):.4f} "
+                        f"gc={val_metrics.get(f'{label}_gc', 0.0):.4f} "
+                        f"expr={val_metrics.get(f'{label}_expression', 0.0):.4f}",
+                        flush=True,
+                    )
                 if val_metrics.get("ce", float("inf")) < best_val:
                     best_val = val_metrics["ce"]
                     best_state = {"model": {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}, "epoch": epoch, "validation": val_metrics}

@@ -1,4 +1,5 @@
 import pytest
+import math
 import torch
 
 from chimera.geometry import validate_backbone
@@ -31,6 +32,30 @@ def test_geometry_still_detects_nonbonded_clash():
     coords[0, 2, 3] = coords[0, 0, 0]
     report = validate_backbone(coords, clash_distance=2.0)
     assert report.clash_count > 0
+
+
+def test_geometry_computes_planar_peptide_torsion():
+    report = validate_backbone(_ideal_backbone())
+    assert report.torsion_abs_max > 3.0
+    assert report.torsion_planarity_error < 1e-5
+
+
+def test_geometry_rejects_nonplanar_peptide_torsion():
+    coords = torch.zeros(1, 2, 4, 3)
+    coords[0, 0, 1] = torch.tensor([0.0, 1.0, 0.0])
+    coords[0, 0, 2] = torch.tensor([0.0, 0.0, 0.0])
+    coords[0, 1, 0] = torch.tensor([1.0, 0.0, 0.0])
+    coords[0, 1, 1] = torch.tensor([1.0, math.cos(1.0), math.sin(1.0)])
+
+    report = validate_backbone(coords)
+    assert report.torsion_planarity_error == pytest.approx(1.0, abs=1e-6)
+    assert not report.valid
+
+
+def test_geometry_marks_degenerate_torsion_as_nonfinite():
+    report = validate_backbone(torch.zeros(1, 2, 4, 3))
+    assert not report.finite
+    assert not report.valid
 
 
 def test_pcgrad_releases_graph_after_last_loss():

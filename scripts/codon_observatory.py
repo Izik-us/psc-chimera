@@ -61,9 +61,15 @@ def read_system_stats():
 
 
 class CodonObservatory:
-    def __init__(self, update_every: int = 5, history_size: int = 5000):
+    def __init__(
+        self,
+        update_every: int = 5,
+        history_size: int = 5000,
+        max_attention_length: int = 512,
+    ):
         self.update_every = max(1, int(update_every))
         self.history_size = max(100, int(history_size))
+        self.max_attention_length = max(1, int(max_attention_length))
 
         self.step_history = deque(maxlen=self.history_size)
         self.loss_history = deque(maxlen=self.history_size)
@@ -82,7 +88,7 @@ class CodonObservatory:
         # Restore the original Observatory figure allocation while retaining
         # the later decoding-trace and attention panels.
         self.fig = plt.figure(
-            figsize=(18, 18),
+            figsize=(24, 16),
             constrained_layout=True,
         )
 
@@ -110,7 +116,21 @@ class CodonObservatory:
             "PSC CodonOptimizer Training Live Visualizer",
             fontsize=17,
         )
-        self.fig.show()
+        if "agg" not in plt.get_backend().lower():
+            self.fig.show()
+
+    def should_capture_attention(
+        self,
+        global_step: int,
+        sequence_length: int,
+    ) -> bool:
+        return (
+            sequence_length <= self.max_attention_length
+            and (
+                global_step == 0
+                or global_step % self.update_every == 0
+            )
+        )
 
     def _clear(self, ax, title: str):
         ax.clear()
@@ -266,7 +286,7 @@ class CodonObservatory:
             self.ax_attention.text(
                 0.5,
                 0.5,
-                "Attention capture disabled",
+                "Attention not captured (disabled or sequence too long)",
                 ha="center",
                 va="center",
             )

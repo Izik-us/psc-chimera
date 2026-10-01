@@ -130,6 +130,7 @@ from .flow_matching import (
 )
 from .proteinmpnn import get_protein_graph
 from .geometry import validate_backbone
+from .conditioning import SubstratePocketConditioner
 from .evaluators import BiologicalObjectiveEvaluator
 from .multi_objective import (
     StructuralRetriever,
@@ -538,114 +539,6 @@ class NRPSConstraintEncoder(nn.Module):
                     c_map[batch_idx, s:e] = c_map[batch_idx, s:e] + domain_emb
 
         return c_map
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SUBSTRATE POCKET CONDITIONER (NEW IN V2)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class SubstratePocketConditioner(nn.Module):
-    """
-    Encodes the desired substrate into a conditioning signal for CHIMERA v2.
-
-    For PSC Layer 1 NRPS A-domain design: we know WHAT substrate we want
-    the A-domain to activate. We should condition the backbone generation
-    on this desired substrate, biasing the generated binding pocket geometry
-    toward shapes that accommodate that specific molecule.
-
-    Two conditioning modes:
-        1. Substrate identity: amino acid / modified substrate as a string
-           → embedded via a lookup and projected to pair space
-        2. Substrate 3D structure: if SMILES or 3D coordinates available
-           → encoded via a geometric point cloud encoder
-           → projects substrate atom positions into residue-residue pair space
-           → tells the IPA attention: "pay attention to residues near substrate"
-    """
-
-    def __init__(self, d_pair: int = 256, d_sub: int = 128):
-        super().__init__()
-        # Mode 1: amino acid substrate encoding
-        self.substrate_emb = nn.Embedding(30, d_sub)  # 20 AA + 10 non-standard
-        self.substrate_proj = nn.Linear(d_sub, d_pair)
-
-        # Mode 2: 3D point cloud encoder for substrate atoms
-        # Each substrate atom: (x, y, z, atom_type_one_hot)
-        self.atom_encoder = nn.Sequential(
-            nn.Linear(3 + 8, d_sub),  # 3D coords + 8 atom type features
-            nn.LayerNorm(d_sub),
-            nn.GELU(),
-            nn.Linear(d_sub, d_sub),
-        )
-
-        # Cross-attention: pair positions attend to substrate atoms
-        # z[i,j] ← cross_attn(z[i,j], substrate_atoms)
-        self.sub_cross_attn = nn.MultiheadAttention(
-            embed_dim=d_pair,
-            num_heads=4,
-            kdim=d_sub,
-            vdim=d_sub,
-            batch_first=True,
-        )
-        self.sub_norm = nn.LayerNorm(d_pair)
-
-        # Distance-based bias: pairs (i,j) near pocket get stronger substrate signal
-        self.distance_gate = nn.Linear(1, d_pair)
-
-    def forward(
-        self,
-        pair_repr: torch.Tensor,  # (B, L, L, d_pair)
-        substrate_id: torch.Tensor,  # (B,) substrate token ID
-        substrate_coords: Optional[torch.Tensor] = None,  # (B, N_atoms, 3)
-        substrate_types: Optional[torch.Tensor] = None,  # (B, N_atoms, 8)
-        residue_coords: Optional[torch.Tensor] = None,  # (B, L, 3) Cα positions
-    ) -> torch.Tensor:  # (B, L, L, d_pair) enriched pair representation
-        B, L, _, d = pair_repr.shape
-        if substrate_id.ndim != 1 or substrate_id.shape[0] != B:
-            raise ValueError(f"substrate_id must have shape ({B},), got {tuple(substrate_id.shape)}")
-
-        # Mode 1: substrate identity conditioning
-        sub_emb = self.substrate_emb(substrate_id)  # (B, d_sub)
-        sub_cond = self.substrate_proj(sub_emb)  # (B, d_pair)
-
-        # Broadcast substrate conditioning to all pair positions
-        pair_repr = pair_repr + sub_cond.view(B, 1, 1, d)
-
-        # Mode 2: 3D substrate structure conditioning (if coords available)
-        if substrate_coords is not None and substrate_types is not None:
-            if substrate_coords.ndim != 3 or substrate_coords.shape[0] != B or substrate_coords.shape[-1] != 3:
-                raise ValueError("substrate_coords must have shape (B, N_atoms, 3)")
-            if substrate_types.shape[:2] != substrate_coords.shape[:2] or substrate_types.shape[-1] != 8:
-                raise ValueError("substrate_types must have shape (B, N_atoms, 8)")
-            # Encode substrate atoms
-            atom_feat = torch.cat([substrate_coords, substrate_types.float()], dim=-1)
-            atom_repr = self.atom_encoder(atom_feat)  # (B, N_atoms, d_sub)
-
-            # Flatten pair for cross-attention
-            pair_flat = pair_repr.reshape(B, L * L, d)  # (B, L², d_pair)
-            sub_pair, _ = self.sub_cross_attn(pair_flat, atom_repr, atom_repr)
-            sub_pair = sub_pair.reshape(B, L, L, d)
-
-            # Optional: distance-based gating
-            if residue_coords is not None:
-                # min distance from each residue to any substrate atom
-                min_dist = (
-                    torch.cdist(
-                        residue_coords,
-                        substrate_coords.mean(dim=1, keepdim=True).expand(-1, L, -1),
-                    )
-                    .min(dim=-1)
-                    .values
-                )  # (B, L)
-
-                # Gate: stronger substrate signal near pocket (within 8Å)
-                gate = torch.exp(-min_dist / 8.0).unsqueeze(-1)  # (B, L, 1)
-                gate = gate.unsqueeze(2) * gate.unsqueeze(1)  # (B, L, L, 1)
-                sub_pair = sub_pair * gate
-
-            pair_repr = self.sub_norm(pair_repr + sub_pair)
-
-        return pair_repr
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1682,68 +1575,9 @@ class CHIMERAv2(nn.Module):
         print(f"[CHIMERAv2] Connectors loaded from {path}")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# EXAMPLE USAGE
-# ═══════════════════════════════════════════════════════════════════════════════
+# Legacy CHIMERAv2 compatibility implementation ends here.
 
-if __name__ == "__main__":
 
-    print("=" * 70)
-    print("CHIMERA v2 — PSC Engineering Pipeline Stage 1")
-    print("=" * 70)
 
-    # Build the model
-    model = CHIMERAv2.from_pretrained(
-        evoformer_ckpt=None,  # loads stub; replace with 'openfold_weights.pt'
-        flow_ckpt=None,  # loads stub; replace with 'rfdiffusion_weights.pt'
-        mpnn_ckpt=None,  # loads stub; replace with 'proteinmpnn_weights.pt'
-    )
 
-    # ── Define NRPS design problem ──────────────────────────────────────────
-    B, N_seq, L = 2, 32, 600  # 2 designs, 32 MSA sequences, 600-AA A-domain
 
-    constraints = NRPSConstraints(
-        fixed_mask=torch.zeros(B, L, dtype=torch.bool),  # none fixed in demo
-        stachelhaus_positions=torch.tensor(
-            [235, 236, 239, 278, 299, 301, 322, 330, 517, 518]
-        ),
-        domain_boundaries=torch.tensor(
-            [[[0, 300], [300, 400], [400, 500], [500, 580], [580, L]]] * B
-        ),
-        module_boundaries=torch.tensor([[[0, L], [0, 0], [0, 0], [0, 0], [0, 0]]] * B),
-        icosahedral_face=torch.tensor([7, 14]),  # modules on face 7 and 14
-        ppt_serine_position=519,
-        hotspot_coords=None,
-        hotspot_indices=None,
-        target_substrate="PHE",
-    )
-
-    # ── Run a forward pass ──────────────────────────────────────────────────
-    with torch.no_grad():
-        outputs = model(
-            msa_tokens=torch.randint(0, 23, (B, N_seq, L)),
-            initial_pair_features=torch.zeros(B, L, L, 128),
-            source_R=torch.eye(3).unsqueeze(0).unsqueeze(0).expand(B, L, -1, -1),
-            source_t=torch.randn(B, L, 3) * 10,
-            constraints=constraints,
-            substrate_id=torch.tensor([13, 13]),  # PHE = index 13
-            n_flow_steps=5,  # fast demo; use 20 for real runs
-            n_mpnn_seqs=3,  # fast demo; use 10 for real runs
-        )
-
-    print(f"\nForward pass output shapes:")
-    print(f"  sequences:       {outputs['sequences'].shape}")  # (B, n_seqs, L, 20)
-    print(f"  backbone_coords: {outputs['backbone_coords'].shape}")  # (B, L, 4, 3)
-    print(f"  evol_plausib:    {outputs['evol_plausibility'].shape}")  # (B,)
-    print(f"  struct_stability:{outputs['structural_stability'].shape}")
-
-    print(f"\nObjective scores (raw, untrained connectors):")
-    print(f"  Evolutionary plausibility: {outputs['evol_plausibility'].tolist()}")
-    print(f"  Structural stability:      {outputs['structural_stability'].tolist()}")
-    print(f"  Expression efficiency:     {outputs['expression_efficiency'].tolist()}")
-    print(f"  Substrate selectivity:     {outputs['substrate_selectivity'].tolist()}")
-    print(f"  Assembly compatibility:    {outputs['assembly_compat'].tolist()}")
-
-    print(f"\n[CHIMERA v2] Ready for PSC pipeline.")
-    print(f"Next step: fine-tune connectors on NRPS training data.")
-    print(f"See training_data.py for complete data sourcing guide.")

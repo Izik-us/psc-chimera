@@ -1,7 +1,7 @@
 import torch
 
-from chimera.canonical_components import FlowMatchingBackbone, so3_log
-from chimera.flow_matching import so3_exp
+from chimera.flow_matching import FlowMatchingBackbone, so3_exp
+from chimera.lie import relative_rotation, so3_log
 
 
 def test_canonical_velocity_field_is_translation_invariant():
@@ -25,5 +25,4 @@ def test_relative_rotation_uses_source_frame():
     R0 = so3_exp(torch.tensor([[0.2, -0.1, 0.3]]))
     R1 = so3_exp(torch.tensor([[-0.4, 0.5, 0.1]]))
     expected = so3_log(R0.transpose(-1, -2) @ R1)
-    from chimera.lie import relative_rotation
     assert torch.allclose(relative_rotation(R0, R1), expected, atol=1e-6)

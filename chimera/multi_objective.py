@@ -37,6 +37,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import numpy as np
+import warnings
 from typing import List, Optional, Tuple, Dict, NamedTuple
 from dataclasses import dataclass
 
@@ -57,11 +58,12 @@ class StructuralRetriever(nn.Module):
     a novel A-domain geometry from scratch, CHIMERA adapts the closest
     known structure toward the desired substrate and mammalian compatibility.
 
-    Embedding space:
-        Structure → ESMFold-derived per-residue embeddings pooled over
-        the 10 Stachelhaus selectivity code positions.
-        This ensures retrieval is dominated by substrate pocket similarity,
-        not overall structural similarity.
+    Embedding-space limitation:
+        ``encode_query`` currently uses a substrate-token Embedding + LSTM.
+        Externally supplied structural vectors may come from unrelated
+        encoders, and no trained alignment is provided here. Retrieval is
+        therefore a provisional API only; callers must establish compatible
+        query/index embeddings before interpreting nearest neighbors.
     """
 
     def __init__(
@@ -71,10 +73,14 @@ class StructuralRetriever(nn.Module):
         n_retrieve: int = 5,
     ):
         super().__init__()
+        if d_embed <= 0 or d_context <= 0:
+            raise ValueError("d_embed and d_context must be positive")
+        if n_retrieve <= 0:
+            raise ValueError("n_retrieve must be positive")
         self.d_embed = d_embed
         self.n_retrieve = n_retrieve
 
-        # Query encoder: substrate SMILES or amino acid identity → query embedding
+        # Provisional query encoder. It is not aligned to arbitrary structure vectors.
         self.substrate_encoder = nn.Sequential(
             nn.Embedding(25, 64),  # 20 AA + 5 non-standard
             nn.LSTM(64, d_embed // 2, batch_first=True, bidirectional=True),
@@ -111,18 +117,30 @@ class StructuralRetriever(nn.Module):
             structure_embeddings: (N, d_embed) numpy array
             metadata: list of {pdb_id, substrate, stachelhaus_code, pocket_coords}
         """
+        structure_embeddings = np.asarray(structure_embeddings, dtype=np.float32)
+        if structure_embeddings.ndim != 2 or structure_embeddings.shape[1] != self.d_embed:
+            raise ValueError(
+                f"structure_embeddings must have shape (N, {self.d_embed})"
+            )
+        if len(metadata) != structure_embeddings.shape[0]:
+            raise ValueError("metadata count must match structure embedding count")
+        if not np.isfinite(structure_embeddings).all():
+            raise ValueError("structure_embeddings must be finite")
+        self.index = None
+        self.index_embs = structure_embeddings
+        self.index_meta = metadata
+        if structure_embeddings.shape[0] == 0:
+            return
+
         try:
             import faiss
 
             self.index = faiss.IndexFlatL2(self.d_embed)
-            self.index.add(structure_embeddings.astype(np.float32))
-            self.index_embs = structure_embeddings
-            self.index_meta = metadata
+            self.index.add(structure_embeddings)
             print(f"[StructuralRetriever] Index built: {len(metadata)} structures")
         except ImportError:
             print("[StructuralRetriever] FAISS not installed — using brute force")
             self.index_embs = torch.tensor(structure_embeddings)
-            self.index_meta = metadata
 
     def retrieve(
         self,
@@ -132,19 +150,38 @@ class StructuralRetriever(nn.Module):
         Retrieve K most similar known A-domain structures for each batch element.
         Returns metadata list + pocket coordinate tensors for cross-attention.
         """
+        if query_embedding.ndim != 2 or query_embedding.shape[1] != self.d_embed:
+            raise ValueError(f"query_embedding must have shape (B, {self.d_embed})")
+        if not torch.isfinite(query_embedding).all():
+            raise ValueError("query_embedding must be finite")
         B = query_embedding.shape[0]
+        if B == 0:
+            return [], None
         q_np = query_embedding.detach().cpu().numpy().astype(np.float32)
+
+        if self.index is not None:
+            database_size = int(self.index.ntotal)
+        elif self.index_embs is not None:
+            database_size = int(self.index_embs.shape[0])
+        else:
+            return [[] for _ in range(B)], None
+        if database_size == 0:
+            return [[] for _ in range(B)], None
+        if database_size != len(self.index_meta):
+            raise RuntimeError("retrieval index metadata count does not match database size")
+        k = min(self.n_retrieve, database_size)
 
         if self.index is not None:
             import faiss
 
-            _, indices = self.index.search(q_np, self.n_retrieve)
+            _, indices = self.index.search(q_np, k)
         elif self.index_embs is not None:
             # Brute force fallback
             dists = torch.cdist(query_embedding.cpu(), self.index_embs.float())
-            indices = dists.topk(self.n_retrieve, dim=-1, largest=False).indices.numpy()
-        else:
-            return [[]] * B, None
+            indices = dists.topk(k, dim=-1, largest=False).indices.numpy()
+
+        if np.any(indices < 0):
+            raise RuntimeError("retrieval backend returned an invalid negative index")
 
         # Gather retrieved pocket coordinates
         all_meta = []
@@ -545,14 +582,14 @@ class ParetoMultiObjectiveHead(nn.Module):
             assembly_compatibility=torch.sigmoid(self.head_asm(pooled)).squeeze(-1),
         )
 
-    def pcgrad_loss(
+    def weighted_objective_loss_legacy(
         self,
         objectives: ParetoObjectives,
         labels: Dict[str, Optional[torch.Tensor]],
         weights: Dict[str, float] = None,
     ) -> Tuple[torch.Tensor, Dict]:
         """
-        PCGrad-inspired: Project Conflicting Gradients multi-task loss.
+        Deprecated heuristic weighted loss; this is not PCGrad.
 
         Algorithm:
           1. Compute individual task losses L_1, L_2, ..., L_n
@@ -652,6 +689,26 @@ class ParetoMultiObjectiveHead(nn.Module):
         total = sum(adjusted_weights.get(k, 1.0) * v for k, v in losses.items())
 
         return total, {k: v.item() for k, v in losses.items()}
+
+    def pcgrad_loss(
+        self,
+        objectives: ParetoObjectives,
+        labels: Dict[str, Optional[torch.Tensor]],
+        weights: Dict[str, float] = None,
+    ) -> Tuple[torch.Tensor, Dict]:
+        """Deprecated compatibility alias for the historical weighted loss.
+
+        Use ``MergeReadyParetoMultiObjectiveHead.pcgrad_loss`` for true
+        gradient projection. This legacy model remains isolated from the
+        canonical architecture.
+        """
+        warnings.warn(
+            "ParetoMultiObjectiveHead.pcgrad_loss is heuristic, not PCGrad; "
+            "use the canonical MergeReadyParetoMultiObjectiveHead instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.weighted_objective_loss_legacy(objectives, labels, weights)
 
     def task_losses(self, objectives: ParetoObjectives, labels: Dict[str, Optional[torch.Tensor]]) -> Dict[str, torch.Tensor]:
         """Return independent task losses for true PCGrad training."""
@@ -1025,6 +1082,7 @@ class MultiScaleNRPSDesigner(nn.Module):
         n_domains: int = 5,  # A, T, C, TE, linker
         n_modules: int = 5,  # up to 5 NRPS modules in PSC Layer 1
         vocab_size: int = 20,  # amino acid vocabulary
+        edge_dim: int = 16,
     ):
         super().__init__()
         self.n_domains = n_domains
@@ -1042,7 +1100,9 @@ class MultiScaleNRPSDesigner(nn.Module):
                 for _ in range(3)  # 3 rounds of message passing
             ]
         )
-        self.edge_proj = nn.Linear(16, d_residue)  # geometric edge features
+        if edge_dim <= 0:
+            raise ValueError("edge_dim must be positive")
+        self.edge_proj = nn.Linear(edge_dim, d_residue)  # geometric edge features
         self.domain_gate = nn.Parameter(torch.tensor(0.0))
         self.module_gate = nn.Parameter(torch.tensor(0.0))
         self.assembly_gate = nn.Parameter(torch.tensor(0.0))

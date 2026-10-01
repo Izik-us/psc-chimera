@@ -43,71 +43,15 @@ import torch.nn.functional as F
 import math
 from typing import Optional, Tuple, Callable
 from einops import rearrange, repeat
-
-# ── SO(3) Operations ─────────────────────────────────────────────────────────
-
-
-def hat(v: torch.Tensor) -> torch.Tensor:
-    """Skew-symmetric matrix from 3-vector (the 'hat' operator). (..., 3) → (..., 3, 3)"""
-    x, y, z = v[..., 0], v[..., 1], v[..., 2]
-    O = torch.zeros_like(x)
-    return torch.stack(
-        [
-            O,
-            -z,
-            y,
-            z,
-            O,
-            -x,
-            -y,
-            x,
-            O,
-        ],
-        dim=-1,
-    ).reshape(*v.shape[:-1], 3, 3)
-
-
-def so3_exp(omega: torch.Tensor) -> torch.Tensor:
-    """
-    Rodrigues' exponential map: so(3) → SO(3).
-    omega: (..., 3) axis-angle → R: (..., 3, 3)
-    """
-    theta = omega.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-    axis = omega / theta
-    K = hat(axis)
-    I = torch.eye(3, device=omega.device, dtype=omega.dtype)
-    c = torch.cos(theta).unsqueeze(-1)
-    s = torch.sin(theta).unsqueeze(-1)
-    return I + s * K + (1 - c) * torch.einsum("...ij,...jk->...ik", K, K)
-
-
-def so3_log(R: torch.Tensor) -> torch.Tensor:
-    """
-    SO(3) logarithmic map: SO(3) → so(3).
-    R: (..., 3, 3) → omega: (..., 3)
-    """
-    trace = R.diagonal(dim1=-2, dim2=-1).sum(-1)
-    cos_a = ((trace - 1) / 2).clamp(-1.0, 1.0)
-    angle = torch.acos(cos_a)
-    skew = (R - R.transpose(-1, -2)) / 2
-    vee = torch.stack([skew[..., 2, 1], skew[..., 0, 2], skew[..., 1, 0]], dim=-1)
-    small = angle < 1e-4
-    scale = angle / torch.sin(angle).clamp_min(1e-6)
-    result = vee * scale.unsqueeze(-1)
-    # Near pi the skew part loses sign information; use the dominant diagonal
-    # axis to avoid the 1/sin(theta) blow-up.
-    diag = (torch.diagonal(R, dim1=-2, dim2=-1) + 1).clamp_min(0).sqrt()
-    axis = diag / diag.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-    result = torch.where((angle > math.pi - 1e-4).unsqueeze(-1), axis * angle.unsqueeze(-1), result)
-    return torch.where(small.unsqueeze(-1), vee, result)
-
+from .lie import hat, so3_exp, so3_log, relative_rotation
+from .schrodinger_bridge import SE3SchrodingerBridge
 
 def so3_geodesic_interp(R0: torch.Tensor, R1: torch.Tensor, t: float) -> torch.Tensor:
     """
     Geodesic interpolation on SO(3) at fraction t ∈ [0,1].
     SLERP: R_t = R0 · exp(t · log(R0^T · R1))
     """
-    delta = so3_log(torch.einsum("...ij,...kj->...ik", R0, R1))  # R0^T R1
+    delta = relative_rotation(R0, R1)
     return torch.einsum("...ij,...jk->...ik", R0, so3_exp(t * delta))
 
 
@@ -131,7 +75,7 @@ def so3_velocity(R_t: torch.Tensor, R0: torch.Tensor, R1: torch.Tensor) -> torch
     """
     # In the tangent space at R_t: v* = log_{R_t}(R1) - log_{R_t}(R0)
     # Simplified for OT: v* = log(R0^T R1) in Lie algebra coords
-    delta = so3_log(torch.einsum("...ij,...kj->...ik", R0, R1))
+    delta = relative_rotation(R0, R1)
     return delta  # constant along the geodesic
 
 
@@ -287,11 +231,7 @@ class InvariantPointAttention(nn.Module):
         relative = t.unsqueeze(1) - t.unsqueeze(2)  # (B, L_query, L_key, 3)
         out_p = torch.einsum("bhij,bijc->bhic", attn, relative)  # (B,H,L,3)
         # Transform back to local frame of each residue
-        out_p_local = torch.einsum(
-            "blji,bhlj->bhli",
-            R,  # R^T = R.transpose(-1,-2) = R^-1 for SO(3)
-            out_p - t.unsqueeze(1).expand_as(out_p),
-        )  # (B, H, L, 3)
+        out_p_local = torch.einsum("blji,bhlj->bhli", R, out_p)  # (B, H, L, 3)
 
         # Pair output (weighted sum of pair features)
         out_z = torch.einsum("bhij,bijc->bhic", attn, z)  # (B,H,L,d_pair)
@@ -329,6 +269,7 @@ class VelocityField(nn.Module):
         d_pair: int = 256,
         n_blocks: int = 8,
         n_head: int = 12,
+        ipa_class=InvariantPointAttention,
     ):
         super().__init__()
         self.d_single = d_single
@@ -359,7 +300,7 @@ class VelocityField(nn.Module):
 
         # IPA stack
         self.ipa_blocks = nn.ModuleList(
-            [IPABlock(d_single, d_pair, n_head) for _ in range(n_blocks)]
+            [IPABlock(d_single, d_pair, n_head, ipa_class) for _ in range(n_blocks)]
         )
 
         # Velocity output heads
@@ -436,10 +377,10 @@ class VelocityField(nn.Module):
 class IPABlock(nn.Module):
     """One IPA block: IPA → FFN with layer norms."""
 
-    def __init__(self, d_single: int, d_pair: int, n_head: int):
+    def __init__(self, d_single: int, d_pair: int, n_head: int, ipa_class=InvariantPointAttention):
         super().__init__()
         self.norm1 = nn.LayerNorm(d_single)
-        self.ipa = InvariantPointAttention(d_single, d_pair, n_head)
+        self.ipa = ipa_class(d_single, d_pair, n_head)
         self.norm2 = nn.LayerNorm(d_single)
         self.ffn = nn.Sequential(
             nn.Linear(d_single, d_single * 4),
@@ -502,9 +443,10 @@ class SE3FlowMatching(nn.Module):
         d_pair: int = 256,
         n_blocks: int = 8,
         n_head: int = 12,
+        ipa_class=InvariantPointAttention,
     ):
         super().__init__()
-        self.velocity_field = VelocityField(d_single, d_pair, n_blocks, n_head)
+        self.velocity_field = VelocityField(d_single, d_pair, n_blocks, n_head, ipa_class)
 
     def get_interpolation(
         self,
@@ -747,3 +689,87 @@ class SE3FlowMatching(nn.Module):
             R_curr, t_curr = R_new, t_new
 
         return R_curr, t_curr
+
+
+class FlowMatchingBackbone(nn.Module):
+    """Canonical SE(3) flow backbone composed from flow and bridge primitives."""
+
+    def __init__(
+        self,
+        d_single: int = 256,
+        d_pair: int = 256,
+        n_blocks: int = 8,
+        n_head: int = 12,
+        diffusion: float = 0.05,
+    ) -> None:
+        super().__init__()
+        self.d_single = d_single
+        self.d_pair = d_pair
+        self.n_blocks = n_blocks
+        self.flow_model = SE3FlowMatching(
+            d_single=d_single,
+            d_pair=d_pair,
+            n_blocks=n_blocks,
+            n_head=n_head,
+            ipa_class=InvariantPointAttention,
+        )
+        self.frozen_bridge = nn.Sequential(
+            nn.Linear(d_single, d_single * 8),
+            nn.GELU(),
+            nn.Linear(d_single * 8, d_single * 8),
+            nn.GELU(),
+            nn.Linear(d_single * 8, d_single),
+        )
+        self.sb_model = SE3SchrodingerBridge(
+            self.flow_model.velocity_field,
+            diffusion=diffusion,
+            sinkhorn_iters=50,
+        )
+
+    def sample(
+        self,
+        R0: torch.Tensor,
+        t0: torch.Tensor,
+        pair_cond: torch.Tensor,
+        evol_single: torch.Tensor,
+        n_steps: int = 20,
+        fixed_mask: Optional[torch.Tensor] = None,
+        substrate_coords: Optional[torch.Tensor] = None,
+        evol_conditioning_fn: Optional[Callable] = None,
+        generator: Optional[torch.Generator] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.sb_model.sample(
+            R0,
+            t0,
+            pair_cond,
+            self.frozen_bridge(evol_single),
+            n_steps=n_steps,
+            fixed_mask=fixed_mask,
+            substrate_coords=substrate_coords,
+            evol_conditioning_fn=evol_conditioning_fn,
+            generator=generator,
+        )
+
+    def loss(
+        self,
+        R0: torch.Tensor,
+        t0: torch.Tensor,
+        R1: torch.Tensor,
+        t1: torch.Tensor,
+        pair_cond: torch.Tensor,
+        evol_single: torch.Tensor,
+        fixed_mask: Optional[torch.Tensor] = None,
+        substrate_coords: Optional[torch.Tensor] = None,
+        evol_conditioning_fn: Optional[Callable] = None,
+    ) -> torch.Tensor:
+        return self.sb_model.bridge_loss(
+            R0,
+            t0,
+            R1,
+            t1,
+            pair_cond,
+            self.frozen_bridge(evol_single),
+            fixed_mask=fixed_mask,
+            substrate_coords=substrate_coords,
+            evol_conditioning_fn=evol_conditioning_fn,
+        )

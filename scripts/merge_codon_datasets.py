@@ -76,16 +76,16 @@ def split_by_accession(
         raise ValueError("validation_fraction must be between 0 and 1")
     groups: dict[str, list[dict[str, Any]]] = {}
     for record in records:
-        accession = record.get("accession") or record_key(record)
-        groups.setdefault(accession, []).append(record)
+        protein_identity = str(record["aa_sequence"]).strip().upper()
+        groups.setdefault(protein_identity, []).append(record)
 
     ordered_groups = sorted(groups.items())
     validation_count = max(1, round(len(ordered_groups) * validation_fraction))
     validation_accessions = {
-        accession for accession, _ in ordered_groups[:validation_count]
+        protein for protein, _ in ordered_groups[:validation_count]
     }
-    train = [record for accession, group in ordered_groups if accession not in validation_accessions for record in group]
-    validation = [record for accession, group in ordered_groups if accession in validation_accessions for record in group]
+    train = [record for protein, group in ordered_groups if protein not in validation_accessions for record in group]
+    validation = [record for protein, group in ordered_groups if protein in validation_accessions for record in group]
     return train, validation
 
 

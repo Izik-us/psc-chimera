@@ -7,6 +7,7 @@ face and module frames.
 """
 
 import math
+from itertools import combinations
 import torch
 
 
@@ -50,26 +51,64 @@ def icosahedral_rotations(dtype=torch.float32) -> torch.Tensor:
     return torch.stack(group).to(dtype)
 
 
-def icosahedral_face_normals(dtype=torch.float32) -> torch.Tensor:
-    """Return 20 normalized outward normals, one for each icosahedron face."""
+def icosahedron_vertices_and_faces(dtype=torch.float32) -> tuple[torch.Tensor, torch.Tensor]:
+    """Construct the 12 vertices and 20 outward triangular faces of an icosahedron."""
     phi = (1.0 + math.sqrt(5.0)) / 2.0
-    inv_phi = 1.0 / phi
-    vertices = []
-    for a in (-1.0, 1.0):
-        for b in (-1.0, 1.0):
-            for c in (-1.0, 1.0):
-                vertices.append((a, b, c))
-    for a in (-1.0, 1.0):
-        for b in (-1.0, 1.0):
-            vertices.extend(
-                [
-                    (0.0, a * inv_phi, b * phi),
-                    (a * inv_phi, b * phi, 0.0),
-                    (a * phi, 0.0, b * inv_phi),
-                ]
+    vertices = [
+        (0.0, a, b * phi)
+        for a in (-1.0, 1.0)
+        for b in (-1.0, 1.0)
+    ]
+    vertices.extend(
+        (a, b * phi, 0.0)
+        for a in (-1.0, 1.0)
+        for b in (-1.0, 1.0)
+    )
+    vertices.extend(
+        (a * phi, 0.0, b)
+        for a in (-1.0, 1.0)
+        for b in (-1.0, 1.0)
+    )
+    vertex_tensor = torch.tensor(vertices, dtype=torch.float64)
+    edge_length_squared = 4.0
+    faces = []
+    for face in combinations(range(vertex_tensor.shape[0]), 3):
+        points = vertex_tensor[list(face)]
+        edge_lengths_squared = torch.stack(
+            (
+                (points[0] - points[1]).square().sum(),
+                (points[1] - points[2]).square().sum(),
+                (points[2] - points[0]).square().sum(),
             )
-    normals = torch.tensor(vertices, dtype=dtype)
-    return normals / normals.norm(dim=-1, keepdim=True)
+        )
+        if not torch.allclose(
+            edge_lengths_squared,
+            torch.full_like(edge_lengths_squared, edge_length_squared),
+            atol=1e-8,
+            rtol=0.0,
+        ):
+            continue
+        normal = torch.linalg.cross(points[1] - points[0], points[2] - points[0])
+        centroid = points.mean(dim=0)
+        if torch.dot(normal, centroid) < 0:
+            face = (face[0], face[2], face[1])
+        faces.append(face)
+
+    if len(faces) != 20:
+        raise RuntimeError(f"Icosahedron construction produced {len(faces)} faces, expected 20")
+    return vertex_tensor.to(dtype=dtype), torch.tensor(faces, dtype=torch.long)
+
+
+def icosahedral_face_normals(dtype=torch.float32) -> torch.Tensor:
+    """Return 20 normalized outward normals calculated from triangular faces."""
+    vertices, faces = icosahedron_vertices_and_faces(dtype=torch.float64)
+    points = vertices[faces]
+    normals = torch.linalg.cross(
+        points[:, 1] - points[:, 0],
+        points[:, 2] - points[:, 0],
+    )
+    normals = normals / normals.norm(dim=-1, keepdim=True)
+    return normals.to(dtype=dtype)
 
 
 def interface_compatibility(

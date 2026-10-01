@@ -202,11 +202,22 @@ class SE3SchrodingerBridge(nn.Module):
         for step in range(n_steps):
             tau = torch.full((B,), min(step * dt, 1.0 - 1e-4), device=R.device, dtype=x.dtype)
             vr, vt = self._call_drift(self.drift_model, R, x, tau, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn)
-            if step < n_steps - 1:
-                vr = vr + noise_scale * torch.randn(vr.shape, device=vr.device, dtype=vr.dtype, generator=generator)
-                vt = vt + noise_scale * torch.randn(vt.shape, device=vt.device, dtype=vt.dtype, generator=generator)
-            R = R @ so3_exp(vr * dt)
-            x = x + vt * dt
+            rot_increment = vr * dt
+            trans_increment = vt * dt
+            rot_increment = rot_increment + noise_scale * torch.randn(
+                vr.shape,
+                device=vr.device,
+                dtype=vr.dtype,
+                generator=generator,
+            )
+            trans_increment = trans_increment + noise_scale * torch.randn(
+                vt.shape,
+                device=vt.device,
+                dtype=vt.dtype,
+                generator=generator,
+            )
+            R = R @ so3_exp(rot_increment)
+            x = x + trans_increment
             if fixed_mask is not None:
                 mR = fixed_mask[..., None, None]
                 mx = fixed_mask[..., None]

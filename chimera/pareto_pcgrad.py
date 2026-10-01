@@ -13,17 +13,49 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
-from .multi_objective import ParetoMultiObjectiveHead as _LegacyParetoHead
+from .multi_objective import ParetoObjectives
 
 
-class MergeReadyParetoMultiObjectiveHead(_LegacyParetoHead):
-    """Pareto head whose compatibility ``pcgrad_loss`` is real PCGrad."""
+class MergeReadyParetoMultiObjectiveHead(nn.Module):
+    """Standalone five-objective prediction head with true PCGrad support."""
+
+    def __init__(self, d_model: int = 256):
+        super().__init__()
+        self.shared = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Linear(d_model, d_model),
+        )
+
+        def head():
+            return nn.Sequential(
+                nn.Linear(d_model, d_model // 2),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(d_model // 2, 1),
+            )
+
+        self.head_evol = head()
+        self.head_stab = head()
+        self.head_expr = head()
+        self.head_sel = head()
+        self.head_asm = head()
+        self._last_repr: Optional[torch.Tensor] = None
 
     def forward(self, repr: torch.Tensor):
         self._last_repr = repr
-        return super().forward(repr)
+        pooled = self.shared(repr).mean(dim=1)
+        return ParetoObjectives(
+            evolutionary_plausibility=self.head_evol(pooled).squeeze(-1),
+            structural_stability=100 * torch.sigmoid(self.head_stab(pooled).squeeze(-1)),
+            expression_efficiency=torch.sigmoid(self.head_expr(pooled).squeeze(-1)),
+            substrate_selectivity=torch.sigmoid(self.head_sel(pooled).squeeze(-1)),
+            assembly_compatibility=torch.sigmoid(self.head_asm(pooled).squeeze(-1)),
+        )
 
     @staticmethod
     def _task_losses(objectives, labels: Dict[str, Optional[torch.Tensor]]):
@@ -39,6 +71,28 @@ class MergeReadyParetoMultiObjectiveHead(_LegacyParetoHead):
         if labels.get("asm") is not None:
             losses["asm"] = F.mse_loss(objectives.assembly_compatibility, labels["asm"])
         return losses
+
+    @staticmethod
+    def compute_pareto_frontier(objectives_matrix, maximize=None):
+        if objectives_matrix.ndim != 2:
+            raise ValueError("objectives_matrix must have shape (N, objectives)")
+        if maximize is None:
+            maximize = [True] * objectives_matrix.shape[1]
+        if len(maximize) != objectives_matrix.shape[1]:
+            raise ValueError("maximize must match the objective dimension")
+        if objectives_matrix.shape[0] == 0:
+            return objectives_matrix, torch.empty(0, dtype=torch.long, device=objectives_matrix.device)
+        values = objectives_matrix.detach().cpu().numpy().copy()
+        for index, should_maximize in enumerate(maximize):
+            if not should_maximize:
+                values[:, index] *= -1
+        is_pareto = torch.ones(values.shape[0], dtype=torch.bool)
+        for candidate in range(values.shape[0]):
+            dominates = (values >= values[candidate]).all(axis=1) & (values > values[candidate]).any(axis=1)
+            if dominates.any():
+                is_pareto[candidate] = False
+        indices = torch.nonzero(is_pareto, as_tuple=False).squeeze(-1).to(objectives_matrix.device)
+        return objectives_matrix.index_select(0, indices), indices
 
     def pcgrad_loss(self, objectives, labels, weights=None, generator: Optional[torch.Generator] = None):
         """Return a scalar whose backward gradient is canonical PCGrad.

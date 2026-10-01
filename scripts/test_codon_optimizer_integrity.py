@@ -36,6 +36,8 @@ For Git Bash:
 
 from __future__ import annotations
 
+__test__ = False
+
 import argparse
 import math
 import sys

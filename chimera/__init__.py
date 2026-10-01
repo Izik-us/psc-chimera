@@ -16,7 +16,7 @@ from .architecture import CHIMERAv2, CanonicalCHIMERAv2
 from .chimera_v2 import NRPSConstraints
 from .codon_optimizer import CodonOptimizer, optimize_nrps_for_mammalian_expression
 from .protein_fitness import ESMProteinFitnessScorer
-from .flow_matching import SE3FlowMatching
+from .flow_matching import SE3FlowMatching, FlowMatchingBackbone, InvariantPointAttention
 from .schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 from .geometry import GeometryReport, validate_backbone
 from .evaluators import BiologicalObjectiveEvaluator
@@ -26,7 +26,8 @@ from .bayesian import BayesianUncertaintyEstimator
 from .reproducibility import seed_everything, seed_worker, make_generator
 from .checkpoint import CheckpointManifest, save_manifest, load_manifest, config_hash, state_schema_hash
 from .domain_schema import DomainType, DomainSpan, AssemblySchema
-from .multi_objective import StructuralRetriever
+from .multi_objective import StructuralRetriever, MultiScaleNRPSDesigner
+from .conditioning import SubstratePocketConditioner
 from .autoregressive_policy import AutoregressiveSequencePolicy
 from .pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 from .adapters import (
@@ -47,6 +48,8 @@ __all__ = [
     "CHIMERAv2", "CanonicalCHIMERAv2", "NRPSConstraints",
     "CodonOptimizer", "optimize_nrps_for_mammalian_expression",
     "ESMProteinFitnessScorer", "SE3FlowMatching", "SchrodingerBridge",
+    "FlowMatchingBackbone", "InvariantPointAttention", "MultiScaleNRPSDesigner",
+    "SubstratePocketConditioner",
     "SE3SchrodingerBridge", "GeometryReport", "validate_backbone",
     "BiologicalObjectiveEvaluator", "PCGradOptimizer", "pcgrad_step",
     "project_conflicting_gradients", "DPOBatch", "DPOTrainer",
