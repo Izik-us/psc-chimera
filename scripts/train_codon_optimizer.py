@@ -22,6 +22,7 @@ from chimera.codon_optimizer import (
     ESM_T30_MAX_PROTEIN_LENGTH,
 )
 from data.codon_dataset import CodonJSONLDataset
+from data.splitting import SequenceIdentityClusterer, make_clustered_split
 from scripts.codon_observatory import CodonObservatory, TrainingTelemetry, read_system_stats
 
 
@@ -151,31 +152,21 @@ def _record_key(item: dict) -> str:
 
 
 def split_dataset(dataset, val_fraction: float, seed: int):
-    """Split by protein identity rather than individual rows to prevent leakage."""
+    """Split by cluster membership using the canonical leakage-safe helper."""
     if not 0.0 <= val_fraction < 1.0:
         raise ValueError("val-fraction must be in [0, 1).")
-
-    groups: dict[str, list[int]] = {}
-    for index in range(len(dataset)):
-        groups.setdefault(_record_key(dataset[index]), []).append(index)
-
-    keys = sorted(groups)
-    rng = random.Random(seed)
-    rng.shuffle(keys)
-
-    if len(keys) < 2 or val_fraction == 0.0:
-        return Subset(dataset, list(range(len(dataset)))), None
-
-    n_val = max(1, int(round(len(keys) * val_fraction)))
-    n_val = min(n_val, len(keys) - 1)
-    val_keys = set(keys[:n_val])
-
-    train_indices = [i for key in keys if key not in val_keys for i in groups[key]]
-    val_indices = [i for key in keys if key in val_keys for i in groups[key]]
-
+    records = [dataset[index] for index in range(len(dataset))]
+    split = make_clustered_split(
+        records,
+        train_fraction=1.0 - val_fraction,
+        validation_fraction=val_fraction,
+        seed=seed,
+        clusterer=SequenceIdentityClusterer(threshold=0.3),
+    )
+    train_indices = split["train_indices"]
+    val_indices = split["validation_indices"]
     if not train_indices or not val_indices:
-        raise RuntimeError("Dataset split produced an empty train or validation set.")
-
+        return Subset(dataset, list(range(len(dataset)))), None
     return Subset(dataset, train_indices), Subset(dataset, val_indices)
 
 
