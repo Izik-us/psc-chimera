@@ -350,17 +350,22 @@ class NRPSConstraintEncoder(nn.Module):
         return c_map
 
 class EvoFormerBackbone(nn.Module):
-    """
-    Wraps OpenFold EvoFormer or ESMFold trunk.
-    Production: load from openfold_weights.pt
-    Stub: uses ESM-2 150M as approximate replacement.
+    """EvoFormer-inspired MSA encoder approximation with explicit padding masks.
+
+    This is not a native OpenFold/EvoFormer implementation. ``True`` in the
+    optional ``msa_padding_mask`` means the MSA token is padding. Row attention
+    masks keys; masked query outputs are zeroed before valid-row pooling.
+    There is no separate MSA column-attention stack in this approximation.
     """
 
     def __init__(self, d_single: int = 256, d_pair: int = 128, n_blocks: int = 48):
         super().__init__()
         self.d_single = d_single
         self.d_pair = d_pair
-        self.token_embed = nn.Embedding(23, d_single)
+        if d_single % 8:
+            raise ValueError("d_single must be divisible by 8 attention heads")
+        self.padding_token = 22
+        self.token_embed = nn.Embedding(23, d_single, padding_idx=self.padding_token)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_single,
             nhead=8,
@@ -383,22 +388,49 @@ class EvoFormerBackbone(nn.Module):
         self,
         msa_tokens: torch.Tensor,  # (B, N_seq, L) MSA token IDs
         pair_features: torch.Tensor,  # (B, L, L, d_pair) initial pair features
+        msa_padding_mask: Optional[torch.Tensor] = None,  # True means padding
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if msa_tokens.ndim != 3:
+            raise ValueError("msa_tokens must have shape (B,N_seq,L)")
         B, N, L = msa_tokens.shape
+        if N < 1 or L < 1:
+            raise ValueError("MSA sequence and residue dimensions must be non-empty")
+        if pair_features.shape != (B, L, L, self.d_pair):
+            raise ValueError("pair_features must have shape (B,L,L,d_pair)")
         if msa_tokens.min() < 0 or msa_tokens.max() >= self.token_embed.num_embeddings:
             raise ValueError("msa_tokens contains values outside the 0..22 vocabulary")
+        if msa_padding_mask is None:
+            msa_padding_mask = msa_tokens.eq(self.padding_token)
+        elif msa_padding_mask.shape != msa_tokens.shape or msa_padding_mask.dtype != torch.bool:
+            raise ValueError("msa_padding_mask must be bool with shape (B,N_seq,L); True means padding")
+        elif msa_padding_mask.device != msa_tokens.device:
+            raise ValueError("msa_padding_mask and msa_tokens must be on the same device")
+
+        residue_valid = (~msa_padding_mask).any(dim=1)
         tok_emb = self.token_embed(msa_tokens)
         msa_emb = tok_emb.reshape(B * N, L, self.d_single)
-        enc = self.msa_encoder(msa_emb).reshape(B, N, L, self.d_single)
-        single = enc.mean(dim=1)  # (B, L, d_single) pool over sequences
+        row_padding = msa_padding_mask.reshape(B * N, L).clone()
+        all_padding_rows = row_padding.all(dim=1)
+        if all_padding_rows.any():
+            row_padding[all_padding_rows, 0] = False
+        enc = self.msa_encoder(
+            msa_emb,
+            src_key_padding_mask=row_padding,
+        ).reshape(B, N, L, self.d_single)
+        enc = enc.masked_fill(msa_padding_mask.unsqueeze(-1), 0.0)
+        valid_counts = (~msa_padding_mask).sum(dim=1).clamp_min(1).to(enc.dtype)
+        single = enc.sum(dim=1) / valid_counts.unsqueeze(-1)
         single = self.frozen_feature_expander(single)
+        single = single.masked_fill(~residue_valid.unsqueeze(-1), 0.0)
         # Pair: outer product mean
         pair_l = single.unsqueeze(2).expand(-1, -1, L, -1)
         pair_r = single.unsqueeze(1).expand(-1, L, -1, -1)
         pair_repr = self.pair_init(
             torch.cat([pair_l, pair_r], dim=-1)
         )  # (B, L, L, d_pair)
-        return single, pair_repr + pair_features
+        pair_valid = residue_valid.unsqueeze(1) & residue_valid.unsqueeze(2)
+        pair_repr = (pair_repr + pair_features).masked_fill(~pair_valid.unsqueeze(-1), 0.0)
+        return single, pair_repr
 
 class ProteinMPNNBackbone(nn.Module):
     """

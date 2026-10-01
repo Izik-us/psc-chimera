@@ -45,6 +45,24 @@ def test_public_chimera_is_independent_canonical_composition():
     assert not any(isinstance(module, LegacyCHIMERAv2) for module in model.modules())
 
 
+def test_canonical_and_legacy_objective_imports_are_isolated():
+    from chimera.bayesian import BayesianUncertaintyEstimator as CanonicalBayesian
+    from chimera.dpo import DPOTrainer as CanonicalDPO
+    from chimera.multi_objective import (
+        BayesianUncertaintyEstimator as LegacyBayesian,
+        DPOTrainer as LegacyDPO,
+        LegacyBayesianUncertaintyEstimator,
+        LegacyDPOTrainer,
+    )
+
+    assert CanonicalBayesian.__module__ == "chimera.bayesian"
+    assert CanonicalDPO.__module__ == "chimera.dpo"
+    assert LegacyBayesian is LegacyBayesianUncertaintyEstimator
+    assert LegacyDPO is LegacyDPOTrainer
+    assert CanonicalBayesian is not LegacyBayesian
+    assert CanonicalDPO is not LegacyDPO
+
+
 def test_canonical_synthetic_forward_and_backward():
     from chimera.lie import so3_exp
 
@@ -72,14 +90,28 @@ def test_canonical_synthetic_forward_and_backward():
     assert output["sequence_tokens"].shape == (batch, 1, length)
     assert output["sequences"].shape == (batch, 1, length, 20)
     assert output["pareto_objectives"].expression_efficiency.shape == (batch, 1)
+    for value in output.values():
+        if torch.is_tensor(value):
+            assert torch.isfinite(value).all()
 
     targets = output["sequence_tokens"][:, 0]
     loss = model.sequence_policy_loss(output["sequence_context"][:, 0], targets)
+    optimizer = torch.optim.AdamW(
+        [parameter for parameter in model.sequence_policy.parameters() if parameter.requires_grad],
+        lr=1e-3,
+    )
+    before = [parameter.detach().clone() for parameter in model.sequence_policy.parameters()]
+    optimizer.zero_grad(set_to_none=True)
     loss.backward()
     assert any(
         parameter.grad is not None
         for parameter in model.sequence_policy.parameters()
         if parameter.requires_grad
+    )
+    optimizer.step()
+    assert any(
+        not torch.equal(old, new.detach())
+        for old, new in zip(before, model.sequence_policy.parameters())
     )
 
 
@@ -244,6 +276,12 @@ def test_canonical_component_state_dict_shapes_match_legacy_layout():
     for name in ("flow_model", "multi_scale_designer", "pareto_head", "substrate_conditioner"):
         old_state = getattr(legacy, name).state_dict()
         new_state = getattr(canonical, name).state_dict()
+        if name == "flow_model":
+            migrated = CHIMERAv2._migrate_flow_state_dict(old_state, new_state)
+            incompatible = canonical.flow_model.load_state_dict(migrated, strict=True)
+            assert not incompatible.missing_keys
+            assert not incompatible.unexpected_keys
+            continue
         assert set(old_state).issubset(new_state), name
         for key in old_state:
             if name == "multi_scale_designer" and key == "edge_proj.weight":
@@ -288,6 +326,40 @@ def test_flow_checkpoint_migration_fills_bridge_alias(tmp_path):
     connector_path = tmp_path / "legacy_flow_connector.pt"
     torch.save({"flow_model": historical}, connector_path)
     canonical.load_connectors(str(connector_path))
+
+
+def test_flow_migration_maps_truncated_12_head_ipa(tmp_path):
+    from chimera.flow_matching import FlowMatchingBackbone
+
+    backbone = FlowMatchingBackbone(d_single=64, d_pair=16, n_blocks=1)
+    target = backbone.state_dict()
+    historical = {
+        key: value.clone()
+        for key, value in target.items()
+        if not key.startswith("sb_model.drift_model.")
+    }
+    prefix = "flow_model.velocity_field.ipa_blocks.0.ipa."
+    historical[prefix + "q_s.weight"] = torch.randn(60, 64)
+    historical[prefix + "k_s.weight"] = torch.randn(60, 64)
+    historical[prefix + "v_s.weight"] = torch.randn(60, 64)
+    historical[prefix + "q_p.weight"] = torch.randn(144, 64)
+    historical[prefix + "k_p.weight"] = torch.randn(144, 64)
+    historical[prefix + "v_p.weight"] = torch.randn(288, 64)
+    historical[prefix + "pair_bias.weight"] = torch.randn(12, 16)
+    historical[prefix + "gamma"] = torch.randn(12)
+    historical[prefix + "substrate_gate.weight"] = torch.randn(12, 64)
+    historical[prefix + "substrate_gate.bias"] = torch.randn(12)
+    historical[prefix + "out.weight"] = torch.randn(64, 12 * (5 + 3 + 16))
+    historical["frozen_bridge.0.weight"] = torch.randn(512, 64)
+    historical["frozen_bridge.0.bias"] = torch.randn(512)
+
+    with pytest.warns(UserWarning) as recorded:
+        migrated = CHIMERAv2._migrate_flow_state_dict(historical, target)
+    assert len(recorded) >= 2
+    assert not any(key.startswith("frozen_bridge.") for key in migrated)
+    incompatible = backbone.load_state_dict(migrated, strict=True)
+    assert not incompatible.missing_keys
+    assert not incompatible.unexpected_keys
 
 
 def test_legacy_designer_checkpoint_migrates_edge_projection(tmp_path):

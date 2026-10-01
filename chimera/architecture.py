@@ -166,8 +166,30 @@ class CanonicalCHIMERAv2(nn.Module):
 
     @staticmethod
     def _migrate_flow_state_dict(state: Dict[str, torch.Tensor], target_state: Dict[str, torch.Tensor]):
-        """Fill the explicit SB drift alias from historical flow-only weights."""
+        """Migrate historical flow keys and the former floor-divided IPA layout.
+
+        Old IPA checkpoints could use 12 heads even when ``d_single`` was not
+        divisible by 12. Their per-head scalar features were truncated. The
+        migration preserves overlapping heads/features, zero-pads newly valid
+        scalar dimensions, and initializes new heads from the target module.
+        The old frozen bridge was random, frozen, and dimension preserving; the
+        canonical backbone replaces it with Identity, so those keys are dropped.
+        """
         migrated = dict(state)
+        removed_bridge_keys = [
+            key for key in migrated
+            if key == "frozen_bridge" or key.startswith("frozen_bridge.")
+            or ".frozen_bridge." in key
+        ]
+        for key in removed_bridge_keys:
+            migrated.pop(key)
+        if removed_bridge_keys:
+            warnings.warn(
+                "Discarded legacy random frozen_bridge parameters; canonical flow uses Identity.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         prefix = "flow_model.velocity_field."
         alias_prefix = "sb_model.drift_model."
         for key, value in tuple(migrated.items()):
@@ -175,6 +197,83 @@ class CanonicalCHIMERAv2(nn.Module):
                 alias = alias_prefix + key[len(prefix):]
                 if alias in target_state:
                     migrated.setdefault(alias, value)
+
+        for target_gamma_key, target_gamma in target_state.items():
+            if not target_gamma_key.endswith(".ipa.gamma"):
+                continue
+            module_prefix = target_gamma_key[:-len("gamma")]
+            source_gamma = migrated.get(target_gamma_key)
+            if source_gamma is None or source_gamma.shape == target_gamma.shape:
+                continue
+            old_heads = int(source_gamma.numel())
+            new_heads = int(target_gamma.numel())
+            copy_heads = min(old_heads, new_heads)
+            source_q = migrated[module_prefix + "q_s.weight"]
+            target_q = target_state[module_prefix + "q_s.weight"]
+            old_head_dim = source_q.shape[0] // old_heads
+            new_head_dim = target_q.shape[0] // new_heads
+            pair_dim = target_state[module_prefix + "pair_bias.weight"].shape[1]
+
+            for name in ("q_s.weight", "k_s.weight", "v_s.weight"):
+                source = migrated[module_prefix + name]
+                target = target_state[module_prefix + name].clone()
+                source = source.reshape(old_heads, old_head_dim, source.shape[1])
+                target_view = target.reshape(new_heads, new_head_dim, target.shape[1])
+                for head in range(copy_heads):
+                    width = min(old_head_dim, new_head_dim)
+                    target_view[head, :width] = source[head, :width]
+                migrated[module_prefix + name] = target
+
+            for name in ("q_p.weight", "k_p.weight", "v_p.weight"):
+                source = migrated[module_prefix + name]
+                target = target_state[module_prefix + name].clone()
+                points = source.shape[0] // (old_heads * 3)
+                source_view = source.reshape(old_heads, points, 3, source.shape[1])
+                target_view = target.reshape(new_heads, points, 3, target.shape[1])
+                target_view[:copy_heads] = source_view[:copy_heads]
+                migrated[module_prefix + name] = target
+
+            for name in ("pair_bias.weight", "substrate_gate.weight"):
+                source = migrated[module_prefix + name]
+                target = target_state[module_prefix + name].clone()
+                target[:copy_heads] = source[:copy_heads]
+                migrated[module_prefix + name] = target
+
+            substrate_bias_key = module_prefix + "substrate_gate.bias"
+            source_substrate_bias = migrated[substrate_bias_key]
+            target_substrate_bias = target_state[substrate_bias_key].clone()
+            target_substrate_bias[:copy_heads] = source_substrate_bias[:copy_heads]
+            migrated[substrate_bias_key] = target_substrate_bias
+
+            source_gamma = migrated[module_prefix + "gamma"]
+            target_gamma_value = target_state[module_prefix + "gamma"].clone()
+            target_gamma_value[:copy_heads] = source_gamma[:copy_heads]
+            migrated[module_prefix + "gamma"] = target_gamma_value
+
+            source_out = migrated[module_prefix + "out.weight"]
+            target_out = target_state[module_prefix + "out.weight"].clone()
+            old_width = old_head_dim + 3 + pair_dim
+            new_width = new_head_dim + 3 + pair_dim
+            source_view = source_out.reshape(source_out.shape[0], old_heads, old_width)
+            target_view = target_out.reshape(target_out.shape[0], new_heads, new_width)
+            for head in range(copy_heads):
+                target_view[:, head, :min(old_head_dim, new_head_dim)] = source_view[
+                    :, head, :min(old_head_dim, new_head_dim)
+                ]
+                target_view[:, head, new_head_dim:new_head_dim + 3] = source_view[
+                    :, head, old_head_dim:old_head_dim + 3
+                ]
+                target_view[:, head, new_head_dim + 3:] = source_view[
+                    :, head, old_head_dim + 3:old_width
+                ]
+            migrated[module_prefix + "out.weight"] = target_out
+
+            warnings.warn(
+                f"Migrated truncated IPA heads at {module_prefix[:-1]} from "
+                f"{old_heads} to {new_heads} divisible heads; overlapping head features were preserved.",
+                UserWarning,
+                stacklevel=2,
+            )
         return migrated
 
     def freeze_pretrained(self) -> None:
@@ -335,6 +434,7 @@ class CanonicalCHIMERAv2(nn.Module):
         initial_pair_features: torch.Tensor,
         source_R: torch.Tensor,
         source_t: torch.Tensor,
+        msa_padding_mask: Optional[torch.Tensor] = None,
         constraints: Optional[NRPSConstraints] = None,
         substrate_id: Optional[torch.Tensor] = None,
         substrate_coords: Optional[torch.Tensor] = None,
@@ -372,7 +472,11 @@ class CanonicalCHIMERAv2(nn.Module):
 
         constraints = self._normalize_constraints(constraints, B, L, device)
         with torch.no_grad():
-            single_repr, pair_repr = self.evoformer(msa_tokens, initial_pair_features)
+            single_repr, pair_repr = self.evoformer(
+                msa_tokens,
+                initial_pair_features,
+                msa_padding_mask=msa_padding_mask,
+            )
 
         retrieved_context = None
         if use_rag and substrate_id is not None and self.structural_retriever.index_embs is not None:
@@ -697,9 +801,6 @@ class CanonicalCHIMERAv2(nn.Module):
         if historical is None:
             raise ValueError("Expected Improvement requires an explicit historical best")
         return BayesianUncertaintyEstimator.expected_improvement(mean, std, historical)
-
-    def from_pretrained_not_supported(self):
-        raise NotImplementedError
 
     def save(self, path: str) -> None:
         torch.save({name: getattr(self, name).state_dict() for name in (
