@@ -1,6 +1,7 @@
 import torch
 import pytest
 from itertools import product
+from argparse import Namespace
 
 from chimera.codon_optimizer import (
     AA_PAD_TOKEN,
@@ -15,6 +16,7 @@ from chimera.codon_optimizer import (
 from scripts.train_codon_optimizer import (
     LengthBucketBatchSampler,
     _run_eval,
+    build_model_config,
     collate_records,
 )
 
@@ -137,6 +139,41 @@ def test_codon_decoder_capacity_tracks_protein_context():
             max_protein_length=40,
             max_codons=121,
         )
+
+
+def test_trainer_capacity_config_preserves_checkpoint_and_explicit_limits():
+    args = Namespace(
+        d_model=None,
+        n_heads=None,
+        n_dec_layers=None,
+        dim_ff=None,
+        max_protein_length=None,
+        max_codons=None,
+        esm_model_path=None,
+    )
+    default = build_model_config(args)
+    assert default["max_protein_length"] == 1022
+    assert default["max_codons"] == 3066
+
+    args.max_protein_length = 40
+    overridden = build_model_config(args)
+    assert overridden["max_protein_length"] == 40
+    assert overridden["max_codons"] == 120
+
+    restored = build_model_config(
+        args,
+        {"max_protein_length": 2731, "max_codons": 8192},
+    )
+    assert restored["max_protein_length"] == 40
+    assert restored["max_codons"] == 120
+
+    args.max_protein_length = None
+    legacy = build_model_config(
+        args,
+        {"max_protein_length": 2731, "max_codons": 8192},
+    )
+    assert legacy["max_protein_length"] == 2731
+    assert legacy["max_codons"] == 8192
 
 
 def test_cpg_is_not_unconditionally_counted_as_a_bad_motif():

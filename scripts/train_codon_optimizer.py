@@ -185,6 +185,10 @@ def validate_model_config(config: dict[str, Any]) -> None:
             raise ValueError(f"{key} must be positive")
     if int(config["d_model"]) % int(config["n_heads"]) != 0:
         raise ValueError("d_model must be divisible by n_heads")
+    if int(config["max_protein_length"]) <= 0 or int(config["max_codons"]) < int(config["max_protein_length"]):
+        raise ValueError("max_protein_length and max_codons must define a valid sequence capacity")
+    if int(config["max_codons"]) > 3 * int(config["max_protein_length"]):
+        raise ValueError("max_codons cannot exceed 3 * max_protein_length")
 
 
 def build_model_config(args: argparse.Namespace, checkpoint_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -194,6 +198,7 @@ def build_model_config(args: argparse.Namespace, checkpoint_config: dict[str, An
         "n_dec_layers": 8,
         "dim_ff": 1064,
         "max_protein_length": ESM_T30_MAX_PROTEIN_LENGTH,
+        "max_codons": 3 * ESM_T30_MAX_PROTEIN_LENGTH,
     }
     if checkpoint_config:
         config.update({k: checkpoint_config[k] for k in config if k in checkpoint_config})
@@ -203,10 +208,13 @@ def build_model_config(args: argparse.Namespace, checkpoint_config: dict[str, An
         "n_dec_layers",
         "dim_ff",
         "max_protein_length",
+        "max_codons",
     ):
         value = getattr(args, key)
         if value is not None:
             config[key] = value
+    if args.max_protein_length is not None and args.max_codons is None:
+        config["max_codons"] = 3 * int(args.max_protein_length)
     if args.esm_model_path is not None:
         config["esm_model_path"] = str(args.esm_model_path)
     elif checkpoint_config is not None:
@@ -399,6 +407,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-dec-layers", type=int, default=None)
     parser.add_argument("--dim-ff", type=int, default=None)
     parser.add_argument("--max-protein-length", type=int, default=None)
+    parser.add_argument("--max-codons", type=int, default=None)
     parser.add_argument(
         "--max-attention-elements",
         type=int,

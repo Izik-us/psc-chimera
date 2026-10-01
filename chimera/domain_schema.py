@@ -2,7 +2,26 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Sequence
+from typing import Optional, Sequence
+
+import torch
+
+
+@dataclass
+class NRPSConstraints:
+    """Tensor constraints applied by canonical and legacy NRPS models."""
+
+    fixed_mask: Optional[torch.Tensor]
+    stachelhaus_positions: torch.Tensor
+    domain_boundaries: torch.Tensor
+    module_boundaries: torch.Tensor
+    icosahedral_face: torch.Tensor
+    ppt_serine_position: int
+    hotspot_coords: Optional[torch.Tensor]
+    hotspot_indices: Optional[torch.Tensor]
+    target_substrate: str
+    fixed_sequence: Optional[torch.Tensor] = None
+    domain_types: Optional[torch.Tensor] = None
 
 
 class DomainType(str, Enum):
