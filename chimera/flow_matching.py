@@ -46,6 +46,18 @@ from einops import rearrange, repeat
 from .lie import hat, so3_exp, so3_log, relative_rotation
 from .schrodinger_bridge import SE3SchrodingerBridge
 
+
+def _resolve_ipa_heads(d_single: int, n_head: Optional[int]) -> int:
+    if d_single <= 0:
+        raise ValueError("d_single must be positive")
+    if n_head is not None:
+        if n_head <= 0 or d_single % n_head != 0:
+            raise ValueError(
+                f"d_single ({d_single}) must be divisible by n_head ({n_head})"
+            )
+        return n_head
+    return next(heads for heads in range(min(12, d_single), 0, -1) if d_single % heads == 0)
+
 def so3_geodesic_interp(R0: torch.Tensor, R1: torch.Tensor, t: float) -> torch.Tensor:
     """
     Geodesic interpolation on SO(3) at fraction t ∈ [0,1].
@@ -98,12 +110,13 @@ class InvariantPointAttention(nn.Module):
         self,
         d_single: int = 256,
         d_pair: int = 256,  # after PairProjection: 256 dim
-        n_head: int = 12,
+        n_head: Optional[int] = None,
         n_qk_pts: int = 4,  # number of 3D point queries/keys per head
         n_v_pts: int = 8,  # number of 3D point values per head
         inf: float = 1e9,
     ):
         super().__init__()
+        n_head = _resolve_ipa_heads(d_single, n_head)
         self.n_head = n_head
         self.n_qk_pts = n_qk_pts
         self.n_v_pts = n_v_pts
@@ -268,11 +281,12 @@ class VelocityField(nn.Module):
         d_single: int = 256,
         d_pair: int = 256,
         n_blocks: int = 8,
-        n_head: int = 12,
+        n_head: Optional[int] = None,
         ipa_class=InvariantPointAttention,
     ):
         super().__init__()
         self.d_single = d_single
+        n_head = _resolve_ipa_heads(d_single, n_head)
 
         # Time embedding: sinusoidal → learned projection
         self.time_mlp = nn.Sequential(
@@ -442,10 +456,11 @@ class SE3FlowMatching(nn.Module):
         d_single: int = 256,
         d_pair: int = 256,
         n_blocks: int = 8,
-        n_head: int = 12,
+        n_head: Optional[int] = None,
         ipa_class=InvariantPointAttention,
     ):
         super().__init__()
+        n_head = _resolve_ipa_heads(d_single, n_head)
         self.velocity_field = VelocityField(d_single, d_pair, n_blocks, n_head, ipa_class)
 
     def get_interpolation(
@@ -699,7 +714,7 @@ class FlowMatchingBackbone(nn.Module):
         d_single: int = 256,
         d_pair: int = 256,
         n_blocks: int = 8,
-        n_head: int = 12,
+        n_head: Optional[int] = None,
         diffusion: float = 0.05,
     ) -> None:
         super().__init__()
@@ -713,13 +728,7 @@ class FlowMatchingBackbone(nn.Module):
             n_head=n_head,
             ipa_class=InvariantPointAttention,
         )
-        self.frozen_bridge = nn.Sequential(
-            nn.Linear(d_single, d_single * 8),
-            nn.GELU(),
-            nn.Linear(d_single * 8, d_single * 8),
-            nn.GELU(),
-            nn.Linear(d_single * 8, d_single),
-        )
+        self.frozen_bridge = nn.Identity()
         self.sb_model = SE3SchrodingerBridge(
             self.flow_model.velocity_field,
             diffusion=diffusion,

@@ -265,7 +265,7 @@ class ProteusPreferencePair:
     source_t: torch.Tensor  # (L, 3) source backbone translations
 
 
-class DPOTrainer(nn.Module):
+class LegacyDPOTrainer(nn.Module):
     """
     Direct Preference Optimization for CHIMERA.
 
@@ -477,7 +477,10 @@ class DPOTrainer(nn.Module):
         return torch.tensor([AA.index(aa) for aa in seq])
 
 
-class AutoregressiveSequencePolicy(nn.Module):
+DPOTrainer = LegacyDPOTrainer
+
+
+class LegacyAutoregressiveSequencePolicy(nn.Module):
     """Causal sequence policy used to define valid DPO log probabilities."""
 
     def __init__(self, context_dim: int, vocab_size: int = 20, layers: int = 2):
@@ -518,7 +521,10 @@ class ParetoObjectives:
     assembly_compatibility: torch.Tensor  # icosahedral face score (0-1)
 
 
-class ParetoMultiObjectiveHead(nn.Module):
+AutoregressiveSequencePolicy = LegacyAutoregressiveSequencePolicy
+
+
+class LegacyParetoMultiObjectiveHead(nn.Module):
     """
     Replaces weighted sum losses with true Pareto-front exploration.
 
@@ -783,7 +789,10 @@ class ParetoMultiObjectiveHead(nn.Module):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-class BayesianUncertaintyEstimator(nn.Module):
+ParetoMultiObjectiveHead = LegacyParetoMultiObjectiveHead
+
+
+class LegacyBayesianUncertaintyEstimator(nn.Module):
     """
     MC Dropout-based Bayesian uncertainty quantification for CHIMERA.
 
@@ -1033,6 +1042,9 @@ class BayesianUncertaintyEstimator(nn.Module):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+BayesianUncertaintyEstimator = LegacyBayesianUncertaintyEstimator
+
+
 class MultiScaleNRPSDesigner(nn.Module):
     """
     Replaces ProteinMPNN alone with a four-scale hierarchical designer.
@@ -1118,6 +1130,8 @@ class MultiScaleNRPSDesigner(nn.Module):
             nn.GELU(),
             nn.Linear(d_domain * 2, d_domain),
         )
+        # Retained for strict legacy state_dict compatibility; current forward
+        # uses domain_ffn's normalization and does not consume these modules.
         self.domain_norms = nn.ModuleList(
             [nn.LayerNorm(d_domain) for _ in range(n_domains)]
         )
