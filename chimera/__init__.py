@@ -24,7 +24,7 @@ from .pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from .dpo import DPOBatch, DPOTrainer
 from .bayesian import BayesianUncertaintyEstimator
 from .reproducibility import seed_everything, seed_worker, make_generator
-from .checkpoint import CheckpointManifest, save_manifest, load_manifest, config_hash, state_schema_hash
+from .checkpoint import CheckpointManifest, save_manifest, load_manifest, config_hash, state_schema_hash, validate_checkpoint_compatibility
 from .domain_schema import DomainType, DomainSpan, AssemblySchema
 from .multi_objective import StructuralRetriever, MultiScaleNRPSDesigner
 from .conditioning import SubstratePocketConditioner
@@ -54,7 +54,7 @@ __all__ = [
     "BiologicalObjectiveEvaluator", "PCGradOptimizer", "pcgrad_step",
     "project_conflicting_gradients", "DPOBatch", "DPOTrainer",
     "BayesianUncertaintyEstimator", "CheckpointManifest", "save_manifest",
-    "load_manifest", "config_hash", "state_schema_hash",
+    "load_manifest", "config_hash", "state_schema_hash", "validate_checkpoint_compatibility",
     "seed_everything", "seed_worker", "make_generator",
     "DomainType", "DomainSpan", "AssemblySchema", "StructuralRetriever",
     "ParetoMultiObjectiveHead", "AutoregressiveSequencePolicy",

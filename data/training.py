@@ -39,7 +39,7 @@ def split_by_sequence_identity(records: list[dict], train_fraction: float = 0.8)
 
 
 def sequence_identity(left: Iterable[int], right: Iterable[int]) -> float:
-    """Calculate aligned identity, excluding gap-like token 21 positions."""
+    """Calculate positional identity on equal-length tokens, excluding token 21 positions."""
     left, right = list(left), list(right)
     if len(left) != len(right):
         raise ValueError("Aligned sequences must have equal length")
@@ -48,7 +48,7 @@ def sequence_identity(left: Iterable[int], right: Iterable[int]) -> float:
 
 
 def cluster_split_by_identity(records: list[dict], threshold: float = 0.3, train_fraction: float = 0.8) -> tuple[list[dict], list[dict]]:
-    """Greedily cluster homologous first-MSA sequences before splitting."""
+    """Greedily group first-MSA sequences by positional identity; this does not validate homology."""
     clusters: list[list[dict]] = []
     representatives: list[list[int]] = []
     for record in records:
@@ -74,6 +74,48 @@ def download_manifest(url: str, destination: str | Path, sha256: str) -> Path:
         raise ValueError(f"Checksum mismatch for {url}: expected {sha256}, got {digest}")
     destination.write_bytes(data)
     return destination
+
+
+def build_dataset_manifest(records: Iterable[dict], split_name: str = "") -> dict:
+    """Build a deterministic manifest for a dataset slice, including duplicates and provenance metadata."""
+    rows = list(records)
+    if not rows:
+        raise ValueError("records must not be empty")
+    unique_rows = deduplicate_records(rows)
+    sequences = []
+    sources = set()
+    label_types = set()
+    lengths = []
+    for row in rows:
+        sequence = row.get("aa_sequence")
+        if isinstance(sequence, str):
+            sequences.append(sequence)
+        elif isinstance(sequence, list):
+            sequences.append("".join(str(token) for token in sequence))
+        if "source" in row:
+            sources.add(str(row["source"]))
+        if "label_type" in row:
+            label_types.add(str(row["label_type"]).lower())
+        if "codon_sequence" in row:
+            lengths.append(len(str(row["codon_sequence"])))
+    manifest = {
+        "split_name": split_name,
+        "record_count": len(rows),
+        "unique_record_count": len(unique_rows),
+        "source_count": len(sources),
+        "sources": sorted(sources),
+        "label_types": sorted(label_types),
+        "protein_count": len({str(row.get("aa_sequence", "")).strip().upper() for row in rows if row.get("aa_sequence")}),
+        "sequence_lengths": {
+            "min": min(lengths) if lengths else 0,
+            "max": max(lengths) if lengths else 0,
+            "mean": (sum(lengths) / len(lengths)) if lengths else 0.0,
+        },
+    }
+    canonical = {key: value for key, value in manifest.items() if key != "digest"}
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    manifest["digest"] = hashlib.sha256(payload).hexdigest()
+    return manifest
 
 
 def train_epoch(model, loader: DataLoader, optimizer, loss_fn: Callable) -> float:

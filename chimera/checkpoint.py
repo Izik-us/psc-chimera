@@ -7,12 +7,28 @@ from typing import Any, Dict, Mapping
 
 import hashlib
 import json
+import platform
+import sys
 from pathlib import Path
+
+
+def _runtime_snapshot() -> dict[str, str]:
+    try:
+        import torch
+
+        torch_version = str(torch.__version__)
+    except Exception:
+        torch_version = "unknown"
+    return {
+        "python_version": platform.python_version(),
+        "torch_version": torch_version,
+        "platform": platform.platform(),
+    }
 
 
 @dataclass(frozen=True)
 class CheckpointManifest:
-    """Machine-readable description of the architecture a checkpoint belongs to."""
+    """Machine-readable description of the architecture and provenance a checkpoint belongs to."""
 
     format_version: int = 2
     chimera_version: str = "2.0.0"
@@ -25,6 +41,41 @@ class CheckpointManifest:
     config_hash: str = ""
     state_schema_hash: str = ""
     git_commit: str = ""
+    dataset_manifest: str = ""
+    dataset_hash: str = ""
+    preprocessing_hash: str = ""
+    environment_hash: str = ""
+    python_version: str = ""
+    torch_version: str = ""
+    platform: str = ""
+
+    def __post_init__(self) -> None:
+        runtime = _runtime_snapshot()
+        if not self.python_version:
+            object.__setattr__(self, "python_version", runtime["python_version"])
+        if not self.torch_version:
+            object.__setattr__(self, "torch_version", runtime["torch_version"])
+        if not self.platform:
+            object.__setattr__(self, "platform", runtime["platform"])
+        if not self.environment_hash:
+            payload = json.dumps(
+                {
+                    "python_version": self.python_version,
+                    "torch_version": self.torch_version,
+                    "platform": self.platform,
+                    "transport": self.transport,
+                    "sequence_policy": self.sequence_policy,
+                    "chimera_version": self.chimera_version,
+                    "dataset_manifest": self.dataset_manifest,
+                    "dataset_hash": self.dataset_hash,
+                    "preprocessing_hash": self.preprocessing_hash,
+                    "git_commit": self.git_commit,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            object.__setattr__(self, "environment_hash", hashlib.sha256(payload.encode("utf-8")).hexdigest())
 
     def validate(self, expected: "CheckpointManifest" | None = None) -> None:
         if self.format_version not in (1, 2):
@@ -41,7 +92,18 @@ class CheckpointManifest:
             raise ValueError("checkpoint uncertainty contract must be MC-dropout epistemic")
         if self.acquisition != "gaussian_expected_improvement":
             raise ValueError("checkpoint acquisition contract must be Gaussian expected improvement")
-        for name in ("config_hash", "state_schema_hash", "git_commit"):
+        for name in (
+            "config_hash",
+            "state_schema_hash",
+            "git_commit",
+            "dataset_manifest",
+            "dataset_hash",
+            "preprocessing_hash",
+            "environment_hash",
+            "python_version",
+            "torch_version",
+            "platform",
+        ):
             value = getattr(self, name)
             if not isinstance(value, str):
                 raise ValueError(f"{name} must be a string")
@@ -51,12 +113,20 @@ class CheckpointManifest:
             # A v1 manifest can be compared to a v2 expected contract only when
             # the newly introduced fingerprints are intentionally unspecified.
             if self.format_version == 1:
-                actual_dict.pop("config_hash", None)
-                actual_dict.pop("state_schema_hash", None)
-                actual_dict.pop("git_commit", None)
-                expected_dict.pop("config_hash", None)
-                expected_dict.pop("state_schema_hash", None)
-                expected_dict.pop("git_commit", None)
+                for key in (
+                    "config_hash",
+                    "state_schema_hash",
+                    "git_commit",
+                    "dataset_manifest",
+                    "dataset_hash",
+                    "preprocessing_hash",
+                    "environment_hash",
+                    "python_version",
+                    "torch_version",
+                    "platform",
+                ):
+                    actual_dict.pop(key, None)
+                    expected_dict.pop(key, None)
                 expected_dict["format_version"] = 1
             if actual_dict != expected_dict:
                 raise ValueError("checkpoint manifest does not match the expected architecture contract")
@@ -92,3 +162,17 @@ def load_manifest(path: str | Path) -> CheckpointManifest:
     manifest = CheckpointManifest(**data)
     manifest.validate()
     return manifest
+
+
+def validate_checkpoint_compatibility(
+    actual: CheckpointManifest,
+    expected: CheckpointManifest,
+) -> str:
+    """Return a compatibility verdict for checkpoint provenance validation."""
+    if actual == expected:
+        return "exact-compatible"
+    try:
+        actual.validate(expected)
+        return "expected-compatible"
+    except ValueError:
+        return "incompatible"
