@@ -6,6 +6,7 @@ from chimera.dpo import DPOBatch, DPOTrainer
 from chimera.multi_objective import AutoregressiveSequencePolicy
 from chimera.pcgrad import project_conflicting_gradients
 from chimera.schrodinger_bridge import SchrodingerBridge
+from chimera.multi_objective import StructuralRetriever
 
 
 def test_sinkhorn_coupling_matches_marginals():
@@ -87,3 +88,30 @@ def test_pcgrad_removes_negative_pairwise_component():
     # The projected task gradients must not have a negative dot product with
     # the other task's original gradient after the surgery step for g1.
     assert torch.isfinite(parameter.grad).all()
+
+
+def test_structural_retriever_handles_empty_and_bounded_k():
+    retriever = StructuralRetriever(d_embed=4, d_context=8, n_retrieve=5)
+    query = torch.zeros(2, 4)
+    retriever.build_index(torch.empty(0, 4).numpy(), [])
+    empty_metadata, empty_coords = retriever.retrieve(query)
+    assert empty_metadata == [[], []]
+    assert empty_coords is None
+
+    for database_size, expected_k in ((1, 1), (5, 5), (10, 5)):
+        embeddings = torch.arange(database_size * 4, dtype=torch.float32).reshape(database_size, 4)
+        metadata = [
+            {"pocket_coords": torch.full((10, 3), float(index)).tolist()}
+            for index in range(database_size)
+        ]
+        retriever.build_index(embeddings.numpy(), metadata)
+        results, coords = retriever.retrieve(query)
+        assert all(len(batch) == expected_k for batch in results)
+        assert coords.shape == (2, expected_k, 10, 3)
+
+
+def test_structural_retriever_rejects_nonpositive_k():
+    import pytest
+
+    with pytest.raises(ValueError, match="n_retrieve must be positive"):
+        StructuralRetriever(d_embed=4, d_context=8, n_retrieve=0)

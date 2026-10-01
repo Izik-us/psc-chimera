@@ -1,8 +1,8 @@
-"""Build a human CDS/expression proxy dataset from the Pouyet archive.
+"""Build a human germline CDS/expression proxy dataset from Pouyet.
 
-The archive supplies Ensembl transcript IDs and endogenous human FPKM values;
-Ensembl REST supplies the corresponding CDS. These are proxy labels for native
-human expression, not controlled synonymous-variant experiments.
+``Exp_Meiosis`` averages female PGC expression at 17 weeks with male
+pachytene-spermatocyte and round-spermatid expression. It is not a general
+human expression phenotype or a controlled synonymous-variant assay.
 """
 
 from __future__ import annotations
@@ -50,6 +50,17 @@ def read_candidates(path: Path, expression_column: str) -> list[dict[str, Any]]:
             {
                 "transcript": transcript,
                 "gene_id": fields[gene_index],
+                            "expression_phenotype": (
+                                "mean_F_PGC_17W_and_male_pachytene_spermatocyte_round_spermatid_FPKM"
+                                if expression_column == "Exp_Meiosis"
+                                else expression_column
+                            ),
+                            "expression_components": (
+                                ["F_PGC_17W", "M_PS", "M_RS"]
+                                if expression_column == "Exp_Meiosis"
+                                else [expression_column]
+                            ),
+                            "normalization": "expression_raw_divided_by_max_positive_value_in_source_table",
                 "gene_symbol": fields[symbol_index],
                 "expression_raw": expression,
             }
@@ -114,7 +125,7 @@ def build_records(summary_path: Path, cache_dir: Path, max_records: int, express
                 "source": "Pouyet_HumanCodonUsage",
                 "label_type": "proxy",
                 "host": "human",
-                "assay": "endogenous_FPKM",
+                "assay": "human_germline_expression_FPKM_proxy",
             }
         )
     return records

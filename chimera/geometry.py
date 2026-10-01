@@ -7,6 +7,7 @@ those short distances are expected in a chemically connected backbone.
 """
 
 from dataclasses import dataclass
+import math
 from typing import Dict
 
 import torch
@@ -23,6 +24,7 @@ class GeometryReport:
     bond_length_max_error: float
     bond_angle_max_error: float
     torsion_abs_max: float
+    torsion_planarity_error: float
     clash_count: int
 
     @property
@@ -35,7 +37,7 @@ class GeometryReport:
             and self.peptide_bond_mean < 2.0
             and self.bond_length_max_error < 0.5
             and self.bond_angle_max_error < 0.5
-            and self.torsion_abs_max <= 3.2
+            and self.torsion_planarity_error < 0.5
             and self.clash_count == 0
         )
 
@@ -50,6 +52,7 @@ class GeometryReport:
             "bond_length_max_error": self.bond_length_max_error,
             "bond_angle_max_error": self.bond_angle_max_error,
             "torsion_abs_max": self.torsion_abs_max,
+            "torsion_planarity_error": self.torsion_planarity_error,
             "clash_count": self.clash_count,
             "valid": self.valid,
         }
@@ -119,7 +122,39 @@ def validate_backbone(
         if angles.numel()
         else torch.tensor(0.0, device=coords.device)
     )
-    torsion_abs = torch.tensor(0.0, device=coords.device)
+    if coords.shape[1] > 1:
+        ca_i = coords[:, :-1, 1]
+        c_i = coords[:, :-1, 2]
+        n_next = coords[:, 1:, 0]
+        ca_next = coords[:, 1:, 1]
+        axis = n_next - c_i
+        axis_norm = axis.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+        axis_unit = axis / axis_norm
+        first = ca_i - c_i
+        second = ca_next - n_next
+        first_plane = first - (first * axis_unit).sum(dim=-1, keepdim=True) * axis_unit
+        second_plane = second - (second * axis_unit).sum(dim=-1, keepdim=True) * axis_unit
+        first_norm = first_plane.norm(dim=-1)
+        second_norm = second_plane.norm(dim=-1)
+        torsion_degenerate = (first_norm < 1e-6) | (second_norm < 1e-6)
+        torsion_y = (
+            torch.linalg.cross(axis_unit, first_plane, dim=-1) * second_plane
+        ).sum(dim=-1)
+        torsion_x = (first_plane * second_plane).sum(dim=-1)
+        omega = torch.atan2(torsion_y, torsion_x)
+        omega = omega.masked_fill(torsion_degenerate, float("nan"))
+        torsion_finite = bool(torch.isfinite(omega).all())
+        torsion_abs = omega.abs().nan_to_num(float("inf")).max()
+        absolute_omega = omega.abs()
+        planarity_error = torch.minimum(
+            absolute_omega,
+            (math.pi - absolute_omega).abs(),
+        ).nan_to_num(float("inf")).max()
+    else:
+        torsion_finite = True
+        torsion_abs = torch.tensor(0.0, device=coords.device)
+        planarity_error = torch.tensor(0.0, device=coords.device)
+    finite = finite and torsion_finite
 
     # Build the molecular graph of the four-atom backbone. Steric validation
     # must not flag expected 1-2 or 1-3 distances (for example CA-O in the
@@ -168,5 +203,6 @@ def validate_backbone(
         bond_length_max_error=float(bond_error),
         bond_angle_max_error=float(angle_error),
         torsion_abs_max=float(torsion_abs),
+        torsion_planarity_error=float(planarity_error),
         clash_count=clash_count,
     )

@@ -51,14 +51,34 @@ class CodonJSONLDataset(Dataset):
     def __len__(self) -> int:
         return len(self.records)
 
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor | list[str]]:
-        aa_sequence, codon_sequence, expression = self._normalize(self.records[index], index)
-        return {
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        record = self.records[index]
+        aa_sequence, codon_sequence, expression = self._normalize(record, index)
+        item: dict[str, Any] = {
             "protein_tokens": tokenize_protein(aa_sequence),
             "codon_tokens": tokenize_dna(codon_sequence),
             "aa_sequence": [aa_sequence],
             "expression": torch.tensor(expression, dtype=torch.float32),
+            "label_type": str(record.get("label_type", "unknown")).lower(),
         }
+        for key in (
+            "source",
+            "assay",
+            "host",
+            "organism",
+            "accession",
+            "gene_id",
+            "gene_symbol",
+            "expression_raw",
+            "expression_metric",
+            "expression_phenotype",
+            "expression_components",
+            "normalization",
+            "dataset_version",
+        ):
+            if key in record:
+                item[key] = record[key]
+        return item
 
     @classmethod
     def write_example(cls, path: str | Path) -> Path:

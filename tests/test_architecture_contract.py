@@ -25,7 +25,7 @@ def test_public_chimera_is_canonical_and_has_causal_policy():
         n_mpnn_seqs=1,
         n_mc_dropout=2,
     )
-    assert getattr(model, "_canonical_components", False)
+    assert getattr(model, "_is_canonical_composition", False)
     assert isinstance(model.sequence_policy, AutoregressiveSequencePolicy)
 
 

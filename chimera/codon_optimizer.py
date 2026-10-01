@@ -6,7 +6,7 @@ Implements the corrected architecture from the peer review (9-9.5/10 score).
 Architecture:
     Protein (amino acid sequence)
          │
-    ESM-2 Encoder (150M, mostly frozen)
+    ESM-2 Encoder (150M, frozen; explicit 1,022-residue input cap)
          │
     Cross-Attention (protein → DNA)
          │
@@ -22,7 +22,7 @@ Architecture:
 
 Five fixes from peer review implemented:
     1. DNABERT replaced with nn.TransformerDecoder (autoregressive)
-    2. ESM-2 downscaled from 650M → 150M (frozen except last 2 layers)
+    2. ESM-2 downscaled from 650M → 150M and fully frozen
     3. Decoder maintains full causal history (not position-independent)
     4. Cross-attention actually called inside TransformerDecoderLayer
     5. ExpressionPredictor critic replaces hand-coded CAI/GC rewards
@@ -102,6 +102,7 @@ BOS_TOKEN = len(ALL_CODONS)  # 64
 EOS_TOKEN = len(ALL_CODONS) + 1  # 65
 PAD_TOKEN = len(ALL_CODONS) + 2  # 66
 VOCAB_SIZE = len(ALL_CODONS) + 3  # 67
+ESM_T30_MAX_PROTEIN_LENGTH = 1022
 
 # Amino acid vocabulary (standard + unknown)
 AA_VOCAB = "ACDEFGHIKLMNPQRSTVWY"
@@ -468,8 +469,6 @@ def count_bad_motifs(dna_seq: str) -> int:
     count += len(re.findall(r"GT[ACGT]{4,6}AG", dna_seq))  # (v) crude cryptic splice filter
     # UpA: only UA (TA in DNA) is RNase-sensitive; previous [ACGU]A over-counted
     count += len(re.findall(r"UA", rna))
-    # CpG: report actual CG count (context-dependent; not divided by 10)
-    count += dna_seq.count("CG")
     return count
 
 class MaskedConvBlock(nn.Module):
@@ -980,7 +979,8 @@ class CodonOptimizer(nn.Module):
         esm_model_name: str = "esm2_t30_150M_UR50D",
         esm_model_path: Optional[str] = None,
         allow_nonsynonymous: bool = False,
-        max_codons: int = 8192,
+        max_codons: Optional[int] = None,
+        max_protein_length: int = ESM_T30_MAX_PROTEIN_LENGTH,
     ):
         super().__init__()
 
@@ -989,9 +989,20 @@ class CodonOptimizer(nn.Module):
                 "d_model must be divisible by n_heads."
             )
 
+        if max_protein_length <= 0:
+            raise ValueError("max_protein_length must be positive.")
+
+        if max_codons is None:
+            max_codons = 3 * max_protein_length
+
         if max_codons <= 0:
             raise ValueError(
                 "max_codons must be positive."
+            )
+        if max_codons < max_protein_length or max_codons > 3 * max_protein_length:
+            raise ValueError(
+                "max_codons must be between max_protein_length and "
+                "3 * max_protein_length for this representation."
             )
 
         self.d_model = d_model
@@ -1003,6 +1014,7 @@ class CodonOptimizer(nn.Module):
         self.esm_model_path = esm_model_path
         self.allow_nonsynonymous = allow_nonsynonymous
         self.max_codons = max_codons
+        self.max_protein_length = max_protein_length
 
         # ---------------------------------------------------------------
         # ESM-2
@@ -1049,6 +1061,35 @@ class CodonOptimizer(nn.Module):
             self.esm_batch_converter = (
                 self.esm_alphabet.get_batch_converter()
             )
+
+            esm_positions = getattr(self.esm_model, "max_positions", None)
+            if callable(esm_positions):
+                esm_positions = esm_positions()
+            if esm_positions is None:
+                positional_embedding = getattr(
+                    self.esm_model,
+                    "embed_positions",
+                    None,
+                )
+                esm_positions = getattr(
+                    positional_embedding,
+                    "num_embeddings",
+                    None,
+                )
+            if esm_positions is not None:
+                special_tokens = int(self.esm_alphabet.prepend_bos) + int(
+                    self.esm_alphabet.append_eos
+                )
+                supported_length = int(esm_positions) - special_tokens
+                if supported_length <= 0:
+                    raise ValueError(
+                        "Loaded ESM model reports no room for protein residues."
+                    )
+                if self.max_protein_length > supported_length:
+                    raise ValueError(
+                        f"max_protein_length={self.max_protein_length} exceeds "
+                        f"the loaded ESM context of {supported_length} residues."
+                    )
 
             for parameter in self.esm_model.parameters():
                 parameter.requires_grad = False
@@ -1286,6 +1327,14 @@ class CodonOptimizer(nn.Module):
         else:
             config = {}
             state = checkpoint
+
+        position_weight = state.get("pos_encoding.weight") if isinstance(state, dict) else None
+        if torch.is_tensor(position_weight):
+            config.setdefault("max_codons", int(position_weight.shape[0]))
+            config.setdefault(
+                "max_protein_length",
+                max(1, (int(position_weight.shape[0]) + 2) // 3),
+            )
 
         config.update(overrides)
 
@@ -1619,6 +1668,13 @@ class CodonOptimizer(nn.Module):
                 "protein_padding_mask must be supplied."
             )
 
+        if torch.any(sequence_lengths > self.max_protein_length):
+            longest = int(sequence_lengths.max().item())
+            raise ValueError(
+                f"Protein length {longest} exceeds configured maximum "
+                f"{self.max_protein_length}; sequences are never silently truncated."
+            )
+
         # Canonical biological mask.
         expected_mask = (
             torch.arange(
@@ -1706,16 +1762,18 @@ class CodonOptimizer(nn.Module):
 
                 result = self.esm_model(
                     esm_tokens,
-                    repr_layers=[30],
+                    repr_layers=[self.esm_model.num_layers],
                     return_contacts=False,
                 )
 
-            if 30 not in result["representations"]:
+            representation_layer = self.esm_model.num_layers
+            if representation_layer not in result["representations"]:
                 raise RuntimeError(
-                    "ESM-2 did not return representation layer 30."
+                    f"ESM-2 did not return representation layer "
+                    f"{representation_layer}."
                 )
 
-            x = result["representations"][30]
+            x = result["representations"][representation_layer]
 
             # Remove BOS and EOS.
             x = x[:, 1:-1]
@@ -2873,9 +2931,7 @@ def _build_codon_to_aa_selector(
         amino_acid = CODON_TO_AA.get(codon)
 
         if amino_acid is None:
-            raise RuntimeError(
-                f"Missing amino-acid mapping for codon {codon}."
-            )
+            continue
 
         selector[
             codon_id,
@@ -2948,6 +3004,10 @@ def protein_fitness_loss_from_logits(
         )
 
     valid = ~codon_padding_mask
+    safe_protein_tokens = protein_tokens.masked_fill(
+        codon_padding_mask,
+        0,
+    )
 
     if torch.any(
         protein_tokens[valid] < 0
@@ -2983,7 +3043,7 @@ def protein_fitness_loss_from_logits(
     # Probability assigned to the actual amino acid.
     actual_aa_probs = aa_probs.gather(
         dim=-1,
-        index=protein_tokens.unsqueeze(-1),
+        index=safe_protein_tokens.unsqueeze(-1),
     ).squeeze(-1)
 
     per_position_loss = -torch.log(
@@ -3010,7 +3070,7 @@ def protein_fitness_loss_from_logits(
 
         actual_fitness_weight = fitness_probs.gather(
             dim=-1,
-            index=protein_tokens.unsqueeze(-1),
+            index=safe_protein_tokens.unsqueeze(-1),
         ).squeeze(-1)
 
         per_position_loss = (
@@ -3304,10 +3364,7 @@ def codon_optimizer_loss(
         )
 
     else:
-
-        # Unlabelled optimization mode:
-        # maximize predicted expression.
-        L_expr = -predicted_expression.mean()
+        L_expr = logits.new_zeros(())
 
     # ================================================================
     # Total
@@ -3414,8 +3471,11 @@ def sliding_window_optimize(
             for i in range(0, len(window_dna), 3)
         ]
 
-        cai = (
-            sum(HUMAN_CODON_FREQ.get(c, 0.1) for c in codons)
+        cai = math.exp(
+            sum(
+                math.log(max(relative_adaptiveness(codon), 1e-8))
+                for codon in codons
+            )
             / len(codons)
         )
 

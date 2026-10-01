@@ -7,6 +7,7 @@ from chimera.bayesian import BayesianUncertaintyEstimator
 from chimera.dpo import DPOBatch, DPOTrainer
 from chimera.flow_matching import so3_exp, so3_log
 from chimera.lie import relative_rotation, so3_exp as canonical_so3_exp, so3_log as canonical_so3_log
+from chimera.icosahedral import icosahedral_face_normals, icosahedron_vertices_and_faces
 from chimera.pcgrad import project_conflicting_gradients
 from chimera.schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 
@@ -29,6 +30,36 @@ def test_canonical_so3_handles_near_pi_and_relative_order():
     recovered = relative_rotation(R0, R1)
     assert torch.allclose(recovered, omega, atol=5e-4)
     assert torch.allclose(canonical_so3_log(R0.transpose(-1, -2) @ R1), omega, atol=5e-4)
+
+
+def test_icosahedral_faces_and_normals_are_geometrically_valid():
+    vertices, faces = icosahedron_vertices_and_faces(dtype=torch.float64)
+    normals = icosahedral_face_normals(dtype=torch.float64)
+
+    edges = {
+        tuple(sorted((int(start), int(end))))
+        for face in faces
+        for start, end in (
+            (face[0], face[1]),
+            (face[1], face[2]),
+            (face[2], face[0]),
+        )
+    }
+    assert vertices.shape == (12, 3)
+    assert faces.shape == (20, 3)
+    assert len(edges) == 30
+    assert normals.shape == (20, 3)
+    assert torch.allclose(normals.norm(dim=-1), torch.ones(20, dtype=torch.float64))
+
+    face_points = vertices[faces]
+    face_centers = face_points.mean(dim=1)
+    assert torch.all((normals * face_centers).sum(dim=-1) > 0)
+    expected_normals = torch.linalg.cross(
+        face_points[:, 1] - face_points[:, 0],
+        face_points[:, 2] - face_points[:, 0],
+    )
+    expected_normals /= expected_normals.norm(dim=-1, keepdim=True)
+    assert torch.allclose(normals, expected_normals)
 
 
 def test_brownian_bridge_endpoints_and_drift():

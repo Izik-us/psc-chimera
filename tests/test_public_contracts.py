@@ -2,11 +2,12 @@ import torch
 
 from chimera import CHIMERAv2
 from chimera.bayesian import BayesianUncertaintyEstimator
-from chimera.canonical_components import FlowMatchingBackbone, MultiScaleNRPSDesigner
+from chimera.flow_matching import FlowMatchingBackbone
+from chimera.multi_objective import MultiScaleNRPSDesigner
 from chimera.pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 
 
-def test_public_model_uses_canonical_components():
+def test_public_model_uses_naturally_owned_components():
     model = CHIMERAv2(
         evoformer_layers=1,
         flow_blocks=1,
