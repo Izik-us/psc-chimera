@@ -11,6 +11,7 @@ later invokes ``total.backward()``.
 from __future__ import annotations
 
 from enum import Enum
+import math
 from typing import Dict, Mapping, Optional
 
 import torch
@@ -18,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .multi_objective import ParetoObjectives
+from .objective_schema import validate_objective_target
 
 
 class ObjectiveFeatureSource(str, Enum):
@@ -33,7 +35,6 @@ OBJECTIVE_FEATURE_PLAN = {
     "structural_stability": ("sequence", "structural"),
     "expression_efficiency": ("sequence",),
     "substrate_selectivity": ("sequence", "substrate"),
-    "assembly_compatibility": ("structural",),
 }
 
 
@@ -45,7 +46,7 @@ class ObjectiveFeatureEncoder(nn.Module):
         self.input_dims = {
             "sequence": 20,
             "evolutionary": evolutionary_dim,
-            "structural": 32,
+            "structural": 52,
             "substrate": 20,
             "deterministic": 1,
         }
@@ -53,6 +54,77 @@ class ObjectiveFeatureEncoder(nn.Module):
             source: nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim, d_model), nn.GELU())
             for source, input_dim in self.input_dims.items()
         })
+        self.pool_scores = nn.ModuleDict({
+            source: nn.Linear(d_model, 1)
+            for source in ("sequence", "evolutionary", "structural")
+        })
+
+    @staticmethod
+    def structural_invariants(rotations: torch.Tensor, translations: torch.Tensor) -> torch.Tensor:
+        """Build 32-D local geometry descriptors invariant to global SE(3) transforms."""
+        if rotations.ndim != 4 or rotations.shape[-2:] != (3, 3):
+            raise ValueError("rotations must have shape (B,L,3,3)")
+        if translations.shape != (*rotations.shape[:2], 3):
+            raise ValueError("translations must have shape (B,L,3)")
+        if not torch.isfinite(rotations).all() or not torch.isfinite(translations).all():
+            raise ValueError("structural frames must be finite")
+
+        batch, length = translations.shape[:2]
+        distances = []
+        for offset in (1, 2, 3):
+            for direction in (-1, 1):
+                shifted = torch.zeros_like(translations)
+                valid = torch.zeros(
+                    batch, length, 1, dtype=torch.bool, device=translations.device
+                )
+                if direction < 0:
+                    shifted[:, offset:] = translations[:, :-offset]
+                    valid[:, offset:] = True
+                else:
+                    shifted[:, :-offset] = translations[:, offset:]
+                    valid[:, :-offset] = True
+                distance = (shifted - translations).norm(dim=-1, keepdim=True)
+                distances.append(torch.where(valid, distance, torch.zeros_like(distance)))
+
+        relative_features = []
+        validity = []
+        local_rotation = rotations.transpose(-1, -2)
+        for direction in (-1, 1):
+            shifted_t = torch.zeros_like(translations)
+            shifted_R = torch.zeros_like(rotations)
+            valid = torch.zeros(batch, length, 1, dtype=translations.dtype, device=translations.device)
+            if direction < 0:
+                shifted_t[:, 1:] = translations[:, :-1]
+                shifted_R[:, 1:] = rotations[:, :-1]
+                valid[:, 1:] = 1
+            else:
+                shifted_t[:, :-1] = translations[:, 1:]
+                shifted_R[:, :-1] = rotations[:, 1:]
+                valid[:, :-1] = 1
+            local_translation = torch.einsum(
+                "blij,blj->bli", local_rotation, shifted_t - translations
+            )
+            relative_rotation = local_rotation @ shifted_R
+            relative_features.extend((
+                local_translation * valid,
+                relative_rotation.flatten(start_dim=-2) * valid,
+            ))
+            validity.append(valid)
+        return torch.cat((*distances, *relative_features, *validity), dim=-1)
+
+    @staticmethod
+    def _position_encoding(length: int, width: int, device, dtype) -> torch.Tensor:
+        positions = torch.arange(length, device=device, dtype=dtype).unsqueeze(1)
+        frequencies = torch.exp(
+            torch.arange(0, width, 2, device=device, dtype=dtype)
+            * (-math.log(10000.0) / width)
+        )
+        encoding = torch.zeros(length, width, device=device, dtype=dtype)
+        encoding[:, 0::2] = torch.sin(positions * frequencies)
+        odd_width = encoding[:, 1::2].shape[1]
+        if odd_width:
+            encoding[:, 1::2] = torch.cos(positions * frequencies[:odd_width])
+        return encoding.unsqueeze(0)
 
     def forward(
         self,
@@ -72,7 +144,15 @@ class ObjectiveFeatureEncoder(nn.Module):
             elif value.shape[0] != batch_size:
                 raise ValueError("objective feature sources must share a batch dimension")
             projected = self.projections[name](value)
-            encoded[name] = projected.mean(dim=1) if projected.ndim == 3 else projected
+            if projected.ndim == 3:
+                positioned = projected + self._position_encoding(
+                    projected.shape[1], projected.shape[2], projected.device, projected.dtype
+                )
+                scores = self.pool_scores[name](torch.tanh(positioned)).squeeze(-1)
+                weights = torch.softmax(scores, dim=1)
+                encoded[name] = torch.sum(positioned * weights.unsqueeze(-1), dim=1)
+            else:
+                encoded[name] = projected
         if not encoded:
             raise ValueError("at least one typed objective feature source is required")
         return encoded
@@ -106,7 +186,6 @@ class MergeReadyParetoMultiObjectiveHead(nn.Module):
         self.head_stab = head()
         self.head_expr = head()
         self.head_sel = head()
-        self.head_asm = head()
         self._last_repr: Optional[torch.Tensor] = None
 
     def forward(
@@ -154,7 +233,6 @@ class MergeReadyParetoMultiObjectiveHead(nn.Module):
         pooled_stab = pooled("structural_stability")
         pooled_expr = pooled("expression_efficiency")
         pooled_sel = pooled("substrate_selectivity")
-        pooled_asm = pooled("assembly_compatibility")
 
         def predict(module: nn.Module, value: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
             return module(value).squeeze(-1) if value is not None else None
@@ -163,7 +241,6 @@ class MergeReadyParetoMultiObjectiveHead(nn.Module):
         stability = predict(self.head_stab, pooled_stab)
         expression = predict(self.head_expr, pooled_expr)
         selectivity = predict(self.head_sel, pooled_sel)
-        assembly = predict(self.head_asm, pooled_asm)
 
         return ParetoObjectives(
             evolutionary_plausibility=evol if evol is not None else reference.new_zeros(reference.shape[0]),
@@ -176,24 +253,29 @@ class MergeReadyParetoMultiObjectiveHead(nn.Module):
             substrate_selectivity=(
                 torch.sigmoid(selectivity) if selectivity is not None else reference.new_zeros(reference.shape[0])
             ),
-            assembly_compatibility=(
-                torch.sigmoid(assembly) if assembly is not None else reference.new_zeros(reference.shape[0])
-            ),
+            assembly_compatibility=reference.new_zeros(reference.shape[0]),
+            available_objectives=tuple(sorted(requested)),
         )
 
     @staticmethod
     def _task_losses(objectives, labels: Dict[str, Optional[torch.Tensor]]):
         losses = {}
+        if labels.get("asm") is not None:
+            raise ValueError("assembly_compatibility is deterministic-only and has no neural training loss")
         if labels.get("evol") is not None:
+            validate_objective_target(
+                "evolutionary_plausibility", objectives.evolutionary_plausibility, labels["evol"]
+            )
             losses["evol"] = F.mse_loss(objectives.evolutionary_plausibility, labels["evol"])
         if labels.get("stab") is not None:
+            validate_objective_target("structural_stability", objectives.structural_stability, labels["stab"])
             losses["stab"] = F.mse_loss(objectives.structural_stability, labels["stab"])
         if labels.get("expr") is not None:
+            validate_objective_target("expression_efficiency", objectives.expression_efficiency, labels["expr"])
             losses["expr"] = F.binary_cross_entropy(objectives.expression_efficiency, labels["expr"])
         if labels.get("sel") is not None:
+            validate_objective_target("substrate_selectivity", objectives.substrate_selectivity, labels["sel"])
             losses["sel"] = F.mse_loss(objectives.substrate_selectivity, labels["sel"])
-        if labels.get("asm") is not None:
-            losses["asm"] = F.mse_loss(objectives.assembly_compatibility, labels["asm"])
         return losses
 
     @staticmethod

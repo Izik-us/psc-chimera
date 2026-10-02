@@ -34,6 +34,7 @@ from .flow_matching import FlowMatchingBackbone
 from .geometry import validate_backbone
 from .lie import so3_log
 from .multi_objective import MultiScaleNRPSDesigner, ParetoObjectives, StructuralRetriever
+from .objective_schema import validate_objective_target
 from .pareto_pcgrad import (
     OBJECTIVE_FEATURE_PLAN,
     MergeReadyParetoMultiObjectiveHead,
@@ -170,16 +171,7 @@ class CanonicalCHIMERAv2(nn.Module):
             }
             for name in self._component_names
         }
-        self.objective_calibration = {
-            name: None
-            for name in (
-                "evolutionary_plausibility",
-                "structural_stability",
-                "expression_efficiency",
-                "substrate_selectivity",
-                "assembly_compatibility",
-            )
-        }
+        self.objective_calibration = {name: None for name in OBJECTIVE_FEATURE_PLAN}
         self.objective_status = {
             name: {
                 "initialization": "random",
@@ -187,6 +179,7 @@ class CanonicalCHIMERAv2(nn.Module):
                 "training_steps": 0,
                 "label_sources": [],
                 "label_kinds": [],
+                "structure_data_sources": [],
                 "training_dataset_manifest": None,
             }
             for name in self.objective_calibration
@@ -349,6 +342,28 @@ class CanonicalCHIMERAv2(nn.Module):
             for parameter in module.parameters():
                 parameter.requires_grad_(False)
 
+    @staticmethod
+    def _migrate_pareto_state_dict(state, target_state):
+        """Migrate legacy learned-assembly Pareto weights to typed four-head objectives."""
+        migrated = dict(state)
+        retired = [key for key in migrated if key.startswith("head_asm.")]
+        for key in retired:
+            migrated.pop(key)
+        unexpected = set(migrated) - set(target_state)
+        if unexpected:
+            raise RuntimeError(f"unknown Pareto checkpoint keys: {sorted(unexpected)}")
+        missing = set(target_state) - set(migrated)
+        if any(not key.startswith("feature_fusions.") for key in missing):
+            raise RuntimeError(f"Pareto checkpoint is missing required keys: {sorted(missing)}")
+        for key in missing:
+            migrated[key] = target_state[key].detach().cpu().clone()
+        migration_status = None
+        if retired or missing:
+            migration_status = (
+                "legacy learned assembly head retired; typed feature-fusion parameters retain current initialization"
+            )
+        return migrated, migration_status
+
     def unfreeze_connectors(self) -> None:
         self.prepare_for_training("sequence")
 
@@ -408,10 +423,12 @@ class CanonicalCHIMERAv2(nn.Module):
         return {"state": state, "components": statuses, "reasons": reasons}
 
     def objective_provenance(self) -> dict[str, dict]:
-        return {
+        provenance = {
             name: {
                 "source": (
-                    "validated_neural_surrogate"
+                    "deterministic_evaluator"
+                    if name == "assembly_compatibility"
+                    else "validated_neural_surrogate"
                     if state["training_status"] == "validated"
                     else "loaded_unverified_neural_surrogate"
                     if state["initialization"] == "loaded_unverified"
@@ -424,14 +441,41 @@ class CanonicalCHIMERAv2(nn.Module):
                 "training_steps": state["training_steps"],
                 "label_sources": list(state["label_sources"]),
                 "label_kinds": list(state["label_kinds"]),
-                "feature_sources": list(OBJECTIVE_FEATURE_PLAN[name]),
-                "calibrated": self.objective_calibration[name] is not None,
-                "differentiable": True,
-                "uncertainty_available": self.objective_calibration[name] is not None and state["training_status"] == "validated",
+                "structure_data_sources": list(state["structure_data_sources"]),
+                "generated_reference_distribution_shift_risk": (
+                    "present_reference_training_vs_generated_inference"
+                    if name == "structural_stability" and "reference" in state["structure_data_sources"]
+                    else "not_established_or_not_applicable"
+                ),
+                "feature_sources": list(OBJECTIVE_FEATURE_PLAN.get(name, ("structural",))),
+                "calibrated": (
+                    False if name == "assembly_compatibility"
+                    else self.objective_calibration[name] is not None
+                ),
+                "differentiable": name != "assembly_compatibility",
+                "uncertainty_available": (
+                    False if name == "assembly_compatibility"
+                    else self.objective_calibration[name] is not None
+                    and state["training_status"] == "validated"
+                ),
                 "biological_measurement": False,
             }
             for name, state in self.objective_status.items()
         }
+        provenance["assembly_compatibility"] = {
+            "source": "deterministic_evaluator",
+            "initialization": "not_applicable",
+            "training_status": "not_applicable",
+            "training_steps": 0,
+            "label_sources": ["icosahedral_interface_geometry_proxy"],
+            "label_kinds": ["deterministic_evaluator"],
+            "feature_sources": ["structural"],
+            "calibrated": False,
+            "differentiable": False,
+            "uncertainty_available": False,
+            "biological_measurement": False,
+        }
+        return provenance
 
     def record_objective_calibration(
         self,
@@ -459,9 +503,12 @@ class CanonicalCHIMERAv2(nn.Module):
             raise ValueError("calibration data must be distinct from training and validation data")
         if predicted_mean.shape != epistemic_std.shape or predicted_mean.shape != targets.shape:
             raise ValueError("calibration predictions, uncertainty, and targets must have matching shapes")
+        validate_objective_target(name, predicted_mean, targets)
         if predicted_mean.numel() < 30:
             raise ValueError("uncertainty calibration requires at least 30 held-out examples")
-        if not all(torch.isfinite(value).all() for value in (predicted_mean, epistemic_std, targets)):
+        if epistemic_std.dtype != torch.float32:
+            raise TypeError("epistemic_std must have dtype torch.float32")
+        if epistemic_std.ndim != 1 or not torch.isfinite(epistemic_std).all():
             raise ValueError("calibration data must be finite")
         if torch.any(epistemic_std < 0):
             raise ValueError("epistemic_std must be non-negative")
@@ -769,13 +816,16 @@ class CanonicalCHIMERAv2(nn.Module):
         }
         face_features = F.one_hot(face_id.long(), num_classes=20).to(logits.dtype)
         structural_features = torch.cat(
-            (R_final.flatten(start_dim=-2), t_final, face_features[:, None].expand(-1, L, -1)),
+            (
+                self.objective_feature_encoder.structural_invariants(R_final, t_final),
+                face_features[:, None].expand(-1, L, -1),
+            ),
             dim=-1,
         )
         objective_raw_features[ObjectiveFeatureSource.STRUCTURAL.value] = structural_features[:, None]
         objective_raw_features[ObjectiveFeatureSource.STRUCTURAL.value] = objective_raw_features[
             ObjectiveFeatureSource.STRUCTURAL.value
-        ].expand(-1, n_draws, -1, -1).reshape(B * n_draws, L, 32)
+        ].expand(-1, n_draws, -1, -1).reshape(B * n_draws, L, 52)
         if substrate_id is not None:
             objective_raw_features[ObjectiveFeatureSource.SUBSTRATE.value] = F.one_hot(
                 substrate_id.long(), num_classes=20
@@ -788,13 +838,6 @@ class CanonicalCHIMERAv2(nn.Module):
         objective_flat = self.pareto_head(
             encoded_objective_features,
             objective_names=available_objectives,
-        )
-        objectives = ParetoObjectives(
-            evolutionary_plausibility=objective_flat.evolutionary_plausibility.reshape(B, n_draws),
-            structural_stability=objective_flat.structural_stability.reshape(B, n_draws),
-            expression_efficiency=objective_flat.expression_efficiency.reshape(B, n_draws),
-            substrate_selectivity=objective_flat.substrate_selectivity.reshape(B, n_draws),
-            assembly_compatibility=objective_flat.assembly_compatibility.reshape(B, n_draws),
         )
         candidate_coords = backbone_coords[:, None].expand(-1, n_draws, -1, -1, -1).reshape(
             B * n_draws, L, 4, 3
@@ -820,6 +863,15 @@ class CanonicalCHIMERAv2(nn.Module):
             ],
             dim=-1,
         ).reshape(B, n_draws, 5)
+        assembly_scores = proxy_outputs["assembly_compatibility"].value.reshape(B, n_draws)
+        objectives = ParetoObjectives(
+            evolutionary_plausibility=objective_flat.evolutionary_plausibility.reshape(B, n_draws),
+            structural_stability=objective_flat.structural_stability.reshape(B, n_draws),
+            expression_efficiency=objective_flat.expression_efficiency.reshape(B, n_draws),
+            substrate_selectivity=objective_flat.substrate_selectivity.reshape(B, n_draws),
+            assembly_compatibility=assembly_scores,
+            available_objectives=tuple((*available_objectives, "assembly_compatibility")),
+        )
         return {
             "sequences": F.one_hot(sampled, num_classes=20).to(logits.dtype),
             "sequence_tokens": sampled,
@@ -830,7 +882,7 @@ class CanonicalCHIMERAv2(nn.Module):
                 name: value.reshape(B, n_draws, self.d_mpnn)
                 for name, value in encoded_objective_features.items()
             },
-            "objective_predictions_available": available_objectives,
+            "objective_predictions_available": objectives.available_objectives,
             "backbone_coords": backbone_coords,
             "R_final": R_final,
             "t_final": t_final,
@@ -838,7 +890,7 @@ class CanonicalCHIMERAv2(nn.Module):
             "structural_stability": objectives.structural_stability,
             "expression_efficiency": objectives.expression_efficiency,
             "substrate_selectivity": objectives.substrate_selectivity,
-            "assembly_compat": objectives.assembly_compatibility,
+            "assembly_compat": assembly_scores,
             "pareto_objectives": objectives,
             "pair_cond": pair_cond,
             "single_repr": single_repr,
@@ -960,6 +1012,7 @@ class CanonicalCHIMERAv2(nn.Module):
         batch_size = min(8, n_designs)
         sequences, objective_batches, proxy_batches = [], [], []
         objective_feature_batches: dict[str, list[torch.Tensor]] = {}
+        deterministic_assembly_batches = []
         rag_statuses = []
         remaining = n_designs
         while remaining:
@@ -987,6 +1040,7 @@ class CanonicalCHIMERAv2(nn.Module):
                 outputs["assembly_compat"][:, 0],
             ], dim=-1).detach().cpu())
             proxy_batches.append(outputs["objective_proxy_scores"][:, 0].detach().cpu())
+            deterministic_assembly_batches.append(outputs["assembly_compat"][:, 0].detach())
             remaining -= current
         all_sequences = torch.cat(sequences)[:n_designs]
         if readiness["state"] == "TRAINED":
@@ -1017,6 +1071,7 @@ class CanonicalCHIMERAv2(nn.Module):
                 source: torch.cat(values, dim=0)[:n_designs]
                 for source, values in objective_feature_batches.items()
             }
+            deterministic_assembly = torch.cat(deterministic_assembly_batches, dim=0)[:n_designs]
 
             def normalized_objectives(result):
                 return torch.stack(
@@ -1025,7 +1080,7 @@ class CanonicalCHIMERAv2(nn.Module):
                         result.structural_stability.clamp(0, 100) / 100.0,
                         result.expression_efficiency.clamp(0, 1),
                         result.substrate_selectivity.clamp(0, 1),
-                        result.assembly_compatibility.clamp(0, 1),
+                        deterministic_assembly.to(result.substrate_selectivity).clamp(0, 1),
                     ),
                     dim=-1,
                 )
@@ -1153,6 +1208,14 @@ class CanonicalCHIMERAv2(nn.Module):
                         UserWarning,
                         stacklevel=2,
                     )
+            if module_name == "pareto_head":
+                values, migration_status = self._migrate_pareto_state_dict(
+                    values,
+                    self.pareto_head.state_dict(),
+                )
+                if migration_status is not None:
+                    self.component_status[module_name]["migration_status"] = migration_status
+                    warnings.warn(migration_status, UserWarning, stacklevel=2)
             getattr(self, module_name).load_state_dict(values, strict=True)
             if module_name in self.component_status:
                 self.component_status[module_name].update(

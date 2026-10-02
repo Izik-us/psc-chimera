@@ -25,6 +25,62 @@ from .checkpoint import (
 from .dpo import DPOBatch
 from .proteinmpnn import get_protein_graph
 from .pareto_pcgrad import OBJECTIVE_FEATURE_PLAN, ObjectiveFeatureSource
+from .objective_schema import OBJECTIVE_SCHEMA, objective_schema_hash
+
+
+def _qualified_name(value: Any) -> str:
+    cls = value if isinstance(value, type) else type(value)
+    return f"{cls.__module__}.{cls.__qualname__}"
+
+
+def _stable_config_value(value: Any) -> Any:
+    if torch.is_tensor(value):
+        return value.detach().cpu().tolist()
+    if isinstance(value, Mapping):
+        return {str(key): _stable_config_value(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
+    if isinstance(value, (tuple, list)):
+        return [_stable_config_value(item) for item in value]
+    if callable(value):
+        code = getattr(value, "__code__", None)
+        if code is not None:
+            return {
+                "callable": f"{getattr(value, '__module__', '')}.{getattr(value, '__qualname__', type(value).__qualname__)}",
+                "bytecode": code.co_code.hex(),
+                "constants": repr(code.co_consts),
+                "defaults": _stable_config_value(getattr(value, "__defaults__", None)),
+            }
+        return {"callable_class": _qualified_name(value)}
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return repr(value)
+
+
+def _optimizer_fingerprint(optimizer: torch.optim.Optimizer, model) -> tuple[str, str]:
+    parameter_names = {id(parameter): name for name, parameter in model.named_parameters()}
+    groups = []
+    for group in optimizer.param_groups:
+        groups.append({
+            "parameter_names": [parameter_names.get(id(parameter), "unregistered") for parameter in group["params"]],
+            "configuration": _stable_config_value({key: value for key, value in group.items() if key != "params"}),
+        })
+    payload = {
+        "class": _qualified_name(optimizer),
+        "defaults": _stable_config_value(optimizer.defaults),
+        "parameter_groups": groups,
+    }
+    return payload["class"], config_hash(payload)
+
+
+def _scheduler_fingerprint(scheduler: Optional[Any]) -> tuple[str, str]:
+    if scheduler is None:
+        return "none", config_hash({"scheduler": "none"})
+    runtime_fields = {"optimizer", "last_epoch", "_step_count", "_last_lr", "_get_lr_called_within_step"}
+    configuration = {
+        key: _stable_config_value(value)
+        for key, value in vars(scheduler).items()
+        if key not in runtime_fields
+    }
+    return _qualified_name(scheduler), config_hash({"class": _qualified_name(scheduler), "configuration": configuration})
 
 
 class TrainingRegime(str, Enum):
@@ -75,6 +131,7 @@ class CanonicalTrainingBatch:
     msa_padding_mask: Optional[torch.Tensor] = None
     sequence_padding_mask: Optional[torch.Tensor] = None
     constraints: Any = None
+    structure_source: Optional[str] = None
     substrate_id: Optional[torch.Tensor] = None
     substrate_coords: Optional[torch.Tensor] = None
     substrate_types: Optional[torch.Tensor] = None
@@ -192,6 +249,7 @@ class CanonicalTrainer:
         preprocessing_hash: str | None = None,
         preprocessing_config: Mapping[str, Any] | None = None,
         random_seed: int | None = None,
+        min_validation_examples: int = 30,
         generator: Optional[torch.Generator] = None,
     ):
         self.model = model
@@ -224,6 +282,9 @@ class CanonicalTrainer:
         if self.random_seed is not None and (not isinstance(self.random_seed, int) or self.random_seed < 0):
             raise ValueError("random_seed must be a non-negative integer or None")
         self.generator = generator
+        if not isinstance(min_validation_examples, int) or min_validation_examples < 1:
+            raise ValueError("min_validation_examples must be a positive integer")
+        self.min_validation_examples = min_validation_examples
         self.epoch = 0
         self.global_step = 0
         self._last_objective_sources: dict[str, str] = {}
@@ -270,6 +331,8 @@ class CanonicalTrainer:
                 )
         self.optimizer = optimizer
         self.scheduler = scheduler
+        self.optimizer_class, self.optimizer_hash = _optimizer_fingerprint(optimizer, model)
+        self.scheduler_class, self.scheduler_hash = _scheduler_fingerprint(scheduler)
         self.trainable_components = selected
         self._resume_source_manifest: Optional[dict[str, Any]] = None
 
@@ -378,6 +441,16 @@ class CanonicalTrainer:
             for name, value in (batch.objective_labels or {}).items()
             if value is not None
         }
+        if "assembly_compatibility" in labels:
+            raise ValueError(
+                "assembly_compatibility is a deterministic inference-time evaluator, not a supervised head"
+            )
+        if "structural_stability" in labels and batch.structure_source not in {
+            "reference", "generated", "synthetic"
+        }:
+            raise ValueError(
+                "structural_stability labels require structure_source: reference, generated, or synthetic"
+            )
         unknown = set(labels) - set(self.model.objective_status)
         if unknown:
             raise ValueError(f"unknown objective labels: {sorted(unknown)}")
@@ -412,7 +485,11 @@ class CanonicalTrainer:
                 face_features = F.one_hot(face.long(), num_classes=20).to(batch.pair_features.dtype)
             face_features = face_features[:, None, :].expand(-1, structure_R.shape[1], -1)
             feature_inputs[ObjectiveFeatureSource.STRUCTURAL.value] = torch.cat(
-                (structure_R.flatten(start_dim=-2), structure_t, face_features), dim=-1
+                (
+                    self.model.objective_feature_encoder.structural_invariants(structure_R, structure_t),
+                    face_features,
+                ),
+                dim=-1,
             ).detach()
         if batch.substrate_id is not None:
             if torch.any((batch.substrate_id < 0) | (batch.substrate_id >= 20)):
@@ -426,21 +503,6 @@ class CanonicalTrainer:
                 raise ValueError("sequence objective features are derived from target_sequence")
             feature_inputs[name] = value
 
-        if "assembly_compatibility" not in labels and batch.constraints is not None:
-            face = getattr(batch.constraints, "icosahedral_face", None)
-            if structure_R is not None and structure_t is not None and face is not None:
-                with torch.no_grad():
-                    evaluation = self.model.objective_evaluator.evaluate(
-                        batch.target_sequence,
-                        self.model._frames_to_coords(structure_R, structure_t),
-                        rotations=structure_R,
-                        faces=face,
-                    )
-                assembly_output = evaluation["objective_outputs"]["assembly_compatibility"]
-                labels["assembly_compatibility"] = assembly_output.value.detach()
-                sources["assembly_compatibility"] = assembly_output.source
-                kinds["assembly_compatibility"] = ObjectiveLabelKind.DETERMINISTIC_EVALUATOR.value
-
         if not labels:
             raise ValueError("objective training requires labels or a usable deterministic evaluator target")
         missing_sources = {
@@ -452,6 +514,9 @@ class CanonicalTrainer:
         missing_kinds = set(labels) - set(kinds)
         if missing_kinds:
             raise ValueError(f"objective label kinds are required for: {sorted(missing_kinds)}")
+        for name in labels:
+            if kinds[name] not in OBJECTIVE_SCHEMA[name]["label_kinds"]:
+                raise ValueError(f"{name} does not accept label kind {kinds[name]!r}")
         supervised_names = tuple(labels)
         encoded_features = self.model.objective_feature_encoder(feature_inputs)
         label_keys = {
@@ -469,6 +534,7 @@ class CanonicalTrainer:
         self._last_objective_sources = {name: sources[name] for name in supervised_names}
         self._last_objective_kinds = {name: kinds[name] for name in supervised_names}
         self._last_objective_names = supervised_names
+        self._last_structure_source = batch.structure_source
         return objectives, labels, encoded_features
 
     def _objective_loss(self, batch: CanonicalTrainingBatch) -> torch.Tensor:
@@ -557,6 +623,9 @@ class CanonicalTrainer:
                 kind = self._last_objective_kinds[name]
                 if kind not in state["label_kinds"]:
                     state["label_kinds"].append(kind)
+                if name == "structural_stability" and self._last_structure_source is not None:
+                    if self._last_structure_source not in state["structure_data_sources"]:
+                        state["structure_data_sources"].append(self._last_structure_source)
         for parameter in self.model.parameters():
             if parameter.requires_grad and not torch.isfinite(parameter).all():
                 raise FloatingPointError("optimizer produced non-finite trainable parameters")
@@ -567,63 +636,138 @@ class CanonicalTrainer:
 
     def validate(
         self,
-        batch: CanonicalTrainingBatch,
+        batches: Iterable[CanonicalTrainingBatch] | CanonicalTrainingBatch,
         *,
-        validation_manifest: str,
-    ) -> float:
+        validation_manifest: str | Mapping[str, Any],
+        min_validation_examples: int | None = None,
+    ) -> dict[str, Any]:
         if self.regime == TrainingRegime.PREFERENCE:
             raise ValueError("preference-only validation cannot validate the base policy")
         if not self.dataset_manifest:
             raise ValueError("training requires a dataset manifest before held-out validation")
-        if not validation_manifest or validation_manifest == self.dataset_manifest:
+        if isinstance(validation_manifest, Mapping):
+            validation_identity = json.dumps(
+                dict(validation_manifest), sort_keys=True, separators=(",", ":"), default=str
+            )
+        else:
+            validation_identity = str(validation_manifest)
+        if not validation_identity or validation_identity == self.dataset_manifest:
             raise ValueError("validation requires a distinct held-out dataset manifest")
+        minimum = self.min_validation_examples if min_validation_examples is None else min_validation_examples
+        if not isinstance(minimum, int) or minimum < 1:
+            raise ValueError("min_validation_examples must be a positive integer")
+        if isinstance(batches, CanonicalTrainingBatch):
+            batches = (batches,)
         was_training = self.model.training
         self.model.eval()
+        total_loss = 0.0
+        example_count = 0
+        batch_count = 0
+        objective_loss_sums: dict[str, float] = {}
+        objective_example_counts: dict[str, int] = {}
+        validation_components: set[str] = set()
+        validated_objectives: set[str] = set()
+        structure_source_counts: dict[str, int] = {}
         try:
             with torch.no_grad():
-                    loss = (
-                        self._objective_validation_loss(batch)
-                        if self.regime == TrainingRegime.OBJECTIVE
-                        else self._loss(batch)
-                    )
+                for batch in batches:
+                    if not isinstance(batch, CanonicalTrainingBatch):
+                        raise TypeError("validation dataset must yield CanonicalTrainingBatch values")
+                    batch_examples = int(batch.msa_tokens.shape[0])
+                    if batch_examples < 1:
+                        raise ValueError("validation batches must contain at least one example")
+                    if self.regime == TrainingRegime.OBJECTIVE:
+                        objectives, labels, _ = self._objective_inputs(batch)
+                        task_losses = self.model.pareto_head._task_losses(objectives, labels)
+                        if not task_losses:
+                            raise ValueError("objective validation has no supported labels")
+                        batch_loss = torch.stack(list(task_losses.values())).mean()
+                        for name, task_loss in task_losses.items():
+                            objective_loss_sums[name] = objective_loss_sums.get(name, 0.0) + (
+                                float(task_loss) * batch_examples
+                            )
+                            objective_example_counts[name] = (
+                                objective_example_counts.get(name, 0) + batch_examples
+                            )
+                        validated_objectives.update(self._last_objective_names)
+                        if "structural_stability" in self._last_objective_names:
+                            source = self._last_structure_source
+                            structure_source_counts[source] = (
+                                structure_source_counts.get(source, 0) + batch_examples
+                            )
+                    else:
+                        batch_loss = self._loss(batch)
+                    if batch_loss.ndim != 0 or not torch.isfinite(batch_loss):
+                        raise FloatingPointError("validation loss must be a finite scalar")
+                    total_loss += float(batch_loss) * batch_examples
+                    example_count += batch_examples
+                    batch_count += 1
+                    validation_components.update(self._required_gradient_components(batch))
         finally:
             self.model.train(was_training)
-        if not torch.isfinite(loss):
-            raise FloatingPointError("validation loss is non-finite")
+        if batch_count == 0:
+            raise ValueError("validation dataset must contain at least one batch")
+        enough_examples = example_count >= minimum
         validation_record = {
-            "loss": float(loss),
-            "examples": int(batch.msa_tokens.shape[0]),
-            "dataset_manifest": validation_manifest,
+            "loss": total_loss / example_count,
+            "examples": example_count,
+            "batch_count": batch_count,
+            "objective_losses": {
+                name: value / objective_example_counts[name]
+                for name, value in objective_loss_sums.items()
+            },
+            "calibration_statistics": (
+                "not_computed_requires_heldout_predictions_and_uncertainty"
+            ),
+            "finite": True,
+            "minimum_examples": minimum,
+            "dataset_manifest": validation_identity,
+            "validation_manifest": {
+                "dataset_identity": validation_identity,
+                "minimum_validation_examples": minimum,
+                "observed_examples": example_count,
+                "batch_count": batch_count,
+            },
+            "structure_source_counts": structure_source_counts,
+            "generated_reference_distribution_shift_risk": (
+                "present"
+                if {"reference", "generated"}.issubset(structure_source_counts)
+                else "not_established"
+            ),
+            "status": "validated" if enough_examples else "insufficient_validation_examples",
         }
-        for name in self._required_gradient_components(batch):
+        for name in validation_components:
             status = self.model.component_status[name]
             if status["training_steps"] > 0:
                 if status.get("training_dataset_manifest") != self.dataset_manifest:
                     raise ValueError(f"component {name} was trained on a different dataset manifest")
-                status["training_status"] = "validated"
                 status["validation"] = validation_record
+                if enough_examples:
+                    status["training_status"] = "validated"
         if self.regime == TrainingRegime.OBJECTIVE:
-            for name in self._last_objective_names:
+            for name in validated_objectives:
                 status = self.model.objective_status[name]
                 if status["training_steps"] > 0:
                     if status.get("training_dataset_manifest") != self.dataset_manifest:
                         raise ValueError(f"objective {name} was trained on a different dataset manifest")
-                    status["training_status"] = "validated"
                     status["validation"] = validation_record
-        return float(loss)
+                    if enough_examples:
+                        status["training_status"] = "validated"
+        return validation_record
 
     def validate_sequence_policy(
         self,
-        batch: CanonicalTrainingBatch,
+        batches: Iterable[CanonicalTrainingBatch] | CanonicalTrainingBatch,
         *,
-        validation_manifest: str,
+        validation_manifest: str | Mapping[str, Any],
     ) -> float:
         if self.regime != TrainingRegime.SEQUENCE:
             raise ValueError("sequence-policy validation requires the sequence regime")
-        result = self.validate(batch, validation_manifest=validation_manifest)
+        result = self.validate(batches, validation_manifest=validation_manifest)
         policy_status = self.model.component_status["sequence_policy"]
-        policy_status["validation"]["sequence_nll"] = result
-        return result
+        if policy_status.get("validation") is not None:
+            policy_status["validation"]["sequence_nll"] = result["loss"]
+        return float(result["loss"])
 
     def train_preference_step(self, batch: Optional[DPOBatch]) -> dict[str, Any]:
         if self.regime != TrainingRegime.PREFERENCE:
@@ -699,10 +843,7 @@ class CanonicalTrainer:
         return CheckpointManifest(
             config_hash=config_hash(config),
             state_schema_hash=state_schema_hash(self.model.state_dict()),
-            objective_schema_hash=config_hash({
-                name: list(OBJECTIVE_FEATURE_PLAN[name])
-                for name in self.model.objective_status
-            }),
+            objective_schema_hash=objective_schema_hash(),
             dataset_manifest=self.dataset_manifest,
             dataset_version=self.dataset_version,
             dataset_hash=self.dataset_hash,
@@ -714,12 +855,29 @@ class CanonicalTrainer:
             python_version=runtime["python_version"],
             torch_version=runtime["torch_version"],
             platform=runtime["platform"],
+            numpy_version=runtime["numpy_version"],
+            cuda_available=runtime["cuda_available"],
+            cuda_version=runtime["cuda_version"],
+            cudnn_version=runtime["cudnn_version"],
+            cuda_device_names=runtime["cuda_device_names"],
+            deterministic_algorithms_enabled=runtime["deterministic_algorithms_enabled"],
+            cudnn_deterministic=runtime["cudnn_deterministic"],
+            cudnn_benchmark=runtime["cudnn_benchmark"],
+            matmul_allow_tf32=runtime["matmul_allow_tf32"],
+            cudnn_allow_tf32=runtime["cudnn_allow_tf32"],
             training_regime=self.regime.value,
             random_seed=self.random_seed,
+            min_validation_examples=self.min_validation_examples,
+            optimizer_class=self.optimizer_class,
+            optimizer_hash=self.optimizer_hash,
+            scheduler_class=self.scheduler_class,
+            scheduler_hash=self.scheduler_hash,
         )
 
     def save_checkpoint(self, path: str | Path) -> None:
         manifest = self._manifest()
+        if not manifest.has_complete_provenance():
+            raise ValueError("canonical checkpoints require complete, verified provenance")
         payload = {
             "artifact_type": "canonical_training_checkpoint",
             "model_state": self.model.state_dict(),
@@ -751,7 +909,7 @@ class CanonicalTrainer:
         }
         torch.save(payload, path)
 
-    def resume(self, path: str | Path) -> None:
+    def resume(self, path: str | Path, *, migration_id: str | None = None) -> None:
         payload = torch.load(path, map_location="cpu", weights_only=False)
         if isinstance(payload, dict) and payload.get("artifact_type") == "component_transfer_checkpoint":
             raise ValueError("component-transfer checkpoints cannot be resumed as canonical training state")
@@ -765,7 +923,9 @@ class CanonicalTrainer:
         actual.validate()
         expected = self._manifest()
         training = payload["training"]
-        compatibility = validate_checkpoint_compatibility(actual, expected)
+        compatibility = validate_checkpoint_compatibility(
+            actual, expected, migration_id=migration_id
+        )
         if compatibility in ("incompatible", "unverified-provenance"):
             raise ValueError(f"checkpoint provenance is not compatible with this trainer: {compatibility}")
         if actual.dataset_manifest != expected.dataset_manifest or actual.dataset_hash != expected.dataset_hash:
@@ -830,7 +990,9 @@ class CanonicalTrainer:
         *,
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-4,
+        optimizer: Optional[torch.optim.Optimizer] = None,
         scheduler: Optional[Any] = None,
+        migration_id: str | None = None,
     ) -> "CanonicalTrainer":
         """Construct a regime trainer and strictly restore a saved training state."""
         payload = torch.load(path, map_location="cpu", weights_only=False)
@@ -865,14 +1027,16 @@ class CanonicalTrainer:
             regime,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
+            optimizer=optimizer,
             scheduler=scheduler,
             dataset_manifest=manifest.dataset_manifest,
             dataset_hash=manifest.dataset_hash,
             dataset_version=manifest.dataset_version,
             preprocessing_hash=manifest.preprocessing_hash,
             random_seed=manifest.random_seed,
+            min_validation_examples=manifest.min_validation_examples or 30,
         )
-        trainer.resume(path)
+        trainer.resume(path, migration_id=migration_id)
         return trainer
 
 

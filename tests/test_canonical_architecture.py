@@ -428,6 +428,7 @@ def test_representation_regime_has_explicit_masked_token_gradient_path():
         model,
         TrainingRegime.REPRESENTATION,
         dataset_manifest="msa-train-v1",
+        min_validation_examples=1,
     )
     batch = CanonicalTrainingBatch(
         msa_tokens=torch.tensor([[[1, 2, 3, 4], [1, 5, 6, 7]]]),
@@ -443,8 +444,65 @@ def test_representation_regime_has_explicit_masked_token_gradient_path():
     assert model.evoformer.msa_column_encoder.layers[0].self_attn.in_proj_weight.grad is not None
     assert not model.evoformer.pair_init.weight.requires_grad
     assert model.component_status["evoformer"]["training_status"] == "in_progress"
-    trainer.validate(batch, validation_manifest="msa-heldout-v1")
+    report = trainer.validate([batch], validation_manifest="msa-heldout-v1")
+    assert report["examples"] == 1 and report["batch_count"] == 1
     assert model.component_status["evoformer"]["training_status"] == "validated"
+
+
+def test_validation_requires_full_configured_heldout_example_count():
+    from chimera.training import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime
+
+    model = CHIMERAv2(
+        d_evo_single=32, d_evo_pair=16, d_se3=32, d_pair_out=32,
+        d_mpnn=16, n_flow_blocks=1, n_domains=2, n_modules=2, n_mc_dropout=2,
+    )
+    trainer = CanonicalTrainer(
+        model,
+        TrainingRegime.REPRESENTATION,
+        dataset_manifest="validation-floor-train-v1",
+    )
+
+    def batch(batch_size):
+        return CanonicalTrainingBatch(
+            msa_tokens=torch.randint(0, 20, (batch_size, 2, 4)),
+            pair_features=torch.zeros(batch_size, 4, 4, 16),
+        )
+
+    trainer.train_step(batch(1))
+    short_report = trainer.validate([batch(1)], validation_manifest="validation-floor-heldout-v1")
+    assert short_report["status"] == "insufficient_validation_examples"
+    assert short_report["examples"] == 1
+    assert short_report["minimum_examples"] == 30
+    assert model.component_status["evoformer"]["training_status"] == "in_progress"
+
+    report = trainer.validate(
+        [batch(10), batch(10), batch(10)],
+        validation_manifest="validation-floor-heldout-v1",
+    )
+    assert report["status"] == "validated"
+    assert report["examples"] == 30
+    assert report["batch_count"] == 3
+    assert report["finite"] is True
+    assert "calibration_statistics" in report
+    assert torch.isfinite(torch.tensor(report["loss"]))
+    assert model.component_status["evoformer"]["training_status"] == "validated"
+
+
+def test_canonical_checkpoint_save_rejects_incomplete_provenance(tmp_path):
+    from chimera.training import CanonicalTrainer, TrainingRegime
+
+    model = CHIMERAv2(
+        d_evo_single=32, d_evo_pair=16, d_se3=32, d_pair_out=32,
+        d_mpnn=16, n_flow_blocks=1, n_domains=2, n_modules=2, n_mc_dropout=2,
+    )
+    trainer = CanonicalTrainer(
+        model,
+        TrainingRegime.REPRESENTATION,
+        dataset_manifest="label-without-data-digest",
+    )
+
+    with pytest.raises(ValueError, match="complete, verified provenance"):
+        trainer.save_checkpoint(tmp_path / "incomplete.pt")
 
 
 def test_constraint_regime_trains_constraint_encoder_with_supervised_bridge_loss():
@@ -498,6 +556,7 @@ def test_objective_regime_requires_labels_and_tracks_proxy_source():
         model,
         TrainingRegime.OBJECTIVE,
         dataset_manifest="objective-train-v1",
+        min_validation_examples=1,
     )
     batch = CanonicalTrainingBatch(
         msa_tokens=torch.randint(0, 20, (1, 2, 4)),
@@ -521,12 +580,12 @@ def test_objective_regime_requires_labels_and_tracks_proxy_source():
     assert model.objective_status["expression_efficiency"]["training_status"] == "in_progress"
     assert model.objective_status["evolutionary_plausibility"]["training_steps"] == 0
 
-    trainer.validate(batch, validation_manifest="expression-heldout-v1")
+    trainer.validate([batch], validation_manifest="expression-heldout-v1")
     calibration = model.record_objective_calibration(
         "expression_efficiency",
         predicted_mean=torch.zeros(32),
-        epistemic_std=torch.ones(32),
-        targets=torch.tensor([0.0] * 22 + [2.0] * 10),
+        epistemic_std=torch.full((32,), 0.5),
+        targets=torch.tensor([0.0] * 22 + [1.0] * 10),
         calibration_manifest="expression-calibration-v1",
     )
     provenance = model.objective_provenance()["expression_efficiency"]
@@ -540,8 +599,8 @@ def test_objective_regime_requires_labels_and_tracks_proxy_source():
     assert calibration["one_sigma_coverage"] == pytest.approx(22 / 32)
 
 
-def test_assembly_evaluator_target_trains_structural_surrogate_without_evaluator_gradients():
-    from chimera.domain_schema import NRPSConstraints
+def test_assembly_objective_remains_a_deterministic_inference_evaluator():
+    from chimera.objective_schema import OBJECTIVE_SCHEMA
     from chimera.pareto_pcgrad import OBJECTIVE_FEATURE_PLAN
     from chimera.training import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime
 
@@ -549,43 +608,83 @@ def test_assembly_evaluator_target_trains_structural_surrogate_without_evaluator
         d_evo_single=32, d_evo_pair=16, d_se3=32, d_pair_out=32,
         d_mpnn=16, n_flow_blocks=1, n_domains=2, n_modules=2, n_mc_dropout=2,
     )
-    trainer = CanonicalTrainer(model, TrainingRegime.OBJECTIVE)
     length = 4
     rotations = torch.eye(3).reshape(1, 1, 3, 3).expand(1, length, -1, -1).clone()
     translations = torch.arange(length).reshape(1, length, 1).float() * torch.tensor([3.8, 0.0, 0.0])
-    constraints = NRPSConstraints(
-        fixed_mask=torch.zeros(1, length, dtype=torch.bool),
-        stachelhaus_positions=torch.tensor([1]),
-        domain_boundaries=torch.tensor([[[0, 2], [2, 4]]]),
-        module_boundaries=torch.tensor([[[0, 2], [2, 4]]]),
-        icosahedral_face=torch.tensor([3]),
-        ppt_serine_position=1,
-        hotspot_coords=None,
-        hotspot_indices=None,
-        target_substrate="PHE",
+    sequence = torch.tensor([[0, 1, 2, 3]])
+    evaluation = model.objective_evaluator.evaluate(
+        sequence,
+        model._frames_to_coords(rotations, translations),
+        rotations=rotations,
+        faces=torch.tensor([3]),
     )
+    assembly = evaluation["objective_outputs"]["assembly_compatibility"]
+
+    assert "assembly_compatibility" not in OBJECTIVE_FEATURE_PLAN
+    assert OBJECTIVE_SCHEMA["assembly_compatibility"]["loss"].startswith("none;")
+    assert not hasattr(model.pareto_head, "head_asm")
+    assert assembly.source == "icosahedral_interface_geometry_proxy"
+    assert assembly.differentiable is False
+    assert assembly.biological_measurement is False
+    provenance = model.objective_provenance()["assembly_compatibility"]
+    assert provenance["source"] == "deterministic_evaluator"
+    assert provenance["calibrated"] is False
+    assert provenance["uncertainty_available"] is False
+
+    trainer = CanonicalTrainer(model, TrainingRegime.OBJECTIVE)
+    batch = CanonicalTrainingBatch(
+        msa_tokens=torch.ones(1, 1, length, dtype=torch.long),
+        pair_features=torch.zeros(1, length, length, 16),
+        target_sequence=sequence,
+        objective_labels={"assembly_compatibility": assembly.value},
+        objective_label_sources={"assembly_compatibility": assembly.source},
+        objective_label_kinds={"assembly_compatibility": "deterministic_evaluator"},
+    )
+    with pytest.raises(ValueError, match="deterministic inference-time evaluator"):
+        trainer.train_step(batch)
+
+
+def test_structural_stability_records_reference_to_generated_distribution_shift():
+    from dataclasses import replace
+    from chimera.training import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime
+
+    model = CHIMERAv2(
+        d_evo_single=32, d_evo_pair=16, d_se3=32, d_pair_out=32,
+        d_mpnn=16, n_flow_blocks=1, n_domains=2, n_modules=2, n_mc_dropout=2,
+    )
+    trainer = CanonicalTrainer(
+        model,
+        TrainingRegime.OBJECTIVE,
+        dataset_manifest="structure-source-train-v1",
+        min_validation_examples=1,
+    )
+    length = 4
+    rotations = torch.eye(3).reshape(1, 1, 3, 3).expand(1, length, -1, -1).clone()
+    translations = torch.arange(length).reshape(1, length, 1).float() * torch.tensor([3.8, 0.0, 0.0])
     batch = CanonicalTrainingBatch(
         msa_tokens=torch.tensor([[[0, 1, 2, 3], [3, 2, 1, 0]]]),
         pair_features=torch.zeros(1, length, length, 16),
         source_R=rotations,
         source_t=translations,
         target_sequence=torch.tensor([[0, 1, 2, 3]]),
-        constraints=constraints,
+        objective_labels={"structural_stability": torch.tensor([40.0])},
+        objective_label_sources={"structural_stability": "synthetic-structure-quality-v1"},
+        objective_label_kinds={"structural_stability": "proxy"},
     )
+    with pytest.raises(ValueError, match="structure_source"):
+        trainer.train_step(batch)
 
-    result = trainer.train_step(batch)
+    batch.structure_source = "reference"
+    trainer.train_step(batch)
+    validation = replace(batch, structure_source="generated")
+    report = trainer.validate([validation], validation_manifest="structure-source-heldout-v1")
 
-    assert OBJECTIVE_FEATURE_PLAN["assembly_compatibility"] == ("structural",)
-    assembly_status = model.objective_status["assembly_compatibility"]
-    assert assembly_status["training_steps"] == 1
-    assert assembly_status["label_sources"] == ["icosahedral_interface_geometry_proxy"]
-    assert assembly_status["label_kinds"] == ["deterministic_evaluator"]
-    assert model.objective_provenance()["assembly_compatibility"]["biological_measurement"] is False
-    structural_projection = model.objective_feature_encoder.projections["structural"][1]
-    assert structural_projection.weight.grad is not None
-    assert torch.isfinite(structural_projection.weight.grad).all()
-    assert result["gradient_flow"]["components"]["pareto_head"]["gradient_parameters"] > 0
-    assert all(parameter.grad is None for parameter in model.evoformer.parameters())
+    status = model.objective_provenance()["structural_stability"]
+    assert status["structure_data_sources"] == ["reference"]
+    assert status["generated_reference_distribution_shift_risk"] == (
+        "present_reference_training_vs_generated_inference"
+    )
+    assert report["structure_source_counts"] == {"generated": 1}
 
 
 def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
@@ -607,6 +706,7 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
         )
 
     seed_everything(17)
+    explicit_generator = torch.Generator().manual_seed(51)
     dataset_record = {
         "msa_tokens": [[1, 2, 3, 4], [4, 3, 2, 1]],
         "source_R": torch.eye(3).expand(4, -1, -1).tolist(),
@@ -620,6 +720,8 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
         "dataset_path": dataset_path,
         "preprocessing_config": {"schema": "canonical-batch-v1"},
         "random_seed": 17,
+        "min_validation_examples": 1,
+        "generator": explicit_generator,
     }
 
     model = make_model()
@@ -644,16 +746,21 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     for component in ("evoformer", "node_connector", "base_mpnn", "multi_scale_designer", "_seq_to_repr", "sequence_policy"):
         assert result["gradient_flow"]["components"][component]["gradient_parameters"] > 0
     assert all(not p.requires_grad for p in model.flow_model.parameters())
-    validation_loss = trainer.validate_sequence_policy(batch, validation_manifest="heldout-v1")
+    validation_loss = trainer.validate_sequence_policy([batch], validation_manifest="heldout-v1")
     assert torch.isfinite(torch.tensor(validation_loss))
 
     path = tmp_path / "sequence-stage.pt"
     trainer.save_checkpoint(path)
-    expected_rng_values = (random.random(), float(np.random.random()), torch.rand(()))
+    expected_rng_values = (
+        random.random(),
+        float(np.random.random()),
+        torch.rand(()),
+        torch.rand((), generator=explicit_generator),
+    )
     payload = torch.load(path, map_location="cpu", weights_only=False)
     manifest = CheckpointManifest(**payload["manifest"])
     assert payload["artifact_type"] == "canonical_training_checkpoint"
-    assert manifest.format_version == 3
+    assert manifest.format_version == 4
     assert manifest.chimera_version
     assert manifest.git_commit
     assert manifest.git_worktree_clean is not None
@@ -665,8 +772,18 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     assert manifest.objective_schema_hash
     assert manifest.environment_hash
     assert manifest.python_version and manifest.torch_version and manifest.platform
+    assert manifest.numpy_version
+    assert manifest.cuda_available is False
+    assert manifest.deterministic_algorithms_enabled is not None
+    assert manifest.cudnn_benchmark is not None
+    assert manifest.matmul_allow_tf32 is not None
     assert manifest.training_regime == "sequence"
     assert manifest.random_seed == 17
+    assert manifest.min_validation_examples == 1
+    assert manifest.optimizer_class.endswith("AdamW") and manifest.optimizer_hash
+    assert manifest.scheduler_class == "none" and manifest.scheduler_hash
+    cuda_rng_state = payload["training"]["rng_state"]["cuda"]
+    assert (cuda_rng_state is not None) == torch.cuda.is_available()
     assert manifest.has_complete_provenance()
     assert payload["training"]["regime"] == manifest.training_regime
     checkpoint_policy = [parameter.detach().clone() for parameter in model.sequence_policy.parameters()]
@@ -681,6 +798,7 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     assert random.random() == expected_rng_values[0]
     assert float(np.random.random()) == expected_rng_values[1]
     assert torch.equal(torch.rand(()), expected_rng_values[2])
+    assert torch.equal(torch.rand((), generator=explicit_generator), expected_rng_values[3])
     assert restored._resume_source_manifest == payload["manifest"]
     assert restored.global_step == 1
     assert restored.epoch == 0
@@ -691,6 +809,32 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     )
     assert restored.optimizer.state_dict()["param_groups"] == payload["optimizer_state"]["param_groups"]
     assert len(restored.optimizer.state_dict()["state"]) == len(payload["optimizer_state"]["state"])
+
+    mismatched_optimizer_model = make_model()
+    mismatched_optimizer = CanonicalTrainer(
+        mismatched_optimizer_model,
+        TrainingRegime.SEQUENCE,
+        learning_rate=2e-4,
+        **provenance,
+    )
+    with pytest.raises(ValueError, match="checkpoint provenance is not compatible"):
+        mismatched_optimizer.resume(path)
+
+    mismatched_scheduler_model = make_model()
+    scheduler_parameters = mismatched_scheduler_model.prepare_for_training("sequence")
+    scheduler_optimizer = torch.optim.AdamW(
+        scheduler_parameters, lr=1e-4, weight_decay=1e-4
+    )
+    scheduler = torch.optim.lr_scheduler.StepLR(scheduler_optimizer, step_size=2, gamma=0.9)
+    mismatched_scheduler = CanonicalTrainer(
+        mismatched_scheduler_model,
+        TrainingRegime.SEQUENCE,
+        optimizer=scheduler_optimizer,
+        scheduler=scheduler,
+        **provenance,
+    )
+    with pytest.raises(ValueError, match="checkpoint provenance is not compatible"):
+        mismatched_scheduler.resume(path)
 
     from chimera.dpo import DPOBatch
     rejected = (batch.target_sequence + 1) % 20
@@ -758,6 +902,18 @@ def test_canonical_component_state_dict_shapes_match_legacy_layout():
             assert not incompatible.missing_keys
             assert not incompatible.unexpected_keys
             continue
+        if name == "pareto_head":
+            retired = {key for key in old_state if key.startswith("head_asm.")}
+            assert retired
+            assert not any(key.startswith("head_asm.") for key in new_state)
+            retained = set(old_state) - retired
+            assert retained.issubset(new_state)
+            migrated, migration_status = CHIMERAv2._migrate_pareto_state_dict(old_state, new_state)
+            incompatible = canonical.pareto_head.load_state_dict(migrated, strict=True)
+            assert migration_status and "retired" in migration_status
+            assert not incompatible.missing_keys
+            assert not incompatible.unexpected_keys
+            continue
         assert set(old_state).issubset(new_state), name
         for key in old_state:
             if name == "multi_scale_designer" and key == "edge_proj.weight":
@@ -771,6 +927,27 @@ def test_canonical_component_state_dict_shapes_match_legacy_layout():
             alias = key.replace("flow_model.velocity_field.", "sb_model.drift_model.", 1)
             if alias in flow_state:
                 assert torch.equal(value, flow_state[alias])
+
+
+def test_legacy_pareto_component_transfer_uses_explicit_strict_migration(tmp_path):
+    config = dict(
+        d_evo_single=32, d_evo_pair=16, d_se3=32, d_pair_out=32,
+        d_mpnn=16, n_flow_blocks=1, n_domains=2, n_modules=2, n_mc_dropout=2,
+    )
+    legacy = LegacyCHIMERAv2(**config)
+    canonical = CHIMERAv2(**config)
+    legacy_state = legacy.pareto_head.state_dict()
+    checkpoint_path = tmp_path / "legacy-pareto-transfer.pt"
+    torch.save({"pareto_head": legacy_state}, checkpoint_path)
+
+    canonical.load_connectors(str(checkpoint_path))
+
+    assert canonical.component_status["pareto_head"]["initialization"] == "loaded_unverified"
+    assert "retired" in canonical.component_status["pareto_head"]["migration_status"]
+    for name, value in legacy_state.items():
+        if name.startswith("head_asm."):
+            continue
+        assert torch.equal(value, canonical.pareto_head.state_dict()[name])
 
 
 def test_flow_checkpoint_migration_fills_bridge_alias(tmp_path):

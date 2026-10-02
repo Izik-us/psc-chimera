@@ -38,6 +38,6 @@ def test_checkpoint_fingerprint_is_order_independent():
 def test_checkpoint_manifest_accepts_current_defaults():
     manifest = CheckpointManifest()
     manifest.validate()
-    assert manifest.format_version == 3
+    assert manifest.format_version == 4
     assert manifest.geometry_edge_dim == 28
     assert manifest.objective_count == 5

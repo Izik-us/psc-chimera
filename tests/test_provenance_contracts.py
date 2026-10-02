@@ -1,7 +1,12 @@
 import hashlib
 import json
 
-from chimera.checkpoint import CheckpointManifest, validate_checkpoint_compatibility
+from chimera.checkpoint import (
+    CheckpointManifest,
+    git_provenance,
+    runtime_provenance,
+    validate_checkpoint_compatibility,
+)
 from data.training import build_dataset_manifest
 
 
@@ -30,6 +35,38 @@ def test_checkpoint_compatibility_does_not_verify_missing_provenance():
 
     assert manifest.has_complete_provenance() is False
     assert validate_checkpoint_compatibility(manifest, manifest) == "unverified-provenance"
+
+
+def test_runtime_fingerprint_records_backend_flags_and_explicit_cuda_availability():
+    runtime = runtime_provenance()
+
+    assert runtime["python_version"]
+    assert runtime["torch_version"]
+    assert runtime["numpy_version"]
+    assert runtime["platform"]
+    assert runtime["environment_hash"]
+    for name in (
+        "cuda_available",
+        "deterministic_algorithms_enabled",
+        "cudnn_deterministic",
+        "cudnn_benchmark",
+        "matmul_allow_tf32",
+        "cudnn_allow_tf32",
+    ):
+        assert isinstance(runtime[name], bool)
+    if not runtime["cuda_available"]:
+        assert runtime["cuda_version"] is None
+        assert runtime["cuda_device_names"] is None
+
+
+def test_git_provenance_is_explicitly_unavailable_outside_repository(tmp_path):
+    provenance = git_provenance(tmp_path)
+
+    assert provenance == {
+        "git_commit": None,
+        "git_worktree_clean": None,
+        "source_tree_hash": None,
+    }
 
 
 def test_dataset_manifest_is_stable_and_hashable():

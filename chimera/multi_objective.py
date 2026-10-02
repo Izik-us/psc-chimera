@@ -470,13 +470,14 @@ class LegacyAutoregressiveSequencePolicy(nn.Module):
 
 @dataclass
 class ParetoObjectives:
-    """Five named neural-surrogate channels; not biological measurements by default."""
+    """Named scores plus an optional declaration of which channels were computed."""
 
     evolutionary_plausibility: torch.Tensor
     structural_stability: torch.Tensor
     expression_efficiency: torch.Tensor
     substrate_selectivity: torch.Tensor
     assembly_compatibility: torch.Tensor
+    available_objectives: Optional[tuple[str, ...]] = None
 
 
 AutoregressiveSequencePolicy = LegacyAutoregressiveSequencePolicy
