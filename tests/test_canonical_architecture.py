@@ -1,5 +1,9 @@
+import json
+import hashlib
+import random
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 
@@ -141,6 +145,33 @@ def test_experimental_design_ranks_explicit_proxy_values_not_random_objective_he
     assert result["all_objectives"].shape == (2, 5)
     assert result["objective_names"][1] == "backbone_sanity_validity"
     assert result["objective_names"][4] == "icosahedral_interface_geometry_proxy"
+
+
+def test_uncalibrated_objectives_cannot_enter_expected_improvement():
+    model = CHIMERAv2(
+        d_evo_single=32, d_evo_pair=16, d_se3=32, d_pair_out=32,
+        d_mpnn=16, n_flow_blocks=1, n_flow_steps=2, n_mpnn_seqs=1,
+        n_domains=2, n_modules=2, n_mc_dropout=2,
+    )
+    model.best_observed = 0.75
+    length = 8
+    rotations = torch.eye(3).reshape(1, 1, 3, 3).expand(1, length, -1, -1).clone()
+    translations = torch.arange(length).reshape(1, length, 1).float() * torch.tensor([3.8, 0.0, 0.0])
+
+    result = model.design(
+        nrps_msa=torch.randint(0, 20, (1, 2, length)),
+        source_backbone=(rotations, translations),
+        initial_pair_features=torch.zeros(1, length, length, 16),
+        n_designs=2,
+        n_pareto_samples=1,
+        flow_steps=2,
+        objective_weights=torch.ones(5),
+        experimental=True,
+    )
+
+    assert result["readiness"]["state"] != "TRAINED"
+    assert result["acquisition_status"].startswith("not computed")
+    assert torch.equal(result["acquisition_scores"], torch.zeros_like(result["acquisition_scores"]))
 
 
 def test_canonical_proteus_update_rejects_untrained_policy():
@@ -473,16 +504,20 @@ def test_objective_regime_requires_labels_and_tracks_proxy_source():
         pair_features=torch.zeros(1, 4, 4, 16),
         target_sequence=torch.randint(0, 20, (1, 4)),
         objective_labels={"expression_efficiency": torch.tensor([0.5])},
-        objective_label_sources={"expression_efficiency": "measured-expression-v1"},
+        objective_label_sources={"expression_efficiency": "test-expression-proxy-v1"},
+        objective_label_kinds={"expression_efficiency": "proxy"},
     )
     moved_batch = batch.to("cpu")
     assert moved_batch.objective_labels["expression_efficiency"].device.type == "cpu"
 
     result = trainer.train_step(batch)
-    for component in ("_seq_to_repr", "pareto_head"):
+    for component in ("objective_feature_encoder", "pareto_head"):
         component_gradients = result["gradient_flow"]["components"][component]
         assert component_gradients["gradient_parameters"] > 0
         assert component_gradients["gradient_norm"] > 0
+        assert component_gradients["all_gradients_finite"]
+    assert all(not parameter.requires_grad for parameter in model.evoformer.parameters())
+    assert all(parameter.grad is None for parameter in model.evoformer.parameters())
     assert model.objective_status["expression_efficiency"]["training_status"] == "in_progress"
     assert model.objective_status["evolutionary_plausibility"]["training_steps"] == 0
 
@@ -496,7 +531,8 @@ def test_objective_regime_requires_labels_and_tracks_proxy_source():
     )
     provenance = model.objective_provenance()["expression_efficiency"]
     assert provenance["training_status"] == "validated"
-    assert provenance["label_sources"] == ["measured-expression-v1"]
+    assert provenance["label_sources"] == ["test-expression-proxy-v1"]
+    assert provenance["label_kinds"] == ["proxy"]
     assert provenance["biological_measurement"] is False
     assert provenance["calibrated"] is True
     assert calibration["examples"] == 32
@@ -504,7 +540,57 @@ def test_objective_regime_requires_labels_and_tracks_proxy_source():
     assert calibration["one_sigma_coverage"] == pytest.approx(22 / 32)
 
 
+def test_assembly_evaluator_target_trains_structural_surrogate_without_evaluator_gradients():
+    from chimera.domain_schema import NRPSConstraints
+    from chimera.pareto_pcgrad import OBJECTIVE_FEATURE_PLAN
+    from chimera.training import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime
+
+    model = CHIMERAv2(
+        d_evo_single=32, d_evo_pair=16, d_se3=32, d_pair_out=32,
+        d_mpnn=16, n_flow_blocks=1, n_domains=2, n_modules=2, n_mc_dropout=2,
+    )
+    trainer = CanonicalTrainer(model, TrainingRegime.OBJECTIVE)
+    length = 4
+    rotations = torch.eye(3).reshape(1, 1, 3, 3).expand(1, length, -1, -1).clone()
+    translations = torch.arange(length).reshape(1, length, 1).float() * torch.tensor([3.8, 0.0, 0.0])
+    constraints = NRPSConstraints(
+        fixed_mask=torch.zeros(1, length, dtype=torch.bool),
+        stachelhaus_positions=torch.tensor([1]),
+        domain_boundaries=torch.tensor([[[0, 2], [2, 4]]]),
+        module_boundaries=torch.tensor([[[0, 2], [2, 4]]]),
+        icosahedral_face=torch.tensor([3]),
+        ppt_serine_position=1,
+        hotspot_coords=None,
+        hotspot_indices=None,
+        target_substrate="PHE",
+    )
+    batch = CanonicalTrainingBatch(
+        msa_tokens=torch.tensor([[[0, 1, 2, 3], [3, 2, 1, 0]]]),
+        pair_features=torch.zeros(1, length, length, 16),
+        source_R=rotations,
+        source_t=translations,
+        target_sequence=torch.tensor([[0, 1, 2, 3]]),
+        constraints=constraints,
+    )
+
+    result = trainer.train_step(batch)
+
+    assert OBJECTIVE_FEATURE_PLAN["assembly_compatibility"] == ("structural",)
+    assembly_status = model.objective_status["assembly_compatibility"]
+    assert assembly_status["training_steps"] == 1
+    assert assembly_status["label_sources"] == ["icosahedral_interface_geometry_proxy"]
+    assert assembly_status["label_kinds"] == ["deterministic_evaluator"]
+    assert model.objective_provenance()["assembly_compatibility"]["biological_measurement"] is False
+    structural_projection = model.objective_feature_encoder.projections["structural"][1]
+    assert structural_projection.weight.grad is not None
+    assert torch.isfinite(structural_projection.weight.grad).all()
+    assert result["gradient_flow"]["components"]["pareto_head"]["gradient_parameters"] > 0
+    assert all(parameter.grad is None for parameter in model.evoformer.parameters())
+
+
 def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
+    from chimera.checkpoint import CheckpointManifest
+    from chimera.reproducibility import seed_everything
     from chimera.training import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime
 
     def make_model():
@@ -520,22 +606,38 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
             n_mc_dropout=2,
         )
 
+    seed_everything(17)
+    dataset_record = {
+        "msa_tokens": [[1, 2, 3, 4], [4, 3, 2, 1]],
+        "source_R": torch.eye(3).expand(4, -1, -1).tolist(),
+        "source_t": [[0.0, 0.0, 0.0], [3.8, 0.0, 0.0], [7.6, 0.0, 0.0], [11.4, 0.0, 0.0]],
+        "target_sequence": [0, 1, 2, 3],
+    }
+    dataset_path = tmp_path / "sequence-train.json"
+    dataset_path.write_text(json.dumps(dataset_record), encoding="utf-8")
+    provenance = {
+        "dataset_manifest": {"dataset_version": "sequence-test-v1", "split": "train"},
+        "dataset_path": dataset_path,
+        "preprocessing_config": {"schema": "canonical-batch-v1"},
+        "random_seed": 17,
+    }
+
     model = make_model()
     trainer = CanonicalTrainer(
         model,
         TrainingRegime.SEQUENCE,
         learning_rate=1e-4,
-        dataset_manifest="train-v1",
+        **provenance,
     )
     length = 4
     source_R = torch.eye(3).reshape(1, 1, 3, 3).expand(1, length, -1, -1).clone()
     source_t = torch.arange(length).reshape(1, length, 1).float() * torch.tensor([3.8, 0.0, 0.0])
     batch = CanonicalTrainingBatch(
-        msa_tokens=torch.randint(0, 20, (1, 2, length)),
+        msa_tokens=torch.tensor(dataset_record["msa_tokens"]).unsqueeze(0),
         pair_features=torch.zeros(1, length, length, 16),
         source_R=source_R,
         source_t=source_t,
-        target_sequence=torch.randint(0, 20, (1, length)),
+        target_sequence=torch.tensor(dataset_record["target_sequence"]).unsqueeze(0),
     )
     result = trainer.train_step(batch)
 
@@ -547,15 +649,39 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
 
     path = tmp_path / "sequence-stage.pt"
     trainer.save_checkpoint(path)
+    expected_rng_values = (random.random(), float(np.random.random()), torch.rand(()))
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    manifest = CheckpointManifest(**payload["manifest"])
+    assert payload["artifact_type"] == "canonical_training_checkpoint"
+    assert manifest.format_version == 3
+    assert manifest.chimera_version
+    assert manifest.git_commit
+    assert manifest.git_worktree_clean is not None
+    assert manifest.source_tree_hash
+    assert manifest.dataset_manifest and manifest.dataset_version == "sequence-test-v1"
+    assert manifest.dataset_hash == hashlib.sha256(dataset_path.read_bytes()).hexdigest()
+    assert manifest.preprocessing_hash
+    assert manifest.config_hash and manifest.state_schema_hash
+    assert manifest.objective_schema_hash
+    assert manifest.environment_hash
+    assert manifest.python_version and manifest.torch_version and manifest.platform
+    assert manifest.training_regime == "sequence"
+    assert manifest.random_seed == 17
+    assert manifest.has_complete_provenance()
+    assert payload["training"]["regime"] == manifest.training_regime
     checkpoint_policy = [parameter.detach().clone() for parameter in model.sequence_policy.parameters()]
     restored_model = make_model()
     restored = CanonicalTrainer(
         restored_model,
         TrainingRegime.SEQUENCE,
         learning_rate=1e-4,
-        dataset_manifest="train-v1",
+        **provenance,
     )
     restored.resume(path)
+    assert random.random() == expected_rng_values[0]
+    assert float(np.random.random()) == expected_rng_values[1]
+    assert torch.equal(torch.rand(()), expected_rng_values[2])
+    assert restored._resume_source_manifest == payload["manifest"]
     assert restored.global_step == 1
     assert restored.epoch == 0
     assert restored_model.component_status["sequence_policy"]["training_status"] == "validated"
@@ -563,10 +689,25 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
         torch.equal(saved, current)
         for saved, current in zip(checkpoint_policy, restored_model.sequence_policy.parameters())
     )
+    assert restored.optimizer.state_dict()["param_groups"] == payload["optimizer_state"]["param_groups"]
+    assert len(restored.optimizer.state_dict()["state"]) == len(payload["optimizer_state"]["state"])
 
     from chimera.dpo import DPOBatch
-    preference = CanonicalTrainer(model, TrainingRegime.PREFERENCE, learning_rate=1e-4)
     rejected = (batch.target_sequence + 1) % 20
+    preference_dataset_path = tmp_path / "preference-train.json"
+    preference_dataset_path.write_text(
+        json.dumps({"chosen": batch.target_sequence.tolist(), "rejected": rejected.tolist()}),
+        encoding="utf-8",
+    )
+    preference = CanonicalTrainer(
+        model,
+        TrainingRegime.PREFERENCE,
+        learning_rate=1e-4,
+        dataset_manifest={"dataset_version": "preference-test-v1", "split": "train"},
+        dataset_path=preference_dataset_path,
+        preprocessing_config={"schema": "dpo-batch-v1"},
+        random_seed=17,
+    )
     preference_result = preference.train_preference_step(DPOBatch(
         context=torch.zeros(1, length, 16),
         chosen=batch.target_sequence,

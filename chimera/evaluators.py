@@ -97,7 +97,7 @@ class BiologicalObjectiveEvaluator:
             ),
             "assembly_compatibility": ObjectiveOutput(
                 "assembly_compatibility", assembly, "icosahedral_interface_geometry_proxy",
-                False, True, False,
+                False, False, False,
             ),
         }
         return {
@@ -128,6 +128,7 @@ class BiologicalObjectiveEvaluator:
         return (sequences[:, positions[valid]] == expected[valid]).float().mean(dim=-1)
 
     @staticmethod
+    @torch.no_grad()
     def _assembly(
         coords: torch.Tensor,
         rotations: torch.Tensor | None,

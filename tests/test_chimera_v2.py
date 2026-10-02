@@ -420,6 +420,9 @@ class TestCHIMERAv2Integration:
         """Save connector weights, reload, verify forward pass still works."""
         save_path = str(tmp_path / "connectors.pt")
         chimera_model.save(save_path)
+        transfer = torch.load(save_path, map_location="cpu", weights_only=False)
+        assert transfer["artifact_type"] == "component_transfer_checkpoint"
+        assert transfer["format_version"] == 1
 
         # Load into fresh model
         import copy
@@ -427,6 +430,21 @@ class TestCHIMERAv2Integration:
         model2 = copy.deepcopy(chimera_model)
         model2.load_connectors(save_path)
         assert os.path.exists(save_path)
+
+        legacy_path = str(tmp_path / "legacy-connectors.pt")
+        torch.save(transfer["components"], legacy_path)
+        model2.load_connectors(legacy_path)
+
+        from chimera.training import CanonicalTrainer, TrainingRegime
+
+        trainer = CanonicalTrainer(chimera_model, TrainingRegime.SEQUENCE)
+        with pytest.raises(ValueError, match="component-transfer"):
+            trainer.resume(save_path)
+
+        canonical_path = str(tmp_path / "canonical-training.pt")
+        torch.save({"artifact_type": "canonical_training_checkpoint"}, canonical_path)
+        with pytest.raises(ValueError, match="CanonicalTrainer.resume"):
+            model2.load_connectors(canonical_path)
 
 
 # ── DPO Tests ─────────────────────────────────────────────────────────────────

@@ -165,5 +165,6 @@ def test_objective_evaluator_reports_proxy_provenance_and_nonbiological_status()
     assert expression.source == "rule_based_codon_optimization_proxy"
     assert expression.calibrated is False
     assert assembly.source == "icosahedral_interface_geometry_proxy"
-    assert assembly.differentiable is True
+    assert assembly.differentiable is False
+    assert assembly.value.requires_grad is False
     assert result["structural_validity"].shape == (2,)

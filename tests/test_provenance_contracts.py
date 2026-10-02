@@ -1,11 +1,11 @@
 import hashlib
 import json
 
-from chimera.checkpoint import CheckpointManifest
+from chimera.checkpoint import CheckpointManifest, validate_checkpoint_compatibility
 from data.training import build_dataset_manifest
 
 
-def test_checkpoint_manifest_records_runtime_and_dataset_provenance():
+def test_checkpoint_manifest_keeps_unavailable_provenance_explicit():
     manifest = CheckpointManifest(
         dataset_manifest="dataset-v1",
         dataset_hash="abc123",
@@ -19,9 +19,17 @@ def test_checkpoint_manifest_records_runtime_and_dataset_provenance():
     assert manifest.dataset_hash == "abc123"
     assert manifest.preprocessing_hash == "def456"
     assert manifest.environment_hash == "ghi789"
-    assert manifest.python_version
-    assert manifest.torch_version
-    assert manifest.platform
+    assert manifest.python_version is None
+    assert manifest.torch_version is None
+    assert manifest.platform is None
+    assert manifest.has_complete_provenance() is False
+
+
+def test_checkpoint_compatibility_does_not_verify_missing_provenance():
+    manifest = CheckpointManifest()
+
+    assert manifest.has_complete_provenance() is False
+    assert validate_checkpoint_compatibility(manifest, manifest) == "unverified-provenance"
 
 
 def test_dataset_manifest_is_stable_and_hashable():

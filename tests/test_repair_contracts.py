@@ -35,9 +35,9 @@ def test_checkpoint_fingerprint_is_order_independent():
     assert config_hash({"layers": 2, "hidden": 128}) == config_hash({"hidden": 128, "layers": 2})
 
 
-def test_checkpoint_manifest_accepts_v2_defaults():
+def test_checkpoint_manifest_accepts_current_defaults():
     manifest = CheckpointManifest()
     manifest.validate()
-    assert manifest.format_version == 2
+    assert manifest.format_version == 3
     assert manifest.geometry_edge_dim == 28
     assert manifest.objective_count == 5

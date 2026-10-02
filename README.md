@@ -224,18 +224,32 @@ A real design run requires compatible MSA, pair features, source backbone frames
 | `flow` | Source/target SE(3) frames | MSA encoder, pair connector, flow backbone, evolutionary cross-attention; supplied substrate/constraint encoders | Brownian Schrödinger-bridge drift regression |
 | `sequence` | Ground-truth structure and amino-acid sequence | MSA encoder, node connector, local sequence-recovery trunk, multiscale designer, projection, autoregressive policy | Teacher-forced causal token cross entropy |
 | `constraint` | Source/target frames plus explicit NRPS constraints | Flow-regime modules and constraint encoder | Constrained bridge drift regression |
-| `objective` | Named labels with per-objective source metadata | Sequence projection and five-objective head | Per-task supervised losses with PCGrad |
+| `objective` | Named labels with per-objective source metadata | Typed objective feature encoder and five-objective head | Per-task supervised losses with PCGrad |
 | `preference` | Chosen/rejected sequences and conditioning context | Autoregressive sequence policy only | DPO against a frozen reference |
+
+Objective inputs are declared per head in `OBJECTIVE_FEATURE_PLAN`: evolutionary plausibility consumes sequence and MSA features; structural stability consumes sequence and structure features; expression efficiency consumes sequence features; substrate selectivity consumes sequence and substrate features; assembly compatibility consumes structure features. Each objective label must supply both a source identity and an `ObjectiveLabelKind` (`proxy`, `surrogate`, `validated_surrogate`, `deterministic_evaluator`, or `experimental_measurement`). MSA-derived inputs are frozen and detached in the objective regime. Assembly supervision may use the deterministic `icosahedral_interface_geometry_proxy` from a candidate backbone and explicit face assignment as a detached target; the evaluator score is not fed back as an assembly-head feature and is not an experimental measurement or physical assembly-energy prediction. Objective heads trained on these values remain proxies/surrogates.
 
 Flow training uses the supervised bridge loss; the inference sampler is stochastic Euler-Maruyama under `no_grad`. The sampler is not used as a differentiable training shortcut. Preference optimization is rejected until the sequence policy has supervised training and a separate held-out validation manifest. Objective heads remain uncalibrated unless explicit evidence is added; MC dropout does not make random predictions meaningful. Calibration requires at least 30 independent examples, a distinct calibration manifest, and empirical one-sigma coverage between 0.58 and 0.78; the recorded RMSE, MAE, and coverage remain visible in provenance.
 
 ```python
-from chimera import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime
+from chimera import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime, seed_everything
 
-trainer = CanonicalTrainer(model, TrainingRegime.FLOW, dataset_manifest="train-v1")
+seed_everything(seed)
+trainer = CanonicalTrainer(
+        model,
+        TrainingRegime.FLOW,
+        dataset_manifest={"dataset_version": dataset_version, "split": "train"},
+        dataset_path=training_jsonl_path,
+        preprocessing_config=preprocessing_config,
+        random_seed=seed,
+)
 step = trainer.train_step(batch)
 gradient_matrix = step["gradient_flow"]
 trainer.save_checkpoint("flow-stage.pt")
 ```
 
-`gradient_flow_report(model)` reports every parameter's `requires_grad`, gradient presence, norm, and finite status. `trainer.resume(path)` restores the full model, optimizer, optional scheduler, regime, component status, and manifest under strict schema/config/dataset checks. Held-out validation marks components validated; a mere optimizer step does not. `model.inference_readiness()` explains what is still missing, and `model.design(..., experimental=True)` uses clearly named deterministic proxies until validated, calibrated surrogate objectives are available.
+`dataset_path` fingerprints the exact file bytes; the dataset manifest/version and preprocessing configuration must describe the inputs actually used. When provenance cannot be obtained, the manifest retains `None` and canonical resume rejects it as unverified. The manifest also records the Git commit/source tree, model, state-schema and objective-schema fingerprints, runtime, regime, and an explicitly configured seed. Canonical resume restores saved Python, NumPy, PyTorch, CUDA, and explicit-generator RNG states.
+
+`CanonicalTrainer.save_checkpoint()` writes a tagged resumable training checkpoint. `model.save()` and `load_connectors()` are a separate, versioned component-transfer path: they transfer module weights only, contain no optimizer/trainer state, and cannot be passed to canonical resume. The loader still accepts legacy raw component maps for migration.
+
+`gradient_flow_report(model)` reports every parameter's `requires_grad`, gradient presence, norm, and finite status. `trainer.resume(path)` restores the full model, optimizer, optional scheduler, regime, component status, and manifest after compatibility checks. Held-out validation marks components validated; a mere optimizer step does not. `model.inference_readiness()` explains what is still missing, and `model.design(..., experimental=True)` uses clearly named deterministic proxies until validated, calibrated surrogate objectives are available.

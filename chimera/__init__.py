@@ -30,8 +30,19 @@ from .multi_objective import StructuralRetriever, MultiScaleNRPSDesigner
 from .conditioning import SubstratePocketConditioner
 from .components import MSARepresentationBackbone
 from .autoregressive_policy import AutoregressiveSequencePolicy
-from .pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
-from .training import CanonicalTrainingBatch, CanonicalTrainer, TrainingRegime, gradient_flow_report
+from .pareto_pcgrad import (
+    MergeReadyParetoMultiObjectiveHead,
+    ObjectiveFeatureEncoder,
+    ObjectiveFeatureSource,
+    OBJECTIVE_FEATURE_PLAN,
+)
+from .training import (
+    CanonicalTrainingBatch,
+    CanonicalTrainer,
+    ObjectiveLabelKind,
+    TrainingRegime,
+    gradient_flow_report,
+)
 from .adapters import (
     BackboneEncoder,
     StructureGenerator,
@@ -61,8 +72,10 @@ __all__ = [
     "seed_everything", "seed_worker", "make_generator",
     "DomainType", "DomainSpan", "AssemblySchema", "StructuralRetriever",
     "ParetoMultiObjectiveHead", "AutoregressiveSequencePolicy",
+    "ObjectiveFeatureEncoder", "ObjectiveFeatureSource", "OBJECTIVE_FEATURE_PLAN",
     "BackboneEncoder", "StructureGenerator", "SequenceDesigner",
     "OpenFoldAdapter", "OpenFoldCLIAdapter", "RFdiffusionAdapter",
     "RFdiffusionCLIAdapter", "ProteinMPNNAdapter",
-    "CanonicalTrainingBatch", "CanonicalTrainer", "TrainingRegime", "gradient_flow_report",
+    "CanonicalTrainingBatch", "CanonicalTrainer", "TrainingRegime", "ObjectiveLabelKind",
+    "gradient_flow_report",
 ]
