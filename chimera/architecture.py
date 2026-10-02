@@ -203,7 +203,7 @@ class CanonicalCHIMERAv2(nn.Module):
             if path is None:
                 continue
             checkpoint_path = Path(path).expanduser().resolve()
-            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
             state = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
             if component_name == "flow_model":
                 state = cls._migrate_flow_state_dict(state, module.state_dict())
@@ -1157,7 +1157,7 @@ class CanonicalCHIMERAv2(nn.Module):
         }, path)
 
     def load_connectors(self, path: str) -> None:
-        state = torch.load(path, map_location="cpu", weights_only=False)
+        state = torch.load(path, map_location="cpu", weights_only=True)
         if not isinstance(state, dict):
             raise TypeError("component-transfer checkpoint must contain a mapping")
         artifact_type = state.get("artifact_type")

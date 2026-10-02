@@ -1060,7 +1060,8 @@ def test_weight_downloaders_are_atomic():
     root = Path(__file__).resolve().parents[1]
     sh = (root / "scripts" / "download_weights.sh").read_text(encoding="utf-8")
     ps1 = (root / "scripts" / "download_weights.ps1").read_text(encoding="utf-8")
-    assert "${out}.part" in sh
-    assert "$Output.part" in ps1
-    assert 'mv -f "$part" "$out"' in sh
-    assert "Move-Item -Force $part $Output" in ps1
+    model_store = (root / "chimera" / "model_store.py").read_text(encoding="utf-8")
+    assert 'chimera models fetch "$asset" --cache-dir "$WEIGHTS_DIR"' in sh
+    assert "& $chimera.Source models fetch $asset --cache-dir $WeightsDir" in ps1
+    assert "tempfile.mkdtemp" in model_store
+    assert "os.rename(staging, directory)" in model_store

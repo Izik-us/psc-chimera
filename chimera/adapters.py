@@ -10,7 +10,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 from typing import Any, Mapping
 
@@ -98,7 +97,7 @@ class OpenFoldCLIAdapter(BackboneEncoder):
                 raise BackendUnavailable(f"OpenFold runner failed with exit code {completed.returncode}: {detail}")
             if not output_path.is_file():
                 raise BackendUnavailable("OpenFold runner did not produce its output file")
-            result = torch.load(output_path, map_location="cpu")
+            result = torch.load(output_path, map_location="cpu", weights_only=True)
 
         if not isinstance(result, Mapping) or "single_repr" not in result or "pair_repr" not in result:
             raise BackendUnavailable("OpenFold runner output must contain single_repr and pair_repr")
@@ -179,13 +178,20 @@ class ProteinMPNNAdapter(SequenceDesigner):
         repo = Path(proteinmpnn_repo) if proteinmpnn_repo else self.checkpoint.parent.parent
         if not (repo / "protein_mpnn_utils.py").is_file():
             raise BackendUnavailable(f"ProteinMPNN source not found under {repo}; provide proteinmpnn_repo")
-        sys.path.insert(0, str(repo))
         try:
             from protein_mpnn_utils import ProteinMPNN
         except ImportError as exc:
-            raise BackendUnavailable("ProteinMPNN dependencies are not installed in the active environment") from exc
+            raise BackendUnavailable(
+                "ProteinMPNN source is not importable in the active Python environment; "
+                "install the pinned upstream implementation instead of mutating sys.path"
+            ) from exc
 
-        payload = torch.load(self.checkpoint, map_location="cpu")
+        try:
+            payload = torch.load(self.checkpoint, map_location="cpu", weights_only=True)
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            raise BackendUnavailable(
+                f"Unable to safely read ProteinMPNN checkpoint {self.checkpoint}: {exc}"
+            ) from exc
         if not isinstance(payload, dict) or "model_state_dict" not in payload:
             raise BackendUnavailable("ProteinMPNN checkpoint is missing the native model_state_dict key")
         self.device = torch.device(device)

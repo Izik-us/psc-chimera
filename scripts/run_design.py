@@ -78,9 +78,6 @@ def main():
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
 
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).parent.parent))
     from chimera import CHIMERAv2
     from chimera.reproducibility import seed_everything
     from chimera.structure_utils import load_backbone_pdb, load_msa
