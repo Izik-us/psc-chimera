@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .domain_schema import NRPSConstraints
 
 class TriangularPairUpdateConnector(nn.Module):
@@ -349,13 +350,13 @@ class NRPSConstraintEncoder(nn.Module):
 
         return c_map
 
-class EvoFormerBackbone(nn.Module):
-    """EvoFormer-inspired MSA encoder approximation with explicit padding masks.
+class MSARepresentationBackbone(nn.Module):
+    """Local MSA approximation with residue-row and cross-sequence attention.
 
-    This is not a native OpenFold/EvoFormer implementation. ``True`` in the
-    optional ``msa_padding_mask`` means the MSA token is padding. Row attention
-    masks keys; masked query outputs are zeroed before valid-row pooling.
-    There is no separate MSA column-attention stack in this approximation.
+    This is not a native OpenFold/EvoFormer implementation. Row attention
+    models residue context within each sequence; column attention exchanges
+    information across aligned sequences at each residue. ``True`` in the
+    optional padding mask means that the MSA token is padding.
     """
 
     def __init__(self, d_single: int = 256, d_pair: int = 128, n_blocks: int = 48):
@@ -365,7 +366,8 @@ class EvoFormerBackbone(nn.Module):
         if d_single % 8:
             raise ValueError("d_single must be divisible by 8 attention heads")
         self.padding_token = 22
-        self.token_embed = nn.Embedding(23, d_single, padding_idx=self.padding_token)
+        self.mask_token = 23
+        self.token_embed = nn.Embedding(24, d_single, padding_idx=self.padding_token)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_single,
             nhead=8,
@@ -374,6 +376,15 @@ class EvoFormerBackbone(nn.Module):
             dropout=0.0,
         )
         self.msa_encoder = nn.TransformerEncoder(encoder_layer, num_layers=8)
+        column_layer = nn.TransformerEncoderLayer(
+            d_model=d_single,
+            nhead=8,
+            dim_feedforward=1024,
+            batch_first=True,
+            dropout=0.0,
+        )
+        self.msa_column_encoder = nn.TransformerEncoder(column_layer, num_layers=1)
+        self.reconstruction_head = nn.Linear(d_single, 22)
         self.pair_init = nn.Linear(d_single * 2, d_pair)
         self.frozen_feature_expander = nn.Sequential(
             nn.Linear(d_single, d_single * 8),
@@ -382,7 +393,72 @@ class EvoFormerBackbone(nn.Module):
             nn.GELU(),
             nn.Linear(d_single * 8, d_single),
         )
-        print("[EvoFormerBackbone] Approximation loaded; OpenFold is not configured.")
+        print("[MSARepresentationBackbone] Local approximation; native OpenFold is not configured.")
+
+    def encode_msa(
+        self,
+        msa_tokens: torch.Tensor,
+        msa_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Encode to ``(B,N,L,D)`` while exchanging information across MSA rows."""
+        if msa_tokens.ndim != 3:
+            raise ValueError("msa_tokens must have shape (B,N_seq,L)")
+        B, N, L = msa_tokens.shape
+        if N < 1 or L < 1:
+            raise ValueError("MSA sequence and residue dimensions must be non-empty")
+        if msa_tokens.min() < 0 or msa_tokens.max() >= self.token_embed.num_embeddings:
+            raise ValueError("msa_tokens contains values outside the 0..23 vocabulary")
+        if msa_padding_mask is None:
+            msa_padding_mask = msa_tokens.eq(self.padding_token)
+        elif msa_padding_mask.shape != msa_tokens.shape or msa_padding_mask.dtype != torch.bool:
+            raise ValueError("msa_padding_mask must be bool with shape (B,N_seq,L); True means padding")
+        elif msa_padding_mask.device != msa_tokens.device:
+            raise ValueError("msa_padding_mask and msa_tokens must be on the same device")
+
+        msa_emb = self.token_embed(msa_tokens).reshape(B * N, L, self.d_single)
+        row_padding = msa_padding_mask.reshape(B * N, L).clone()
+        all_padding_rows = row_padding.all(dim=1)
+        if all_padding_rows.any():
+            row_padding[all_padding_rows, 0] = False
+        encoded = self.msa_encoder(msa_emb, src_key_padding_mask=row_padding)
+        encoded = encoded.reshape(B, N, L, self.d_single)
+        encoded = encoded.masked_fill(msa_padding_mask.unsqueeze(-1), 0.0)
+
+        column_input = encoded.permute(0, 2, 1, 3).reshape(B * L, N, self.d_single)
+        column_padding = msa_padding_mask.permute(0, 2, 1).reshape(B * L, N).clone()
+        all_padding_columns = column_padding.all(dim=1)
+        if all_padding_columns.any():
+            column_padding[all_padding_columns, 0] = False
+        column_encoded = self.msa_column_encoder(
+            column_input,
+            src_key_padding_mask=column_padding,
+        )
+        column_encoded = column_encoded.masked_fill(column_padding.unsqueeze(-1), 0.0)
+        encoded = column_encoded.reshape(B, L, N, self.d_single).permute(0, 2, 1, 3)
+        return encoded.masked_fill(msa_padding_mask.unsqueeze(-1), 0.0)
+
+    def masked_reconstruction_loss(
+        self,
+        msa_tokens: torch.Tensor,
+        msa_padding_mask: Optional[torch.Tensor] = None,
+        mask_probability: float = 0.15,
+        generator: Optional[torch.Generator] = None,
+    ) -> torch.Tensor:
+        """Self-supervised masked-token loss for representation-stage training."""
+        if not 0.0 < mask_probability <= 1.0:
+            raise ValueError("mask_probability must lie in (0, 1]")
+        if msa_padding_mask is None:
+            msa_padding_mask = msa_tokens.eq(self.padding_token)
+        valid = ~msa_padding_mask
+        if not valid.any():
+            raise ValueError("MSA must contain at least one non-padding token")
+        selected = (torch.rand(msa_tokens.shape, device=msa_tokens.device, generator=generator) < mask_probability) & valid
+        if not selected.any():
+            selected.reshape(-1)[torch.nonzero(valid.reshape(-1), as_tuple=False)[0, 0]] = True
+        corrupted = msa_tokens.masked_fill(selected, self.mask_token)
+        encoded = self.encode_msa(corrupted, msa_padding_mask)
+        logits = self.reconstruction_head(encoded)
+        return F.cross_entropy(logits[selected], msa_tokens[selected])
 
     def forward(
         self,
@@ -397,7 +473,7 @@ class EvoFormerBackbone(nn.Module):
             raise ValueError("MSA sequence and residue dimensions must be non-empty")
         if pair_features.shape != (B, L, L, self.d_pair):
             raise ValueError("pair_features must have shape (B,L,L,d_pair)")
-        if msa_tokens.min() < 0 or msa_tokens.max() >= self.token_embed.num_embeddings:
+        if msa_tokens.min() < 0 or msa_tokens.max() >= self.padding_token + 1:
             raise ValueError("msa_tokens contains values outside the 0..22 vocabulary")
         if msa_padding_mask is None:
             msa_padding_mask = msa_tokens.eq(self.padding_token)
@@ -407,17 +483,7 @@ class EvoFormerBackbone(nn.Module):
             raise ValueError("msa_padding_mask and msa_tokens must be on the same device")
 
         residue_valid = (~msa_padding_mask).any(dim=1)
-        tok_emb = self.token_embed(msa_tokens)
-        msa_emb = tok_emb.reshape(B * N, L, self.d_single)
-        row_padding = msa_padding_mask.reshape(B * N, L).clone()
-        all_padding_rows = row_padding.all(dim=1)
-        if all_padding_rows.any():
-            row_padding[all_padding_rows, 0] = False
-        enc = self.msa_encoder(
-            msa_emb,
-            src_key_padding_mask=row_padding,
-        ).reshape(B, N, L, self.d_single)
-        enc = enc.masked_fill(msa_padding_mask.unsqueeze(-1), 0.0)
+        enc = self.encode_msa(msa_tokens, msa_padding_mask)
         valid_counts = (~msa_padding_mask).sum(dim=1).clamp_min(1).to(enc.dtype)
         single = enc.sum(dim=1) / valid_counts.unsqueeze(-1)
         single = self.frozen_feature_expander(single)
@@ -431,6 +497,9 @@ class EvoFormerBackbone(nn.Module):
         pair_valid = residue_valid.unsqueeze(1) & residue_valid.unsqueeze(2)
         pair_repr = (pair_repr + pair_features).masked_fill(~pair_valid.unsqueeze(-1), 0.0)
         return single, pair_repr
+
+
+EvoFormerBackbone = MSARepresentationBackbone
 
 class ProteinMPNNBackbone(nn.Module):
     """

@@ -37,3 +37,32 @@ def test_se3_bridge_sample_rejects_invalid_step_count():
         assert "at least 2" in str(exc)
     else:
         raise AssertionError("n_steps=1 must be rejected")
+
+
+def test_se3_sampler_is_inference_only_and_bridge_loss_remains_trainable():
+    drift = torch.nn.Linear(4, 6)
+
+    class Drift(torch.nn.Module):
+        def __init__(self, layer):
+            super().__init__()
+            self.layer = layer
+
+        def forward(self, R, t, time, pair_cond, evol_single, **kwargs):
+            values = self.layer(evol_single)
+            return values[..., :3], values[..., 3:]
+
+    bridge = SE3SchrodingerBridge(Drift(drift), diffusion=0.01, sinkhorn_iters=2)
+    R0 = torch.eye(3).reshape(1, 1, 3, 3).expand(1, 2, -1, -1).clone().requires_grad_()
+    t0 = torch.zeros(1, 2, 3, requires_grad=True)
+    pair = torch.zeros(1, 2, 2, 4)
+    single = torch.randn(1, 2, 4, requires_grad=True)
+    R1 = so3_exp(torch.randn(1, 2, 3) * 0.1)
+    t1 = torch.randn(1, 2, 3)
+
+    sampled_R, sampled_t = bridge.sample(R0, t0, pair, single, n_steps=2)
+    assert not sampled_R.requires_grad and not sampled_t.requires_grad
+
+    loss = bridge.bridge_loss(R0, t0, R1, t1, pair, single)
+    loss.backward()
+    assert drift.weight.grad is not None
+    assert torch.isfinite(drift.weight.grad).all()

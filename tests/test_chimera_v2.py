@@ -217,6 +217,42 @@ class TestTrainingData:
 
 class TestMultiScaleDesigner:
 
+    def test_edge_taxonomy_preserves_cross_domain_interfaces(self):
+        domain_ids = torch.zeros(1, 64, dtype=torch.long)
+        domain_ids[:, 48:] = 1
+        edge_index = torch.zeros(1, 64, 1, dtype=torch.long)
+        edge_index[0, 0, 0] = 2
+        edge_index[0, 1, 0] = 40
+        edge_index[0, 16, 0] = 48
+
+        edge_types = MultiScaleNRPSDesigner.classify_edge_types(domain_ids, edge_index)
+
+        assert edge_types[0, 0, 0].item() == 0
+        assert edge_types[0, 1, 0].item() == 2
+        assert edge_types[0, 16, 0].item() == 1
+
+    def test_padded_neighbors_do_not_contribute_messages(self):
+        torch.manual_seed(15)
+        model = MultiScaleNRPSDesigner(
+            d_residue=8, d_domain=16, d_module=32, d_assembly=16,
+            n_domains=1, n_modules=1, edge_dim=28,
+        ).eval()
+        residue = torch.randn(1, 4, 8)
+        evolutionary = torch.randn_like(residue)
+        edge_features = torch.randn(1, 4, 2, 28)
+        edge_index_a = torch.tensor([[[1, 0], [0, 0], [1, 0], [2, 0]]])
+        edge_index_b = edge_index_a.clone()
+        edge_index_b[:, :, 1] = 3
+        edge_mask = torch.tensor([[[True, False]] * 4])
+        domains = torch.tensor([[[0, 4]]])
+        modules = torch.tensor([[[0, 4]]])
+        face = torch.zeros(1, dtype=torch.long)
+
+        logits_a = model(residue, evolutionary, edge_features, edge_index_a, domains, modules, face, edge_mask)
+        logits_b = model(residue, evolutionary, edge_features, edge_index_b, domains, modules, face, edge_mask)
+
+        assert torch.allclose(logits_a, logits_b)
+
     def test_output_shape(self):
         B, L = 2, 60
         model = MultiScaleNRPSDesigner(
@@ -358,11 +394,8 @@ class TestCHIMERAv2Integration:
     def test_parameter_counts(self, chimera_model):
         frozen = chimera_model.count_frozen()
         trainable = chimera_model.count_trainable()
-        assert frozen > 0, "Should have frozen pretrained params"
-        assert trainable > 0, "Should have trainable connector params"
-        # Connectors should be much smaller than frozen backbones
-        ratio = trainable / (frozen + trainable)
-        assert ratio < 0.5, f"Trainable params ({ratio:.1%}) should be minority"
+        assert frozen == 0, "Random local modules must not be frozen as pretrained"
+        assert trainable > 0, "Random local modules must remain trainable"
 
     def test_forward_pass_shapes(self, chimera_model, small_constraints):
         B, N_seq, L = 1, 4, 60

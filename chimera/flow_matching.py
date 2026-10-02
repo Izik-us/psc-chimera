@@ -1,40 +1,11 @@
-"""
-CHIMERA v2 — SE(3) Conditional Optimal Transport Flow Matching
-==============================================================
+"""Legacy deterministic SE(3) OT-flow utilities and canonical SB backbone.
 
-Replaces the DDPM-based SE3Denoiser with conditional OT-Flow Matching.
-
-Why this matters for PSC NRPS design:
-  DDPM requires 200 denoising steps at inference — too slow for iterative
-  PROTEUS active learning. OT-Flow Matching requires 10-20 function
-  evaluations with equal or better sample quality.
-
-Core idea (Lipman et al. 2022 / Yim et al. 2023 FrameDiff):
-  Instead of a stochastic SDE, learn a deterministic ODE whose vector field
-  transports probability mass from a source distribution to the target.
-
-  For protein backbone generation:
-    Source p0: Bacterial NRPS frames (not pure noise — this is the BRIDGE variant)
-    Target p1: Real mammalian-functional A-domain structures
-    Interpolation: x_t = (1-t)*x0 + t*x1  (optimal transport = straight paths)
-    Velocity field: v*(x_t, t) = x1 - x0  (constant along path!)
-
-  Training: minimize E[||v_θ(x_t, t) - (x1-x0)||²]
-  Inference: integrate dx/dt = v_θ(x, t) with RK4 (20 steps)
-
-Diffusion Bridge variant:
-  When x0 is a specific bacterial NRPS backbone (not random noise), the flow
-  learns to transform that backbone toward a mammalian-functional design while
-  preserving catalytically essential geometry.
-
-  This is a Schrödinger Bridge: minimum-energy transport between two known
-  distributions with boundary constraints (fixed catalytic residues).
-
-References:
-  Lipman et al. 2022 — Flow Matching for Generative Modeling (ICLR 2023)
-  Yim et al. 2023 — SE(3) Diffusion Model with Application to Protein Backbone Generation
-  Liu et al. 2023 — I²SB: Image-to-Image Schrödinger Bridge (ICML 2023)
-  Bose et al. 2023 — SE(3)-Stochastic Flow Matching for Protein Backbone Generation
+``SE3FlowMatching`` retains deterministic OT interpolation/RK4 utilities for
+compatibility. The public ``CanonicalCHIMERAv2`` structural generator is the
+custom local SE(3) Schrödinger-bridge approximation in
+``chimera.schrodinger_bridge``: supervised bridge regression for training and
+stochastic Euler-Maruyama sampling under ``no_grad`` for inference. Neither
+path is RFdiffusion.
 """
 
 import torch
@@ -429,26 +400,13 @@ class SinusoidalTimeEmbedding(nn.Module):
 
 
 class SE3FlowMatching(nn.Module):
-    """
-    Full SE(3) Conditional OT-Flow Matching Model.
+    """Local SE(3) velocity-field network with legacy deterministic OT helpers.
 
-    Training:
-      1. Sample (R0, t0) from source (bacterial NRPS or random SO(3) × R3)
-      2. Sample (R1, t1) from target (real mammalian-functional structure)
-      3. Sample time t ~ U[0, 1]
-      4. Interpolate: (R_t, t_t) = geodesic_interp((R0,t0), (R1,t1), t)
-      5. Compute target velocity: v* = (R1-R0, t1-t0) in Lie algebra
-      6. Minimize: ||v_θ(R_t, t_t, t) - v*||²
-
-    Inference:
-      1. Start from source distribution (R0, t0)
-      2. Integrate ODE: d(R,t)/dt = v_θ(R, t, time)
-      3. Use 4th-order Runge-Kutta, 20 steps (vs 200 for DDPM)
-
-    Bridge Variant (PSC-specific):
-      Source = specific bacterial NRPS backbone
-      Target = desired mammalian-functional design
-      Constraints = fixed catalytic residue positions (not moved by flow)
+    The canonical model uses ``velocity_field`` for supervised Brownian
+    Schrödinger-bridge drift regression and its separate Euler-Maruyama
+    inference sampler. This class's standalone OT interpolation/RK4 helpers are
+    compatibility utilities; no target structures or mammalian functionality
+    are bundled or implied, and this is not RFdiffusion.
     """
 
     def __init__(

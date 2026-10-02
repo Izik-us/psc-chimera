@@ -19,7 +19,7 @@ from .protein_fitness import ESMProteinFitnessScorer
 from .flow_matching import SE3FlowMatching, FlowMatchingBackbone, InvariantPointAttention
 from .schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 from .geometry import GeometryReport, validate_backbone
-from .evaluators import BiologicalObjectiveEvaluator
+from .evaluators import BiologicalObjectiveEvaluator, ObjectiveOutput
 from .pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from .dpo import DPOBatch, DPOTrainer
 from .bayesian import BayesianUncertaintyEstimator
@@ -28,8 +28,10 @@ from .checkpoint import CheckpointManifest, save_manifest, load_manifest, config
 from .domain_schema import DomainType, DomainSpan, AssemblySchema
 from .multi_objective import StructuralRetriever, MultiScaleNRPSDesigner
 from .conditioning import SubstratePocketConditioner
+from .components import MSARepresentationBackbone
 from .autoregressive_policy import AutoregressiveSequencePolicy
 from .pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
+from .training import CanonicalTrainingBatch, CanonicalTrainer, TrainingRegime, gradient_flow_report
 from .adapters import (
     BackboneEncoder,
     StructureGenerator,
@@ -50,8 +52,9 @@ __all__ = [
     "ESMProteinFitnessScorer", "SE3FlowMatching", "SchrodingerBridge",
     "FlowMatchingBackbone", "InvariantPointAttention", "MultiScaleNRPSDesigner",
     "SubstratePocketConditioner",
+    "MSARepresentationBackbone",
     "SE3SchrodingerBridge", "GeometryReport", "validate_backbone",
-    "BiologicalObjectiveEvaluator", "PCGradOptimizer", "pcgrad_step",
+    "BiologicalObjectiveEvaluator", "ObjectiveOutput", "PCGradOptimizer", "pcgrad_step",
     "project_conflicting_gradients", "DPOBatch", "DPOTrainer",
     "BayesianUncertaintyEstimator", "CheckpointManifest", "save_manifest",
     "load_manifest", "config_hash", "state_schema_hash", "validate_checkpoint_compatibility",
@@ -61,4 +64,5 @@ __all__ = [
     "BackboneEncoder", "StructureGenerator", "SequenceDesigner",
     "OpenFoldAdapter", "OpenFoldCLIAdapter", "RFdiffusionAdapter",
     "RFdiffusionCLIAdapter", "ProteinMPNNAdapter",
+    "CanonicalTrainingBatch", "CanonicalTrainer", "TrainingRegime", "gradient_flow_report",
 ]

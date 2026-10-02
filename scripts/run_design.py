@@ -46,7 +46,15 @@ def parse_args():
         "--no-rag", action="store_true", help="Disable structural retrieval RAG"
     )
     p.add_argument(
+        "--use-rag", action="store_true",
+        help="Request retrieval explicitly; unavailable or unaligned indexes are reported",
+    )
+    p.add_argument(
         "--demo", action="store_true", help="Use synthetic inputs; do not use output as a biological design"
+    )
+    p.add_argument(
+        "--experimental", action="store_true",
+        help="Allow generation with untrained or uncalibrated local components",
     )
     return p.parse_args()
 
@@ -137,7 +145,8 @@ def main():
         n_pareto_samples=args.n_pareto,
         device=str(device),
         flow_steps=args.flow_steps,
-        use_rag=not args.no_rag,
+        use_rag=args.use_rag and not args.no_rag,
+        experimental=args.experimental or args.demo,
     )
 
     output_dir = Path(args.output_dir)
@@ -169,6 +178,11 @@ def main():
         "weights_dir": str(weights_dir),
         "flow_checkpoint": flow_ckpt,
         "mpnn_checkpoint": mpnn_ckpt,
+        "readiness": results["readiness"],
+        "objective_provenance": results["objective_provenance"],
+        "rag_status": results["rag_status"],
+        "ranking_source": results["ranking_source"],
+        "objective_names": results["objective_names"],
     }
     with meta_path.open("w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)

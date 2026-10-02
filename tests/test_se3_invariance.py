@@ -1,8 +1,9 @@
 import torch
 import pytest
 
-from chimera.flow_matching import FlowMatchingBackbone, InvariantPointAttention, so3_exp
+from chimera.flow_matching import FlowMatchingBackbone, InvariantPointAttention, se3_interp, so3_exp, so3_geodesic_interp
 from chimera.lie import relative_rotation, so3_log
+from chimera.schrodinger_bridge import SE3SchrodingerBridge
 
 
 def test_canonical_velocity_field_is_translation_invariant():
@@ -27,6 +28,38 @@ def test_relative_rotation_uses_source_frame():
     R1 = so3_exp(torch.tensor([[-0.4, 0.5, 0.1]]))
     expected = so3_log(R0.transpose(-1, -2) @ R1)
     assert torch.allclose(relative_rotation(R0, R1), expected, atol=1e-6)
+
+
+def test_relative_rotation_identity_inverse_and_composition():
+    R0 = so3_exp(torch.tensor([[0.3, -0.2, 0.1]]))
+    delta = torch.tensor([[-0.1, 0.25, 0.2]])
+    R1 = R0 @ so3_exp(delta)
+
+    assert torch.allclose(relative_rotation(R0, R0), torch.zeros_like(delta), atol=1e-6)
+    assert torch.allclose(relative_rotation(R0, R1), delta, atol=1e-5)
+    assert torch.allclose(relative_rotation(R1, R0), -delta, atol=1e-5)
+    assert torch.allclose(R0 @ so3_exp(relative_rotation(R0, R1)), R1, atol=1e-5)
+
+
+def test_geodesic_and_se3_interpolation_endpoints():
+    R0 = so3_exp(torch.tensor([[0.2, -0.1, 0.0]]))
+    R1 = so3_exp(torch.tensor([[-0.3, 0.15, 0.4]]))
+    t0 = torch.tensor([[1.0, 2.0, 3.0]])
+    t1 = torch.tensor([[-1.0, 0.5, 4.0]])
+
+    assert torch.allclose(so3_geodesic_interp(R0, R1, 0.0), R0, atol=1e-6)
+    assert torch.allclose(so3_geodesic_interp(R0, R1, 1.0), R1, atol=1e-6)
+    R_start, t_start = se3_interp(R0, t0, R1, t1, 0.0)
+    R_end, t_end = se3_interp(R0, t0, R1, t1, 1.0)
+    assert torch.allclose(R_start, R0, atol=1e-6) and torch.equal(t_start, t0)
+    assert torch.allclose(R_end, R1, atol=1e-6) and torch.equal(t_end, t1)
+
+
+def test_sb_bridge_target_uses_canonical_source_relative_rotation():
+    R0 = so3_exp(torch.tensor([[[0.2, 0.1, -0.1]]]))
+    R1 = so3_exp(torch.tensor([[[-0.1, 0.25, 0.3]]]))
+    expected = relative_rotation(R0, R1)
+    assert torch.allclose(SE3SchrodingerBridge._relative_rotation(R0, R1), expected)
 
 
 def test_ipa_rejects_nondivisible_explicit_head_count():

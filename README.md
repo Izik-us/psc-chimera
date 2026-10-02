@@ -4,7 +4,7 @@
 
 Stage 1 computational design prototype for the theoretical Pharmacosynthetic Constructor (PSC) engineering pipeline.
 
-> **Research-status notice:** CHIMERA is a research prototype. The local EvoFormer, RFdiffusion/SE(3), and ProteinMPNN components are explicitly **approximations**, not drop-in replacements for OpenFold, RFdiffusion, or dauparas/ProteinMPNN. Native upstream checkpoints are not loaded into structurally incompatible local classes. Proxy objectives are not experimentally calibrated and must not be interpreted as biological validation.
+> **Research-status notice:** CHIMERA is an untrained research prototype by default. Its local MSA row/column attention model is an approximation, not native EvoFormer/OpenFold; its structural generator is a custom local SE(3) Schrödinger-bridge model, not RFdiffusion; and its sequence-recovery module is ProteinMPNN-inspired, not native ProteinMPNN. Random modules remain trainable and production inference fails closed until required components are trained, validated, and objective predictors calibrated. Proxy values are not biological measurements.
 
 ---
 
@@ -17,12 +17,13 @@ Animal / target-family MSA
         │
         ▼
 Evolutionary representation
-(local EvoFormer approximation or future native OpenFold adapter)
+(local MSA row/column-attention approximation; not native EvoFormer/OpenFold)
         │
         ├──────────────► pair representation
         │
         ▼
-Triangular pair connector + substrate conditioning + structural retrieval
+Triangular pair connector + substrate conditioning
+(retrieval is opt-in and currently reports RAG_UNAVAILABLE without aligned embeddings)
         │
         ▼
 SE(3) Schrödinger-bridge backbone transport
@@ -39,7 +40,7 @@ Hierarchical geometric sequence designer
         └─ assembly scale: symmetry/interface representation
         │
         ▼
-Five-objective prediction / evaluation
+Five explicitly sourced objective channels
         │
         ├─ evolutionary plausibility
         ├─ structural validity/stability proxy
@@ -48,7 +49,7 @@ Five-objective prediction / evaluation
         └─ assembly compatibility proxy
         │
         ▼
-Pareto non-dominated filtering
+Calibrated surrogate Pareto filtering, or explicitly named deterministic proxies
         │
         ▼
 Bayesian uncertainty + Gaussian Expected Improvement
@@ -209,32 +210,32 @@ constraints = NRPSConstraints(
 )
 ```
 
-A real design run requires compatible MSA, pair features, source backbone frames, and any substrate geometry required by the selected conditioning path. The CLI refuses missing biological inputs unless demo mode is explicitly requested.
+A real design run requires compatible MSA, pair features, source backbone frames, and any substrate geometry required by the selected conditioning path. Canonical modules begin uninitialized; the CLI refuses production inference unless readiness is verified. `--experimental` (or synthetic `--demo`) permits explicit proxy-ranked exploratory output and records readiness, objective provenance, and retrieval status.
 
 ---
 
 ## Training
 
-The intended optimization stages are:
+`CanonicalTrainer` owns one explicit regime at a time. It chooses the active loss and trainable module set; it does not sum unrelated flow, sequence, objective, and preference losses.
 
-```text
-1. Supervised training of trainable connectors/heads
-2. Multi-objective gradient surgery with canonical PCGrad
-3. External experimental evaluation
-4. Frozen-reference DPO update from preference pairs
-5. Bayesian uncertainty estimation
-6. EI acquisition of the next experimental batch
-7. Repeat
-```
+| Regime | Supervision | Trainable components | Active loss |
+|---|---|---|---|
+| `representation` | MSA tokens | MSA row/column encoder and masked-token head | Masked-token cross entropy |
+| `flow` | Source/target SE(3) frames | MSA encoder, pair connector, flow backbone, evolutionary cross-attention; supplied substrate/constraint encoders | Brownian Schrödinger-bridge drift regression |
+| `sequence` | Ground-truth structure and amino-acid sequence | MSA encoder, node connector, local sequence-recovery trunk, multiscale designer, projection, autoregressive policy | Teacher-forced causal token cross entropy |
+| `constraint` | Source/target frames plus explicit NRPS constraints | Flow-regime modules and constraint encoder | Constrained bridge drift regression |
+| `objective` | Named labels with per-objective source metadata | Sequence projection and five-objective head | Per-task supervised losses with PCGrad |
+| `preference` | Chosen/rejected sequences and conditioning context | Autoregressive sequence policy only | DPO against a frozen reference |
 
-The canonical low-level APIs are intentionally separate so each stage can be tested independently:
+Flow training uses the supervised bridge loss; the inference sampler is stochastic Euler-Maruyama under `no_grad`. The sampler is not used as a differentiable training shortcut. Preference optimization is rejected until the sequence policy has supervised training and a separate held-out validation manifest. Objective heads remain uncalibrated unless explicit evidence is added; MC dropout does not make random predictions meaningful. Calibration requires at least 30 independent examples, a distinct calibration manifest, and empirical one-sigma coverage between 0.58 and 0.78; the recorded RMSE, MAE, and coverage remain visible in provenance.
 
 ```python
-from chimera import (
-    BayesianUncertaintyEstimator,
-    DPOBatch,
-    DPOTrainer,
-    SchrodingerBridge,
-    pcgrad_step,
-)
+from chimera import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime
+
+trainer = CanonicalTrainer(model, TrainingRegime.FLOW, dataset_manifest="train-v1")
+step = trainer.train_step(batch)
+gradient_matrix = step["gradient_flow"]
+trainer.save_checkpoint("flow-stage.pt")
 ```
+
+`gradient_flow_report(model)` reports every parameter's `requires_grad`, gradient presence, norm, and finite status. `trainer.resume(path)` restores the full model, optimizer, optional scheduler, regime, component status, and manifest under strict schema/config/dataset checks. Held-out validation marks components validated; a mere optimizer step does not. `model.inference_readiness()` explains what is still missing, and `model.design(..., experimental=True)` uses clearly named deterministic proxies until validated, calibrated surrogate objectives are available.

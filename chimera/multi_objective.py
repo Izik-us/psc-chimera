@@ -1,35 +1,11 @@
-"""
-CHIMERA v2 — Multi-Objective Optimization Suite
-================================================
+"""Legacy multi-objective components and reusable geometry/design modules.
 
-Four independent advances packed into one module:
-
-1. STRUCTURAL RETRIEVAL-AUGMENTED GENERATION (RAG)
-   FAISS index of all PDB A-domain structures.
-   At inference, retrieve K most similar known structures and condition
-   generation on them. Gives CHIMERA concrete structural analogs to work from.
-
-2. DIRECT PREFERENCE OPTIMIZATION (DPO) FROM PROTEUS
-   PROTEUS gives us (surviving_seq, failed_seq) pairs.
-   DPO trains the generation model directly on this preference signal
-   without needing a separate reward model.
-   DPO loss: -log σ(β·(log π_θ(yw)/π_ref(yw) - log π_θ(yl)/π_ref(yl)))
-
-3. PARETO-FRONT MULTI-OBJECTIVE OPTIMIZATION
-   Replaces scalar weighted-sum loss with true Pareto front exploration.
-   Five objectives:
-     F1: Evolutionary plausibility (PoET log-probability)
-     F2: Structural stability (predicted pLDDT)
-     F3: Mammalian expression efficiency (CodonOptimizer critic score)
-     F4: Substrate selectivity (Stachelhaus code distance)
-     F5: Assembly interface compatibility (icosahedral face score)
-   Returns entire Pareto frontier — user picks tradeoff point.
-
-4. BAYESIAN UNCERTAINTY + ACTIVE LEARNING ACQUISITION
-   MC Dropout ensemble quantifies epistemic uncertainty per generated sequence.
-   Acquisition function: Expected Improvement = uncertainty × predicted_quality
-   Selects which sequences to send to PROTEUS that maximize information gain.
-   This is why CHIMERA can converge in 16-25 PROTEUS rounds instead of 50+.
+The historical module description overstated PoET, pLDDT, expression, and RAG
+integration. The canonical Pareto head is a randomly initialized neural
+surrogate until explicitly supervised, held-out validated, and calibrated.
+``StructuralRetriever`` is unavailable unless query/index spaces are aligned.
+The multiscale designer and proxy-independent utilities remain used by the
+canonical composition; legacy trainers/heads are not canonical.
 """
 
 import torch
@@ -216,30 +192,12 @@ class StructuralRetriever(nn.Module):
         Enrich current design representation with retrieved structural analogs.
         Returns: (B, L, d_context) enriched representation
         """
-        B = substrate_tokens.shape[0]
-
-        # Encode substrate query
-        query_emb = self.encode_query(substrate_tokens)
-
-        # Retrieve similar structures
-        _, pocket_coords = self.retrieve(query_emb)
-        if pocket_coords is None:
-            return current_design_repr
-
-        # Encode retrieved pocket contexts
-        K = pocket_coords.shape[1]
-        coords_flat = pocket_coords.reshape(B * K, -1)  # (B*K, 30)
-        ctx = self.context_encoder(coords_flat.float()).reshape(
-            B, K, -1
-        )  # (B, K, d_ctx)
-
-        # Cross-attend: current design queries retrieved structural contexts
-        enriched, _ = self.retrieval_cross_attn(
-            query=current_design_repr,  # (B, L, d_ctx)
-            key=ctx,  # (B, K, d_ctx)
-            value=ctx,
+        del current_design_repr, substrate_tokens
+        if self.index_embs is None or self.index_embs.shape[0] == 0:
+            raise RuntimeError("RAG_UNAVAILABLE: structural retrieval index is not configured")
+        raise RuntimeError(
+            "RAG_UNAVAILABLE: substrate query encoder is not trained into the supplied index embedding space"
         )
-        return self.retrieval_norm(current_design_repr + enriched)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -512,13 +470,13 @@ class LegacyAutoregressiveSequencePolicy(nn.Module):
 
 @dataclass
 class ParetoObjectives:
-    """Five objectives for PSC NRPS sequence design."""
+    """Five named neural-surrogate channels; not biological measurements by default."""
 
-    evolutionary_plausibility: torch.Tensor  # PoET log-prob (higher = better)
-    structural_stability: torch.Tensor  # predicted pLDDT (0-100)
-    expression_efficiency: torch.Tensor  # CodonOptimizer critic (0-1)
-    substrate_selectivity: torch.Tensor  # Stachelhaus code match (0-1)
-    assembly_compatibility: torch.Tensor  # icosahedral face score (0-1)
+    evolutionary_plausibility: torch.Tensor
+    structural_stability: torch.Tensor
+    expression_efficiency: torch.Tensor
+    substrate_selectivity: torch.Tensor
+    assembly_compatibility: torch.Tensor
 
 
 AutoregressiveSequencePolicy = LegacyAutoregressiveSequencePolicy
@@ -1115,6 +1073,7 @@ class MultiScaleNRPSDesigner(nn.Module):
         if edge_dim <= 0:
             raise ValueError("edge_dim must be positive")
         self.edge_proj = nn.Linear(edge_dim, d_residue)  # geometric edge features
+        self.edge_type_embedding = nn.Embedding(3, d_residue)
         self.domain_gate = nn.Parameter(torch.tensor(0.0))
         self.module_gate = nn.Parameter(torch.tensor(0.0))
         self.assembly_gate = nn.Parameter(torch.tensor(0.0))
@@ -1177,11 +1136,29 @@ class MultiScaleNRPSDesigner(nn.Module):
         domain_boundaries: torch.Tensor,  # (B, n_domains, 2) [start, end] per domain
         module_boundaries: torch.Tensor,  # (B, n_modules, 2) [start, end] per module
         icosahedral_face: torch.Tensor,  # (B,) which face (0-19) is this module on
+        edge_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:  # (B, L, 20) amino acid logits
         B, L, _ = residue_feats.shape
+        if edge_index.ndim != 3 or edge_index.shape[:2] != (B, L):
+            raise ValueError("edge_index must have shape (B,L,K)")
+        if edge_feats.shape[:3] != edge_index.shape:
+            raise ValueError("edge_feats dimensions must match edge_index")
+        if torch.any((edge_index < 0) | (edge_index >= L)):
+            raise ValueError("edge_index contains residue indices outside the sequence")
+        if edge_mask is None:
+            edge_mask = torch.ones_like(edge_index, dtype=torch.bool)
+        elif edge_mask.shape != edge_index.shape or edge_mask.dtype != torch.bool:
+            raise ValueError("edge_mask must be bool with shape (B,L,K)")
 
         # ── Scale 1: Residue message passing ─────────────────────────────────
         s = residue_feats + evol_node_feats  # fuse evolutionary context
+        domain_ids = torch.full((B, L), -1, dtype=torch.long, device=s.device)
+        for domain_idx in range(self.n_domains):
+            starts = domain_boundaries[:, domain_idx, 0].clamp(0, L)
+            ends = domain_boundaries[:, domain_idx, 1].clamp(0, L)
+            for batch_idx in range(B):
+                domain_ids[batch_idx, starts[batch_idx]:ends[batch_idx]] = domain_idx
+        edge_types = self.classify_edge_types(domain_ids, edge_index)
 
         for mpnn_layer in self.residue_mpnn:
             # Aggregate neighbor messages
@@ -1190,18 +1167,10 @@ class MultiScaleNRPSDesigner(nn.Module):
             neighbor_feats = (
                 s.unsqueeze(1).expand(-1, L, -1, -1).gather(2, neighbors)
             )  # (B, L, K, d_residue)
-            edge_emb = self.edge_proj(edge_feats)
-            domain_ids = torch.zeros(B, L, dtype=torch.long, device=s.device)
-            for domain_idx in range(self.n_domains):
-                starts = domain_boundaries[:, domain_idx, 0].clamp(0, L)
-                ends = domain_boundaries[:, domain_idx, 1].clamp(0, L)
-                for batch_idx in range(B):
-                    domain_ids[batch_idx, starts[batch_idx]:ends[batch_idx]] = domain_idx
-            neighbor_domain_ids = domain_ids.unsqueeze(2).expand(-1, -1, edge_index.shape[-1])
-            indexed_domain_ids = domain_ids.unsqueeze(1).expand(-1, L, -1).gather(2, edge_index)
-            local_mask = (neighbor_domain_ids == indexed_domain_ids).unsqueeze(-1)
-            neighbor_messages = (neighbor_feats + edge_emb) * local_mask
-            neighbor_feats_flat = neighbor_messages.sum(dim=2) / local_mask.sum(dim=2).clamp_min(1)
+            edge_emb = self.edge_proj(edge_feats) + self.edge_type_embedding(edge_types)
+            valid_edges = edge_mask.unsqueeze(-1).to(neighbor_feats.dtype)
+            neighbor_messages = (neighbor_feats + edge_emb) * valid_edges
+            neighbor_feats_flat = neighbor_messages.sum(dim=2) / valid_edges.sum(dim=2).clamp_min(1)
             combined = torch.cat([s, neighbor_feats_flat], dim=-1)
             s = s + mpnn_layer(combined)
 
@@ -1285,3 +1254,17 @@ class MultiScaleNRPSDesigner(nn.Module):
 
         # ── Final sequence prediction ─────────────────────────────────────────
         return self.sequence_head(s)  # (B, L, 20)
+
+    @staticmethod
+    def classify_edge_types(domain_ids: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        """Classify edges: 0 intra-domain local, 1 inter-domain interface, 2 intra-domain long-range."""
+        if domain_ids.ndim != 2 or edge_index.ndim != 3 or edge_index.shape[:2] != domain_ids.shape:
+            raise ValueError("domain_ids and edge_index must have shapes (B,L) and (B,L,K)")
+        batch_size, length = domain_ids.shape
+        neighbor_domains = domain_ids.unsqueeze(1).expand(-1, length, -1).gather(2, edge_index)
+        query_domains = domain_ids.unsqueeze(-1)
+        inter_domain = (query_domains != neighbor_domains) & (query_domains >= 0) & (neighbor_domains >= 0)
+        positions = torch.arange(length, device=edge_index.device).view(1, length, 1)
+        sequence_separation = (positions - edge_index).abs()
+        long_range = (~inter_domain) & (sequence_separation >= 32)
+        return torch.where(inter_domain, 1, torch.where(long_range, 2, 0))

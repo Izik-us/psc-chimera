@@ -115,3 +115,20 @@ def test_structural_retriever_rejects_nonpositive_k():
 
     with pytest.raises(ValueError, match="n_retrieve must be positive"):
         StructuralRetriever(d_embed=4, d_context=8, n_retrieve=0)
+
+
+def test_structural_retriever_forward_fails_closed_without_index_alignment():
+    import pytest
+
+    retriever = StructuralRetriever(d_embed=4, d_context=8, n_retrieve=1)
+    design = torch.zeros(1, 3, 8)
+    substrate = torch.zeros(1, 1, dtype=torch.long)
+    with pytest.raises(RuntimeError, match="RAG_UNAVAILABLE: structural retrieval index"):
+        retriever(design, substrate)
+
+    retriever.build_index(
+        torch.zeros(1, 4).numpy(),
+        [{"pocket_coords": torch.zeros(10, 3).tolist()}],
+    )
+    with pytest.raises(RuntimeError, match="query encoder is not trained"):
+        retriever(design, substrate)
