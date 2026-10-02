@@ -11,6 +11,8 @@ import platform
 from pathlib import Path
 import subprocess
 
+from ._version import __version__
+
 
 @dataclass(frozen=True)
 class CheckpointManifest:
@@ -18,7 +20,7 @@ class CheckpointManifest:
 
     format_version: int = 4
     serialization_revision: int = 1
-    chimera_version: str = "2.0.0"
+    chimera_version: str = __version__
     transport: str = "se3_schrodinger_bridge"
     sequence_policy: str = "autoregressive"
     geometry_edge_dim: int = 28

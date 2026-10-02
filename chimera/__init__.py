@@ -8,6 +8,22 @@ CHIMERA: Compositional Hierarchical Inference Model for
 """
 
 __version__ = "2.0.0"
+from ._version import __version__
+from .configuration import InferenceConfig, CONFIGURATION_SCHEMA_VERSION
+from .errors import (
+    ArtifactError,
+    CheckpointCompatibilityError,
+    ChimeraError,
+    ConfigurationError,
+    InferenceError,
+    InputValidationError,
+    IntegrityError,
+    ProvenanceError,
+    ResourceError,
+    UnsupportedRuntimeError,
+)
+from .production_gate import run_production_gate
+
 __author__ = "PSC Engineering Pipeline"
 
 # The package boundary is intentionally side-effect free. Importing chimera
@@ -87,4 +103,8 @@ __all__ = [
     "gradient_flow_report",
     "OBJECTIVE_SCHEMA", "OBJECTIVE_SCHEMA_VERSION", "objective_schema_hash",
     "validate_objective_target", "PreProductionGateEvidence", "preproduction_readiness_report",
+    "__version__", "InferenceConfig", "CONFIGURATION_SCHEMA_VERSION",
+    "ChimeraError", "ConfigurationError", "ArtifactError", "CheckpointCompatibilityError",
+    "InputValidationError", "UnsupportedRuntimeError", "ResourceError", "InferenceError",
+    "ProvenanceError", "IntegrityError", "run_production_gate",
 ]

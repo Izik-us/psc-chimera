@@ -1314,6 +1314,7 @@ class CodonOptimizer(nn.Module):
         checkpoint = torch.load(
             path,
             map_location=map_location,
+            weights_only=True,
         )
 
         if isinstance(checkpoint, dict):

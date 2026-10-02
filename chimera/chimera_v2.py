@@ -224,7 +224,7 @@ class CHIMERAv2(nn.Module):
         model = cls(**kwargs)
 
         def load_checkpoint(module, path, name):
-            checkpoint = torch.load(path, map_location="cpu")
+            checkpoint = torch.load(path, map_location="cpu", weights_only=True)
             state_dict = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
             try:
                 module.load_state_dict(state_dict, strict=True)
@@ -844,7 +844,7 @@ class CHIMERAv2(nn.Module):
 
     def load_connectors(self, path: str):
         """Load previously saved connector weights."""
-        state = torch.load(path, map_location="cpu")
+        state = torch.load(path, map_location="cpu", weights_only=True)
         for name, sd in state.items():
             module_name = "_seq_to_repr" if name == "seq_to_repr" else name
             getattr(self, module_name).load_state_dict(sd)

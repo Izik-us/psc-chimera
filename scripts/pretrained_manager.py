@@ -1,115 +1,88 @@
-"""Unified pretrained-model asset manager for PSC-CHIMERA."""
+"""Compatibility CLI for the identity-addressed CHIMERA model store.
+
+New installations should prefer ``chimera models``.  This script remains for
+users of the earlier ``--asset`` interface, but never downloads assets unless
+an asset is named explicitly.
+"""
+
 from __future__ import annotations
 
-import os
-import tempfile
-import urllib.request
-from dataclasses import dataclass
+import argparse
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
-
-@dataclass(frozen=True)
-class Asset:
-    name: str
-    filename: str
-    url: Optional[str]
-    license_note: str = ""
-
-
-PUBLIC_ASSETS = {
-    "esm2_t30_150m": Asset(
-        "esm2_t30_150M_UR50D",
-        "esm2_t30_150M_UR50D.pt",
-        "https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t30_150M_UR50D.pt",
-        "Meta FAIR ESM checkpoint; verify upstream terms before redistribution.",
-    ),
-    "esmfold_v1": Asset(
-        "esmfold_v1",
-        "esmfold_3B_v1.pt",
-        "https://dl.fbaipublicfiles.com/fair-esm/models/esmfold_3B_v1.pt",
-        "ESMFold public checkpoint; verify upstream terms.",
-    ),
-    "proteinmpnn_v48_020": Asset(
-        "ProteinMPNN v_48_020",
-        "proteinmpnn_v48_020.pt",
-        "https://github.com/dauparas/ProteinMPNN/raw/main/vanilla_model_weights/v_48_020.pt",
-        "Native ProteinMPNN checkpoint; requires the compatible upstream implementation.",
-    ),
-    "rfdiffusion_base": Asset(
-        "RFdiffusion Base_ckpt",
-        "rfdiffusion_base.pt",
-        "https://files.ipd.uw.edu/pub/RFdiffusion/6f5902ac237024bdd0c176cb93063dc6/Base_ckpt.pt",
-        "Native RFdiffusion checkpoint; requires the compatible upstream implementation.",
-    ),
-}
-
-
-def cache_root(root: Optional[os.PathLike[str] | str] = None) -> Path:
-    default = Path.home() / ".cache" / "psc-chimera" / "models"
-    return Path(root or os.environ.get("PSC_CHIMERA_MODEL_CACHE", default))
-
-
-def ensure_asset(key: str, root=None, *, force: bool = False) -> Path:
-    if key not in PUBLIC_ASSETS:
-        raise KeyError(f"Unknown public asset: {key}")
-    asset = PUBLIC_ASSETS[key]
-    destination = cache_root(root) / asset.filename
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.is_file() and destination.stat().st_size > 0 and not force:
-        return destination
-
-    fd, temp_name = tempfile.mkstemp(prefix=asset.filename + ".", suffix=".part", dir=destination.parent)
-    os.close(fd)
-    temporary = Path(temp_name)
-    try:
-        urllib.request.urlretrieve(asset.url, temporary)
-        if temporary.stat().st_size == 0:
-            raise RuntimeError(f"Empty download for {asset.name}")
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return destination
+from chimera.model_store import (
+    PUBLIC_ASSETS,
+    cache_root,
+    ensure_asset,
+    inspect_asset,
+    list_assets,
+    load_esm2,
+    verify_asset,
+)
 
 
 def ensure_public_assets(root=None) -> dict[str, Path]:
     return {key: ensure_asset(key, root) for key in PUBLIC_ASSETS}
 
 
-def load_esm2(root=None, checkpoint: Optional[os.PathLike[str] | str] = None):
-    """Ensure and load the CodonOptimizer's ESM-2 150M checkpoint.
+def _print(value: Any) -> None:
+    print(json.dumps(value, indent=2, sort_keys=True))
 
-    Returns the standard ``(model, alphabet)`` pair from fair-esm.  The
-    checkpoint is loaded explicitly from the managed cache, so no unrelated
-    ESM variant can be selected by filename convention.
-    """
-    path = Path(checkpoint) if checkpoint is not None else ensure_asset("esm2_t30_150m", root)
-    if not path.is_file() or path.stat().st_size == 0:
-        raise FileNotFoundError(f"ESM-2 checkpoint is missing or empty: {path}")
-    try:
-        import esm
-    except ImportError as exc:
-        raise RuntimeError("fair-esm is required to load ESM-2; install requirements.txt") from exc
-    model, alphabet = esm.pretrained.load_model_and_alphabet_local(str(path))
-    model.eval()
-    for parameter in model.parameters():
-        parameter.requires_grad_(False)
-    return model, alphabet, path
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="PSC-CHIMERA upstream model asset manager")
+    parser.add_argument("--root", default=None, help="model cache root (or CHIMERA_MODEL_CACHE)")
+    parser.add_argument("--asset", choices=[*PUBLIC_ASSETS, "all"], default=None)
+    parser.add_argument("--fetch", action="store_true", help="explicitly acquire the named asset")
+    parser.add_argument("--verify", action="store_true", help="verify cached integrity without network")
+    parser.add_argument("--inspect", action="store_true", help="inspect the declared asset and local state")
+    parser.add_argument("--offline", action="store_true", help="verify local cached assets only")
+    parser.add_argument("--load-esm", action="store_true", help="load an already-cached, verified ESM-2 checkpoint")
+    parser.add_argument("--force", action="store_true", help="deprecated; immutable asset identities cannot be overwritten")
+    args = parser.parse_args(argv)
+    if args.force:
+        parser.error("--force is not supported: immutable artifact identities cannot be overwritten")
+    if sum((args.fetch, args.verify, args.inspect, args.load_esm)) > 1:
+        parser.error("choose only one of --fetch, --verify, --inspect, or --load-esm")
+    if args.load_esm:
+        model, _, path = load_esm2(args.root)
+        _print({"status": "LOADED", "artifact_id": PUBLIC_ASSETS["esm2_t30_150m"].artifact_id, "path": str(path), "device": str(next(model.parameters()).device)})
+        return 0
+    if args.offline and not args.verify:
+        parser.error("--offline may only be used with --verify")
+    if args.verify and (args.asset is None or args.asset == "all"):
+        results = [verify_asset(key, args.root) for key in PUBLIC_ASSETS]
+        _print({"offline": True, "results": results})
+        return 0 if all(result["state"] == "INTEGRITY_VERIFIED" for result in results) else 1
+    if args.asset == "all" and args.fetch:
+        results = []
+        for key in PUBLIC_ASSETS:
+            path = ensure_asset(key, args.root)
+            results.append({"asset": key, "path": str(path)})
+        _print(results)
+        return 0
+    if args.asset is None or args.asset == "all":
+        _print(list_assets(args.root))
+        return 0
+    if args.fetch:
+        _print({"path": str(ensure_asset(args.asset, args.root)), "verification": verify_asset(args.asset, args.root)})
+        return 0
+    if args.verify:
+        result = verify_asset(args.asset, args.root)
+        _print(result)
+        return 0 if result["state"] == "INTEGRITY_VERIFIED" else 1
+    if args.inspect:
+        _print(inspect_asset(args.asset, args.root))
+        return 0
+    # Preserve the old explicit ``--asset NAME`` acquisition behavior.
+    if args.asset is not None:
+        _print({"path": str(ensure_asset(args.asset, args.root)), "verification": verify_asset(args.asset, args.root)})
+        return 0
+    _print({"cache_root": str(cache_root(args.root)), "assets": list_assets(args.root)})
+    return 0
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="PSC-CHIMERA pretrained asset manager")
-    parser.add_argument("--root", default=None)
-    parser.add_argument("--asset", choices=[*PUBLIC_ASSETS, "all"], default="all")
-    parser.add_argument("--force", action="store_true")
-    parser.add_argument("--load-esm", action="store_true")
-    args = parser.parse_args()
-    if args.load_esm:
-        _, _, path = load_esm2(args.root)
-        print(f"esm2_t30_150m loaded: {path}")
-    elif args.asset == "all":
-        for key, path in ensure_public_assets(args.root).items():
-            print(f"{key}: {path}")
-    else:
-        print(ensure_asset(args.asset, args.root, force=args.force))
+    raise SystemExit(main())

@@ -386,7 +386,7 @@ class CHIMERA(nn.Module):
         model = cls(**kwargs)
 
         if evoformer_checkpoint:
-            state = torch.load(evoformer_checkpoint, map_location="cpu")
+            state = torch.load(evoformer_checkpoint, map_location="cpu", weights_only=True)
             # Filter to EvoFormer-relevant keys
             evof_state = {
                 k.replace("evoformer.", ""): v
@@ -397,12 +397,12 @@ class CHIMERA(nn.Module):
             print(f"Loaded schema-compatible local MSA state from {evoformer_checkpoint}; training status is unverified")
 
         if se3_checkpoint:
-            state = torch.load(se3_checkpoint, map_location="cpu")
+            state = torch.load(se3_checkpoint, map_location="cpu", weights_only=True)
             model.se3denoiser.load_state_dict(state, strict=True)
             print(f"Loaded schema-compatible local SE(3) state from {se3_checkpoint}; training status is unverified")
 
         if mpnn_checkpoint:
-            state = torch.load(mpnn_checkpoint, map_location="cpu")
+            state = torch.load(mpnn_checkpoint, map_location="cpu", weights_only=True)
             model.mpnn.load_state_dict(state, strict=True)
             print(f"Loaded schema-compatible local sequence state from {mpnn_checkpoint}; training status is unverified")
 

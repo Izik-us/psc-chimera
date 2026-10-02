@@ -76,10 +76,10 @@ def load_strict_state(module: torch.nn.Module, checkpoint: str | Path, name: str
 
     try:
         payload = torch.load(path, map_location="cpu", weights_only=True)
-    except TypeError:  # PyTorch versions without weights_only
-        payload = torch.load(path, map_location="cpu")
-    except Exception as exc:
-        raise BackendUnavailable(f"Unable to read {name} checkpoint: {path}") from exc
+    except (OSError, RuntimeError, ValueError, TypeError) as exc:
+        raise BackendUnavailable(
+            f"Unable to safely read {name} checkpoint {path}: {exc}"
+        ) from exc
 
     state = _unwrap_state_dict(payload, name)
     try:

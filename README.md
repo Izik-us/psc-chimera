@@ -267,4 +267,18 @@ Research Prototype
         -> Biological Validation
 ```
 
-`preproduction_readiness_report(PreProductionGateEvidence(...))` is a separate engineering gate; it does not alter `inference_readiness()`. `PASS` means the listed software contracts were evidenced. The report always distinguishes that from `NOT SCIENTIFICALLY VALIDATED`. Packaging, serving, artifact registry, deployment, performance, observability, and operational hardening belong to the next production-engineering stage. Biological activity, stability, selectivity, expression, and assembly remain unvalidated absent independent experimental evidence.
+`preproduction_readiness_report(PreProductionGateEvidence(...))` is a legacy evidence summary; it does not alter `inference_readiness()`. It may summarize caller-provided booleans and is not the production release gate. The report distinguishes engineering status from `NOT SCIENTIFICALLY VALIDATED`. Biological activity, stability, selectivity, expression, and assembly remain unvalidated absent independent experimental evidence.
+
+## Production engineering entry points
+
+Install with `pip install .` (or `pip install -e .` for editable development).
+The installed CLI exposes `chimera --version`, identity-addressed model
+commands (`chimera models list|fetch|inspect|verify`), and the self-executing
+`chimera production-gate`. See
+[`docs/PRODUCTION_ENGINEERING.md`](docs/PRODUCTION_ENGINEERING.md) for current
+contracts and explicit gaps.
+
+The local MSA/EvoFormer-like module, ProteinMPNN-inspired model, and custom
+SE(3) bridge remain distinct from upstream ESM/OpenFold, ProteinMPNN, and
+RFdiffusion. Model acquisition alone does not establish adapter compatibility,
+scientific validation, or biological validation.
