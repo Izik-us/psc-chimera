@@ -129,8 +129,13 @@ def test_sb_euler_maruyama_noise_variance_scales_with_diffusion_time():
 def test_canonical_pareto_head_performs_gradient_surgery():
     torch.manual_seed(12)
     head = MergeReadyParetoMultiObjectiveHead(d_model=8)
-    repr = torch.randn(2, 3, 8, requires_grad=True)
-    objectives = head(repr)
+    features = {
+        "sequence": torch.randn(2, 8, requires_grad=True),
+        "evolutionary": torch.randn(2, 8, requires_grad=True),
+        "structural": torch.randn(2, 8, requires_grad=True),
+        "substrate": torch.randn(2, 8, requires_grad=True),
+    }
+    objectives = head(features)
     labels = {
         "evol": torch.ones(2),
         "stab": torch.zeros(2),
@@ -142,7 +147,8 @@ def test_canonical_pareto_head_performs_gradient_surgery():
     total.backward()
     assert torch.isfinite(total)
     assert metrics["pcgrad_task_count"] == 5
-    assert repr.grad is not None and torch.isfinite(repr.grad).all()
+    for feature in features.values():
+        assert feature.grad is not None and torch.isfinite(feature.grad).all()
 
 
 def test_legacy_pcgrad_name_is_explicitly_deprecated():

@@ -34,7 +34,12 @@ from .flow_matching import FlowMatchingBackbone
 from .geometry import validate_backbone
 from .lie import so3_log
 from .multi_objective import MultiScaleNRPSDesigner, ParetoObjectives, StructuralRetriever
-from .pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
+from .pareto_pcgrad import (
+    OBJECTIVE_FEATURE_PLAN,
+    MergeReadyParetoMultiObjectiveHead,
+    ObjectiveFeatureEncoder,
+    ObjectiveFeatureSource,
+)
 from .pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from .proteinmpnn import get_protein_graph
 from .reproducibility import make_generator, seed_everything, seed_worker
@@ -127,6 +132,7 @@ class CanonicalCHIMERAv2(nn.Module):
             n_modules=n_modules,
             edge_dim=28,
         )
+        self.objective_feature_encoder = ObjectiveFeatureEncoder(d_mpnn, d_evo_single)
         self.pareto_head = MergeReadyParetoMultiObjectiveHead(d_model=d_mpnn)
         self.objective_evaluator = BiologicalObjectiveEvaluator()
         self._seq_to_repr = nn.Linear(20, d_mpnn)
@@ -145,6 +151,7 @@ class CanonicalCHIMERAv2(nn.Module):
             "structural_retriever",
             "substrate_conditioner",
             "multi_scale_designer",
+            "objective_feature_encoder",
             "pareto_head",
             "_seq_to_repr",
             "sequence_policy",
@@ -179,6 +186,7 @@ class CanonicalCHIMERAv2(nn.Module):
                 "training_status": "not_started",
                 "training_steps": 0,
                 "label_sources": [],
+                "label_kinds": [],
                 "training_dataset_manifest": None,
             }
             for name in self.objective_calibration
@@ -356,7 +364,7 @@ class CanonicalCHIMERAv2(nn.Module):
             "evoformer", "flow_model", "base_mpnn", "pair_connector",
             "evol_cross_attn", "node_connector", "constraint_encoder",
             "substrate_conditioner", "multi_scale_designer", "pareto_head",
-            "_seq_to_repr", "sequence_policy",
+            "objective_feature_encoder", "_seq_to_repr", "sequence_policy",
         )
         statuses = {name: dict(self.component_status[name]) for name in required}
         incompatible = [name for name, state in statuses.items() if state["initialization"] == "incompatible_checkpoint"]
@@ -415,6 +423,8 @@ class CanonicalCHIMERAv2(nn.Module):
                 "training_status": state["training_status"],
                 "training_steps": state["training_steps"],
                 "label_sources": list(state["label_sources"]),
+                "label_kinds": list(state["label_kinds"]),
+                "feature_sources": list(OBJECTIVE_FEATURE_PLAN[name]),
                 "calibrated": self.objective_calibration[name] is not None,
                 "differentiable": True,
                 "uncertainty_available": self.objective_calibration[name] is not None and state["training_status"] == "validated",
@@ -749,7 +759,36 @@ class CanonicalCHIMERAv2(nn.Module):
             fixed_tokens=fixed_tokens,
         ).reshape(B, n_draws, L)
         sampled_repr = self._seq_to_repr(F.one_hot(sampled, num_classes=20).to(logits.dtype).reshape(B * n_draws, L, 20))
-        objective_flat = self.pareto_head(sampled_repr)
+        objective_raw_features = {
+            ObjectiveFeatureSource.SEQUENCE.value: F.one_hot(
+                sampled.reshape(B * n_draws, L), num_classes=20
+            ).to(logits.dtype),
+            ObjectiveFeatureSource.EVOLUTIONARY.value: single_repr[:, None]
+            .expand(-1, n_draws, -1, -1)
+            .reshape(B * n_draws, L, self.d_evo_single),
+        }
+        face_features = F.one_hot(face_id.long(), num_classes=20).to(logits.dtype)
+        structural_features = torch.cat(
+            (R_final.flatten(start_dim=-2), t_final, face_features[:, None].expand(-1, L, -1)),
+            dim=-1,
+        )
+        objective_raw_features[ObjectiveFeatureSource.STRUCTURAL.value] = structural_features[:, None]
+        objective_raw_features[ObjectiveFeatureSource.STRUCTURAL.value] = objective_raw_features[
+            ObjectiveFeatureSource.STRUCTURAL.value
+        ].expand(-1, n_draws, -1, -1).reshape(B * n_draws, L, 32)
+        if substrate_id is not None:
+            objective_raw_features[ObjectiveFeatureSource.SUBSTRATE.value] = F.one_hot(
+                substrate_id.long(), num_classes=20
+            ).to(logits.dtype)[:, None].expand(-1, n_draws, -1).reshape(B * n_draws, 20)
+        encoded_objective_features = self.objective_feature_encoder(objective_raw_features)
+        available_objectives = tuple(
+            name for name, sources in OBJECTIVE_FEATURE_PLAN.items()
+            if set(sources).issubset(encoded_objective_features)
+        )
+        objective_flat = self.pareto_head(
+            encoded_objective_features,
+            objective_names=available_objectives,
+        )
         objectives = ParetoObjectives(
             evolutionary_plausibility=objective_flat.evolutionary_plausibility.reshape(B, n_draws),
             structural_stability=objective_flat.structural_stability.reshape(B, n_draws),
@@ -787,6 +826,11 @@ class CanonicalCHIMERAv2(nn.Module):
             "sequence_logits": logits,
             "sequence_context": policy_context.reshape(B, n_draws, L, self.d_mpnn),
             "objective_context": sampled_repr.reshape(B, n_draws, L, self.d_mpnn),
+            "objective_feature_embeddings": {
+                name: value.reshape(B, n_draws, self.d_mpnn)
+                for name, value in encoded_objective_features.items()
+            },
+            "objective_predictions_available": available_objectives,
             "backbone_coords": backbone_coords,
             "R_final": R_final,
             "t_final": t_final,
@@ -915,7 +959,7 @@ class CanonicalCHIMERAv2(nn.Module):
                     raise ValueError(f"design constraints {name} must have batch size 1")
         batch_size = min(8, n_designs)
         sequences, objective_batches, proxy_batches = [], [], []
-        objective_contexts = []
+        objective_feature_batches: dict[str, list[torch.Tensor]] = {}
         rag_statuses = []
         remaining = n_designs
         while remaining:
@@ -933,7 +977,8 @@ class CanonicalCHIMERAv2(nn.Module):
             )
             sequences.append(outputs["sequence_tokens"][:, 0].detach().cpu())
             rag_statuses.append(outputs["rag_status"])
-            objective_contexts.append(outputs["objective_context"][:, 0].detach())
+            for source, embedding in outputs["objective_feature_embeddings"].items():
+                objective_feature_batches.setdefault(source, []).append(embedding[:, 0].detach())
             objective_batches.append(torch.stack([
                 outputs["evol_plausibility"][:, 0],
                 outputs["structural_stability"][:, 0] / 100.0,
@@ -968,7 +1013,10 @@ class CanonicalCHIMERAv2(nn.Module):
             and readiness["state"] == "TRAINED"
             and self.component_status["pareto_head"]["training_status"] == "validated"
         ):
-            objective_context = torch.cat(objective_contexts, dim=0)[:n_designs]
+            objective_feature_inputs = {
+                source: torch.cat(values, dim=0)[:n_designs]
+                for source, values in objective_feature_batches.items()
+            }
 
             def normalized_objectives(result):
                 return torch.stack(
@@ -984,7 +1032,7 @@ class CanonicalCHIMERAv2(nn.Module):
 
             posterior = self.uncertainty_estimator.predict_fixed_candidate(
                 self.pareto_head,
-                {"repr": objective_context},
+                {"features": objective_feature_inputs},
                 output_getter=normalized_objectives,
                 n_samples=max(2, self.uncertainty_estimator.n_samples),
             )
@@ -1039,14 +1087,33 @@ class CanonicalCHIMERAv2(nn.Module):
         return BayesianUncertaintyEstimator.expected_improvement(mean, std, historical)
 
     def save(self, path: str) -> None:
-        torch.save({name: getattr(self, name).state_dict() for name in (
-            "evoformer", "flow_model", "base_mpnn", "pair_connector", "evol_cross_attn",
-            "node_connector", "constraint_encoder", "structural_retriever", "substrate_conditioner",
-            "multi_scale_designer", "pareto_head", "_seq_to_repr", "sequence_policy", "ret_proj",
-        )}, path)
+        """Save component-transfer weights; this is not a resumable training checkpoint."""
+        torch.save({
+            "artifact_type": "component_transfer_checkpoint",
+            "format_version": 1,
+            "components": {
+                name: getattr(self, name).state_dict() for name in (
+                    "evoformer", "flow_model", "base_mpnn", "pair_connector", "evol_cross_attn",
+                    "node_connector", "constraint_encoder", "structural_retriever", "substrate_conditioner",
+                    "multi_scale_designer", "objective_feature_encoder", "pareto_head", "_seq_to_repr",
+                    "sequence_policy", "ret_proj",
+                )
+            },
+        }, path)
 
     def load_connectors(self, path: str) -> None:
         state = torch.load(path, map_location="cpu", weights_only=False)
+        if not isinstance(state, dict):
+            raise TypeError("component-transfer checkpoint must contain a mapping")
+        artifact_type = state.get("artifact_type")
+        if artifact_type == "canonical_training_checkpoint":
+            raise ValueError("canonical training checkpoints must be loaded with CanonicalTrainer.resume")
+        if artifact_type == "component_transfer_checkpoint":
+            if state.get("format_version") != 1 or not isinstance(state.get("components"), dict):
+                raise ValueError("unsupported or malformed component-transfer checkpoint")
+            state = state["components"]
+        elif artifact_type is not None:
+            raise ValueError(f"unsupported checkpoint artifact type: {artifact_type!r}")
         checkpoint_path = Path(path).expanduser().resolve()
         for name, values in state.items():
             module_name = "_seq_to_repr" if name == "seq_to_repr" else name

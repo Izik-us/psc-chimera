@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import replace
 
 import torch
 
@@ -80,12 +81,20 @@ def test_checkpoint_resume_roundtrip_restores_optimizer_and_metadata(tmp_path):
 
     manifest = CheckpointManifest(
         dataset_manifest="dataset-v1",
+        dataset_version="v1",
         dataset_hash="abc",
         preprocessing_hash="def",
         environment_hash="ghi",
         git_commit="deadbeef",
+        git_worktree_clean=True,
+        source_tree_hash="source-tree",
         config_hash="cfg",
         state_schema_hash="state",
+        objective_schema_hash="objective-state",
+        python_version="3.12.0",
+        torch_version="2.0.0",
+        platform="test-platform",
+        training_regime="sequence",
     )
     checkpoint_path = tmp_path / "resume.pt"
     torch.save({
@@ -109,3 +118,88 @@ def test_checkpoint_resume_roundtrip_restores_optimizer_and_metadata(tmp_path):
     loss2.backward()
     optimizer2.step()
     assert torch.isfinite(loss2)
+
+
+def test_checkpoint_compatibility_verdicts_cover_provenance_and_contract_fields():
+    manifest = CheckpointManifest(
+        format_version=3,
+        config_hash="model-config",
+        state_schema_hash="state-schema",
+        objective_schema_hash="objective-schema",
+        git_commit="commit-a",
+        git_worktree_clean=True,
+        source_tree_hash="source-a",
+        dataset_manifest="dataset-manifest-v1",
+        dataset_version="v1",
+        dataset_hash="dataset-hash",
+        preprocessing_hash="preprocessing-hash",
+        environment_hash="environment-hash",
+        python_version="3.12.0",
+        torch_version="2.8.0",
+        platform="Windows-test",
+        training_regime="sequence",
+        random_seed=11,
+    )
+    assert validate_checkpoint_compatibility(manifest, manifest) == "exact-compatible"
+
+    source_update = replace(
+        manifest,
+        git_commit="commit-b",
+        git_worktree_clean=False,
+        source_tree_hash="source-b",
+    )
+    assert validate_checkpoint_compatibility(source_update, manifest) == "expected-compatible"
+
+    incompatible_fields = (
+        "state_schema_hash",
+        "objective_schema_hash",
+        "config_hash",
+        "dataset_manifest",
+        "dataset_version",
+        "dataset_hash",
+        "preprocessing_hash",
+        "environment_hash",
+        "training_regime",
+        "random_seed",
+        "transport",
+        "sequence_policy",
+        "objective_count",
+        "python_version",
+        "torch_version",
+        "platform",
+    )
+    for field in incompatible_fields:
+        changed_value = 12 if field == "random_seed" else "changed"
+        changed = replace(manifest, **{field: changed_value})
+        assert validate_checkpoint_compatibility(changed, manifest) == "incompatible", field
+
+    legacy_v2 = replace(
+        manifest,
+        format_version=2,
+        objective_schema_hash=None,
+        dataset_version=None,
+        training_regime=None,
+        random_seed=None,
+        git_worktree_clean=None,
+        source_tree_hash=None,
+    )
+    assert validate_checkpoint_compatibility(legacy_v2, manifest) == "unverified-provenance"
+
+    legacy_v1 = replace(
+        legacy_v2,
+        format_version=1,
+        config_hash=None,
+        state_schema_hash=None,
+        git_commit=None,
+        dataset_manifest=None,
+        dataset_hash=None,
+        preprocessing_hash=None,
+        environment_hash=None,
+        python_version=None,
+        torch_version=None,
+        platform=None,
+    )
+    assert validate_checkpoint_compatibility(legacy_v1, manifest) == "unverified-provenance"
+
+    incomplete = CheckpointManifest()
+    assert validate_checkpoint_compatibility(incomplete, incomplete) == "unverified-provenance"

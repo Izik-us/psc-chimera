@@ -8,77 +8,60 @@ from typing import Any, Dict, Mapping
 import hashlib
 import json
 import platform
-import sys
 from pathlib import Path
-
-
-def _runtime_snapshot() -> dict[str, str]:
-    try:
-        import torch
-
-        torch_version = str(torch.__version__)
-    except Exception:
-        torch_version = "unknown"
-    return {
-        "python_version": platform.python_version(),
-        "torch_version": torch_version,
-        "platform": platform.platform(),
-    }
+import subprocess
 
 
 @dataclass(frozen=True)
 class CheckpointManifest:
     """Machine-readable description of the architecture and provenance a checkpoint belongs to."""
 
-    format_version: int = 2
+    format_version: int = 3
     chimera_version: str = "2.0.0"
     transport: str = "se3_schrodinger_bridge"
     sequence_policy: str = "autoregressive"
     geometry_edge_dim: int = 28
     objective_count: int = 5
+    objective_schema_hash: str | None = None
     uncertainty: str = "mc_dropout_epistemic"
     acquisition: str = "gaussian_expected_improvement"
-    config_hash: str = ""
-    state_schema_hash: str = ""
-    git_commit: str = ""
-    dataset_manifest: str = ""
-    dataset_hash: str = ""
-    preprocessing_hash: str = ""
-    environment_hash: str = ""
-    python_version: str = ""
-    torch_version: str = ""
-    platform: str = ""
+    config_hash: str | None = None
+    state_schema_hash: str | None = None
+    git_commit: str | None = None
+    git_worktree_clean: bool | None = None
+    source_tree_hash: str | None = None
+    dataset_manifest: str | None = None
+    dataset_version: str | None = None
+    dataset_hash: str | None = None
+    preprocessing_hash: str | None = None
+    environment_hash: str | None = None
+    python_version: str | None = None
+    torch_version: str | None = None
+    platform: str | None = None
+    training_regime: str | None = None
+    random_seed: int | None = None
 
-    def __post_init__(self) -> None:
-        runtime = _runtime_snapshot()
-        if not self.python_version:
-            object.__setattr__(self, "python_version", runtime["python_version"])
-        if not self.torch_version:
-            object.__setattr__(self, "torch_version", runtime["torch_version"])
-        if not self.platform:
-            object.__setattr__(self, "platform", runtime["platform"])
-        if not self.environment_hash:
-            payload = json.dumps(
-                {
-                    "python_version": self.python_version,
-                    "torch_version": self.torch_version,
-                    "platform": self.platform,
-                    "transport": self.transport,
-                    "sequence_policy": self.sequence_policy,
-                    "chimera_version": self.chimera_version,
-                    "dataset_manifest": self.dataset_manifest,
-                    "dataset_hash": self.dataset_hash,
-                    "preprocessing_hash": self.preprocessing_hash,
-                    "git_commit": self.git_commit,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            )
-            object.__setattr__(self, "environment_hash", hashlib.sha256(payload.encode("utf-8")).hexdigest())
+    def has_complete_provenance(self) -> bool:
+        required = (
+            "config_hash",
+            "state_schema_hash",
+            "objective_schema_hash",
+            "git_commit",
+            "source_tree_hash",
+            "dataset_manifest",
+            "dataset_version",
+            "dataset_hash",
+            "preprocessing_hash",
+            "environment_hash",
+            "python_version",
+            "torch_version",
+            "platform",
+            "training_regime",
+        )
+        return all(getattr(self, name) for name in required) and self.git_worktree_clean is not None
 
     def validate(self, expected: "CheckpointManifest" | None = None) -> None:
-        if self.format_version not in (1, 2):
+        if self.format_version not in (1, 2, 3):
             raise ValueError(f"unsupported checkpoint format_version={self.format_version}")
         if self.transport != "se3_schrodinger_bridge":
             raise ValueError("checkpoint does not declare the canonical SE(3) SB transport")
@@ -93,41 +76,38 @@ class CheckpointManifest:
         if self.acquisition != "gaussian_expected_improvement":
             raise ValueError("checkpoint acquisition contract must be Gaussian expected improvement")
         for name in (
-            "config_hash",
-            "state_schema_hash",
-            "git_commit",
-            "dataset_manifest",
-            "dataset_hash",
-            "preprocessing_hash",
-            "environment_hash",
-            "python_version",
-            "torch_version",
-            "platform",
+            "config_hash", "state_schema_hash", "objective_schema_hash", "git_commit", "source_tree_hash", "dataset_manifest",
+            "dataset_version", "dataset_hash", "preprocessing_hash", "environment_hash",
+            "python_version", "torch_version", "platform", "training_regime",
         ):
             value = getattr(self, name)
-            if not isinstance(value, str):
-                raise ValueError(f"{name} must be a string")
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"{name} must be a string or None")
+        if self.random_seed is not None and (not isinstance(self.random_seed, int) or self.random_seed < 0):
+            raise ValueError("random_seed must be a non-negative integer or None")
+        if self.git_worktree_clean is not None and not isinstance(self.git_worktree_clean, bool):
+            raise ValueError("git_worktree_clean must be a boolean or None")
         if expected is not None:
             expected_dict = asdict(expected)
             actual_dict = asdict(self)
-            # A v1 manifest can be compared to a v2 expected contract only when
-            # the newly introduced fingerprints are intentionally unspecified.
-            if self.format_version == 1:
-                for key in (
-                    "config_hash",
-                    "state_schema_hash",
-                    "git_commit",
-                    "dataset_manifest",
-                    "dataset_hash",
-                    "preprocessing_hash",
-                    "environment_hash",
-                    "python_version",
-                    "torch_version",
-                    "platform",
-                ):
+            if self.format_version in (1, 2):
+                unavailable_fields = (
+                    (
+                        "config_hash", "state_schema_hash", "objective_schema_hash", "git_commit",
+                        "git_worktree_clean", "source_tree_hash", "dataset_manifest", "dataset_version",
+                        "dataset_hash", "preprocessing_hash", "environment_hash", "python_version",
+                        "torch_version", "platform", "training_regime", "random_seed",
+                    )
+                    if self.format_version == 1
+                    else (
+                        "objective_schema_hash", "dataset_version", "training_regime", "random_seed",
+                        "git_worktree_clean", "source_tree_hash",
+                    )
+                )
+                for key in unavailable_fields:
                     actual_dict.pop(key, None)
                     expected_dict.pop(key, None)
-                expected_dict["format_version"] = 1
+                expected_dict["format_version"] = self.format_version
             if actual_dict != expected_dict:
                 raise ValueError("checkpoint manifest does not match the expected architecture contract")
 
@@ -151,6 +131,62 @@ def config_hash(config: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def runtime_provenance() -> dict[str, str | None]:
+    try:
+        import torch
+
+        torch_version = str(torch.__version__)
+    except Exception:
+        torch_version = None
+    result = {
+        "python_version": platform.python_version(),
+        "torch_version": torch_version,
+        "platform": platform.platform(),
+    }
+    result["environment_hash"] = (
+        config_hash(result) if all(result.values()) else None
+    )
+    return result
+
+
+def git_provenance(repository_root: str | Path) -> dict[str, Any]:
+    """Return commit and source-tree identity without inventing missing Git metadata."""
+    root = Path(repository_root).resolve()
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        paths = subprocess.check_output(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=root,
+            stderr=subprocess.DEVNULL,
+        ).decode("utf-8").split("\0")
+    except (OSError, subprocess.CalledProcessError):
+        return {"git_commit": None, "git_worktree_clean": None, "source_tree_hash": None}
+
+    source_extensions = {".ini", ".json", ".md", ".py", ".pyi", ".sh", ".toml", ".txt", ".yaml", ".yml"}
+    source_files = {}
+    try:
+        for relative in sorted(set(paths) - {""}):
+            path = root / relative
+            if path.suffix.lower() in source_extensions and path.is_file():
+                source_files[relative.replace("\\", "/")] = hashlib.sha256(path.read_bytes()).hexdigest()
+        tree_hash = config_hash(source_files)
+    except OSError:
+        tree_hash = None
+    return {
+        "git_commit": commit or None,
+        "git_worktree_clean": not bool(status.strip()),
+        "source_tree_hash": tree_hash,
+    }
+
+
 def save_manifest(path: str | Path, manifest: CheckpointManifest | None = None) -> None:
     manifest = manifest or CheckpointManifest()
     manifest.validate()
@@ -169,10 +205,26 @@ def validate_checkpoint_compatibility(
     expected: CheckpointManifest,
 ) -> str:
     """Return a compatibility verdict for checkpoint provenance validation."""
+    try:
+        actual.validate()
+        expected.validate()
+    except (TypeError, ValueError):
+        return "incompatible"
     if actual == expected:
-        return "exact-compatible"
+        return "exact-compatible" if actual.has_complete_provenance() else "unverified-provenance"
+
+    if actual.format_version == expected.format_version == 3:
+        actual_dict = asdict(actual)
+        expected_dict = asdict(expected)
+        for field in ("git_commit", "git_worktree_clean", "source_tree_hash"):
+            actual_dict.pop(field)
+            expected_dict.pop(field)
+        if actual_dict == expected_dict:
+            if actual.has_complete_provenance() and expected.has_complete_provenance():
+                return "expected-compatible"
+            return "unverified-provenance"
     try:
         actual.validate(expected)
-        return "expected-compatible"
     except ValueError:
         return "incompatible"
+    return "expected-compatible" if actual.has_complete_provenance() else "unverified-provenance"

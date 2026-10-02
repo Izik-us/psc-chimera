@@ -10,13 +10,72 @@ later invokes ``total.backward()``.
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from enum import Enum
+from typing import Dict, Mapping, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .multi_objective import ParetoObjectives
+
+
+class ObjectiveFeatureSource(str, Enum):
+    SEQUENCE = "sequence"
+    EVOLUTIONARY = "evolutionary"
+    STRUCTURAL = "structural"
+    SUBSTRATE = "substrate"
+    DETERMINISTIC = "deterministic"
+
+
+OBJECTIVE_FEATURE_PLAN = {
+    "evolutionary_plausibility": ("sequence", "evolutionary"),
+    "structural_stability": ("sequence", "structural"),
+    "expression_efficiency": ("sequence",),
+    "substrate_selectivity": ("sequence", "substrate"),
+    "assembly_compatibility": ("structural",),
+}
+
+
+class ObjectiveFeatureEncoder(nn.Module):
+    """Project declared typed feature tensors to the objective embedding width."""
+
+    def __init__(self, d_model: int, evolutionary_dim: int):
+        super().__init__()
+        self.input_dims = {
+            "sequence": 20,
+            "evolutionary": evolutionary_dim,
+            "structural": 32,
+            "substrate": 20,
+            "deterministic": 1,
+        }
+        self.projections = nn.ModuleDict({
+            source: nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim, d_model), nn.GELU())
+            for source, input_dim in self.input_dims.items()
+        })
+
+    def forward(
+        self,
+        features: Mapping[ObjectiveFeatureSource | str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        encoded = {}
+        batch_size = None
+        for source, value in features.items():
+            name = ObjectiveFeatureSource(source).value
+            if value.ndim not in (2, 3) or value.shape[-1] != self.input_dims[name]:
+                raise ValueError(
+                    f"{name} features must have shape (B,{self.input_dims[name]}) "
+                    "or (B,L,input_dim)"
+                )
+            if batch_size is None:
+                batch_size = value.shape[0]
+            elif value.shape[0] != batch_size:
+                raise ValueError("objective feature sources must share a batch dimension")
+            projected = self.projections[name](value)
+            encoded[name] = projected.mean(dim=1) if projected.ndim == 3 else projected
+        if not encoded:
+            raise ValueError("at least one typed objective feature source is required")
+        return encoded
 
 
 class MergeReadyParetoMultiObjectiveHead(nn.Module):
@@ -30,6 +89,10 @@ class MergeReadyParetoMultiObjectiveHead(nn.Module):
             nn.GELU(),
             nn.Linear(d_model, d_model),
         )
+        self.feature_fusions = nn.ModuleDict({
+            name: nn.Linear(len(sources) * d_model, d_model)
+            for name, sources in OBJECTIVE_FEATURE_PLAN.items()
+        })
 
         def head():
             return nn.Sequential(
@@ -46,15 +109,76 @@ class MergeReadyParetoMultiObjectiveHead(nn.Module):
         self.head_asm = head()
         self._last_repr: Optional[torch.Tensor] = None
 
-    def forward(self, repr: torch.Tensor):
-        self._last_repr = repr
-        pooled = self.shared(repr).mean(dim=1)
+    def forward(
+        self,
+        features: Mapping[str, torch.Tensor] | torch.Tensor,
+        objective_names: Optional[tuple[str, ...] | list[str] | set[str]] = None,
+    ):
+        if torch.is_tensor(features):
+            if features.ndim not in (2, 3) or features.shape[-1] != self.shared[0].normalized_shape[0]:
+                raise ValueError("legacy sequence representation must have shape (B,D) or (B,L,D)")
+            encoded = {"sequence": features.mean(dim=1) if features.ndim == 3 else features}
+        else:
+            encoded = dict(features)
+        if not encoded:
+            raise ValueError("objective prediction requires encoded feature sources")
+        batch_sizes = {value.shape[0] for value in encoded.values()}
+        if len(batch_sizes) != 1 or any(value.ndim != 2 for value in encoded.values()):
+            raise ValueError("encoded objective sources must share batch size and have shape (B,D)")
+        if any(value.shape[-1] != self.shared[0].normalized_shape[0] for value in encoded.values()):
+            raise ValueError("encoded objective sources must match the head embedding width")
+        available = {
+            name for name, sources in OBJECTIVE_FEATURE_PLAN.items()
+            if set(sources).issubset(encoded)
+        }
+        requested = available if objective_names is None else set(objective_names)
+        unknown = requested - set(OBJECTIVE_FEATURE_PLAN)
+        if unknown:
+            raise ValueError(f"unknown objectives: {sorted(unknown)}")
+        for name in requested:
+            missing = set(OBJECTIVE_FEATURE_PLAN[name]) - set(encoded)
+            if missing:
+                raise ValueError(f"{name} requires objective features: {sorted(missing)}")
+
+        self._last_repr = torch.cat(list(encoded.values()), dim=-1)
+        reference = next(iter(encoded.values()))
+
+        def pooled(name: str) -> Optional[torch.Tensor]:
+            if name not in requested:
+                return None
+            sources = OBJECTIVE_FEATURE_PLAN[name]
+            combined = torch.cat([encoded[source] for source in sources], dim=-1)
+            return self.shared(self.feature_fusions[name](combined))
+
+        pooled_evol = pooled("evolutionary_plausibility")
+        pooled_stab = pooled("structural_stability")
+        pooled_expr = pooled("expression_efficiency")
+        pooled_sel = pooled("substrate_selectivity")
+        pooled_asm = pooled("assembly_compatibility")
+
+        def predict(module: nn.Module, value: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+            return module(value).squeeze(-1) if value is not None else None
+
+        evol = predict(self.head_evol, pooled_evol)
+        stability = predict(self.head_stab, pooled_stab)
+        expression = predict(self.head_expr, pooled_expr)
+        selectivity = predict(self.head_sel, pooled_sel)
+        assembly = predict(self.head_asm, pooled_asm)
+
         return ParetoObjectives(
-            evolutionary_plausibility=self.head_evol(pooled).squeeze(-1),
-            structural_stability=100 * torch.sigmoid(self.head_stab(pooled).squeeze(-1)),
-            expression_efficiency=torch.sigmoid(self.head_expr(pooled).squeeze(-1)),
-            substrate_selectivity=torch.sigmoid(self.head_sel(pooled).squeeze(-1)),
-            assembly_compatibility=torch.sigmoid(self.head_asm(pooled).squeeze(-1)),
+            evolutionary_plausibility=evol if evol is not None else reference.new_zeros(reference.shape[0]),
+            structural_stability=(
+                100 * torch.sigmoid(stability) if stability is not None else reference.new_zeros(reference.shape[0])
+            ),
+            expression_efficiency=(
+                torch.sigmoid(expression) if expression is not None else reference.new_zeros(reference.shape[0])
+            ),
+            substrate_selectivity=(
+                torch.sigmoid(selectivity) if selectivity is not None else reference.new_zeros(reference.shape[0])
+            ),
+            assembly_compatibility=(
+                torch.sigmoid(assembly) if assembly is not None else reference.new_zeros(reference.shape[0])
+            ),
         )
 
     @staticmethod

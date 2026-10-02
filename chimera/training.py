@@ -4,15 +4,27 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
 from enum import Enum
+import hashlib
+import json
+import random
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .checkpoint import CheckpointManifest, config_hash, state_schema_hash
+from .checkpoint import (
+    CheckpointManifest,
+    config_hash,
+    git_provenance,
+    runtime_provenance,
+    state_schema_hash,
+    validate_checkpoint_compatibility,
+)
 from .dpo import DPOBatch
 from .proteinmpnn import get_protein_graph
+from .pareto_pcgrad import OBJECTIVE_FEATURE_PLAN, ObjectiveFeatureSource
 
 
 class TrainingRegime(str, Enum):
@@ -22,6 +34,14 @@ class TrainingRegime(str, Enum):
     CONSTRAINT = "constraint"
     OBJECTIVE = "objective"
     PREFERENCE = "preference"
+
+
+class ObjectiveLabelKind(str, Enum):
+    PROXY = "proxy"
+    SURROGATE = "surrogate"
+    VALIDATED_SURROGATE = "validated_surrogate"
+    DETERMINISTIC_EVALUATOR = "deterministic_evaluator"
+    EXPERIMENTAL_MEASUREMENT = "experimental_measurement"
 
 
 _REGIME_MODULES = {
@@ -38,7 +58,7 @@ _REGIME_MODULES = {
         "evoformer", "pair_connector", "flow_model", "evol_cross_attn",
         "constraint_encoder", "substrate_conditioner",
     ),
-    TrainingRegime.OBJECTIVE: ("_seq_to_repr", "pareto_head"),
+    TrainingRegime.OBJECTIVE: ("objective_feature_encoder", "pareto_head"),
     TrainingRegime.PREFERENCE: ("sequence_policy",),
 }
 
@@ -60,6 +80,8 @@ class CanonicalTrainingBatch:
     substrate_types: Optional[torch.Tensor] = None
     objective_labels: Optional[Mapping[str, torch.Tensor]] = None
     objective_label_sources: Optional[Mapping[str, str]] = None
+    objective_label_kinds: Optional[Mapping[str, ObjectiveLabelKind | str]] = None
+    objective_features: Optional[Mapping[ObjectiveFeatureSource | str, torch.Tensor]] = None
     preference_batch: Optional[DPOBatch] = None
 
     def to(self, device: torch.device | str) -> "CanonicalTrainingBatch":
@@ -73,6 +95,8 @@ class CanonicalTrainingBatch:
                     name: label.to(device) if torch.is_tensor(label) else label
                     for name, label in value.items()
                 }
+            elif item.name == "objective_features" and value is not None:
+                value = {name: feature.to(device) for name, feature in value.items()}
             elif item.name == "constraints" and value is not None:
                 updates = {
                     field.name: getattr(value, field.name).to(device)
@@ -161,16 +185,49 @@ class CanonicalTrainer:
         weight_decay: float = 1e-4,
         optimizer: Optional[torch.optim.Optimizer] = None,
         scheduler: Optional[Any] = None,
-        dataset_manifest: str = "",
+        dataset_manifest: str | Mapping[str, Any] | None = None,
+        dataset_path: str | Path | None = None,
+        dataset_hash: str | None = None,
+        dataset_version: str | None = None,
+        preprocessing_hash: str | None = None,
+        preprocessing_config: Mapping[str, Any] | None = None,
+        random_seed: int | None = None,
         generator: Optional[torch.Generator] = None,
     ):
         self.model = model
         self.regime = TrainingRegime(regime)
-        self.dataset_manifest = dataset_manifest
+        if isinstance(dataset_manifest, Mapping):
+            manifest_data = dict(dataset_manifest)
+            self.dataset_manifest = json.dumps(
+                manifest_data, sort_keys=True, separators=(",", ":"), default=str
+            )
+            dataset_version = dataset_version or manifest_data.get("dataset_version")
+        else:
+            self.dataset_manifest = str(dataset_manifest) if dataset_manifest else None
+        if dataset_path is not None:
+            dataset_bytes = Path(dataset_path).expanduser().resolve().read_bytes()
+            file_hash = hashlib.sha256(dataset_bytes).hexdigest()
+            if dataset_hash is not None and dataset_hash != file_hash:
+                raise ValueError("dataset_hash does not match the supplied dataset_path")
+            dataset_hash = file_hash
+        self.dataset_hash = dataset_hash
+        self.dataset_version = dataset_version
+        if preprocessing_hash is not None and preprocessing_config is not None:
+            if preprocessing_hash != config_hash(preprocessing_config):
+                raise ValueError("preprocessing_hash does not match preprocessing_config")
+        self.preprocessing_hash = preprocessing_hash or (
+            config_hash(preprocessing_config) if preprocessing_config is not None else None
+        )
+        self.random_seed = random_seed
+        if self.random_seed is None and generator is not None:
+            self.random_seed = int(generator.initial_seed())
+        if self.random_seed is not None and (not isinstance(self.random_seed, int) or self.random_seed < 0):
+            raise ValueError("random_seed must be a non-negative integer or None")
         self.generator = generator
         self.epoch = 0
         self.global_step = 0
         self._last_objective_sources: dict[str, str] = {}
+        self._last_objective_kinds: dict[str, str] = {}
         self._last_objective_names: tuple[str, ...] = ()
         if self.regime == TrainingRegime.PREFERENCE:
             policy_state = model.component_status["sequence_policy"]
@@ -214,6 +271,7 @@ class CanonicalTrainer:
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.trainable_components = selected
+        self._resume_source_manifest: Optional[dict[str, Any]] = None
 
     @staticmethod
     def _default_bounds(count: int, length: int, batch_size: int, device: torch.device) -> torch.Tensor:
@@ -312,18 +370,90 @@ class CanonicalTrainer:
             padding_mask=batch.sequence_padding_mask,
         )
 
-    def _objective_loss(self, batch: CanonicalTrainingBatch) -> torch.Tensor:
-        if batch.target_sequence is None or not batch.objective_labels:
-            raise ValueError("objective training requires target sequences and explicit objective labels")
-        unknown = set(batch.objective_labels) - set(self.model.objective_status)
+    def _objective_inputs(self, batch: CanonicalTrainingBatch):
+        if batch.target_sequence is None:
+            raise ValueError("objective training requires target sequences")
+        labels = {
+            name: value
+            for name, value in (batch.objective_labels or {}).items()
+            if value is not None
+        }
+        unknown = set(labels) - set(self.model.objective_status)
         if unknown:
             raise ValueError(f"unknown objective labels: {sorted(unknown)}")
-        missing_sources = set(batch.objective_labels) - set(batch.objective_label_sources or {})
+        sources = dict(batch.objective_label_sources or {})
+        kinds = {
+            name: ObjectiveLabelKind(kind).value
+            for name, kind in (batch.objective_label_kinds or {}).items()
+        }
+        feature_inputs: dict[str, torch.Tensor] = {
+            ObjectiveFeatureSource.SEQUENCE.value: F.one_hot(
+                batch.target_sequence.long(), num_classes=20
+            ).to(batch.pair_features.dtype)
+        }
+        if batch.msa_tokens is not None:
+            with torch.no_grad():
+                evolutionary, _ = self.model.evoformer(
+                    batch.msa_tokens,
+                    batch.pair_features,
+                    msa_padding_mask=batch.msa_padding_mask,
+                )
+            feature_inputs[ObjectiveFeatureSource.EVOLUTIONARY.value] = evolutionary.detach()
+
+        structure_R = batch.target_R if batch.target_R is not None else batch.source_R
+        structure_t = batch.target_t if batch.target_t is not None else batch.source_t
+        if structure_R is not None and structure_t is not None:
+            face = getattr(batch.constraints, "icosahedral_face", None)
+            if face is None:
+                face_features = batch.pair_features.new_zeros((batch.target_sequence.shape[0], 20))
+            else:
+                if torch.any((face < 0) | (face >= 20)):
+                    raise ValueError("icosahedral_face values must be in [0,19]")
+                face_features = F.one_hot(face.long(), num_classes=20).to(batch.pair_features.dtype)
+            face_features = face_features[:, None, :].expand(-1, structure_R.shape[1], -1)
+            feature_inputs[ObjectiveFeatureSource.STRUCTURAL.value] = torch.cat(
+                (structure_R.flatten(start_dim=-2), structure_t, face_features), dim=-1
+            ).detach()
+        if batch.substrate_id is not None:
+            if torch.any((batch.substrate_id < 0) | (batch.substrate_id >= 20)):
+                raise ValueError("substrate_id values must be in [0,19]")
+            feature_inputs[ObjectiveFeatureSource.SUBSTRATE.value] = F.one_hot(
+                batch.substrate_id.long(), num_classes=20
+            ).to(batch.pair_features.dtype)
+        for source, value in (batch.objective_features or {}).items():
+            name = ObjectiveFeatureSource(source).value
+            if name == ObjectiveFeatureSource.SEQUENCE.value:
+                raise ValueError("sequence objective features are derived from target_sequence")
+            feature_inputs[name] = value
+
+        if "assembly_compatibility" not in labels and batch.constraints is not None:
+            face = getattr(batch.constraints, "icosahedral_face", None)
+            if structure_R is not None and structure_t is not None and face is not None:
+                with torch.no_grad():
+                    evaluation = self.model.objective_evaluator.evaluate(
+                        batch.target_sequence,
+                        self.model._frames_to_coords(structure_R, structure_t),
+                        rotations=structure_R,
+                        faces=face,
+                    )
+                assembly_output = evaluation["objective_outputs"]["assembly_compatibility"]
+                labels["assembly_compatibility"] = assembly_output.value.detach()
+                sources["assembly_compatibility"] = assembly_output.source
+                kinds["assembly_compatibility"] = ObjectiveLabelKind.DETERMINISTIC_EVALUATOR.value
+
+        if not labels:
+            raise ValueError("objective training requires labels or a usable deterministic evaluator target")
+        missing_sources = {
+            name for name in labels
+            if not isinstance(sources.get(name), str) or not sources[name].strip()
+        }
         if missing_sources:
             raise ValueError(f"objective label provenance is required for: {sorted(missing_sources)}")
-        one_hot = F.one_hot(batch.target_sequence.long(), num_classes=20).to(batch.pair_features.dtype)
-        context = self.model._seq_to_repr(one_hot)
-        objectives = self.model.pareto_head(context)
+        missing_kinds = set(labels) - set(kinds)
+        if missing_kinds:
+            raise ValueError(f"objective label kinds are required for: {sorted(missing_kinds)}")
+        supervised_names = tuple(labels)
+        encoded_features = self.model.objective_feature_encoder(feature_inputs)
         label_keys = {
             "evolutionary_plausibility": "evol",
             "structural_stability": "stab",
@@ -332,30 +462,22 @@ class CanonicalTrainer:
             "assembly_compatibility": "asm",
         }
         labels = {
-            short_name: batch.objective_labels.get(full_name)
+            short_name: labels.get(full_name)
             for full_name, short_name in label_keys.items()
         }
-        self._last_objective_sources = dict(batch.objective_label_sources or {})
-        self._last_objective_names = tuple(batch.objective_labels)
+        objectives = self.model.pareto_head(encoded_features, objective_names=supervised_names)
+        self._last_objective_sources = {name: sources[name] for name in supervised_names}
+        self._last_objective_kinds = {name: kinds[name] for name in supervised_names}
+        self._last_objective_names = supervised_names
+        return objectives, labels, encoded_features
+
+    def _objective_loss(self, batch: CanonicalTrainingBatch) -> torch.Tensor:
+        objectives, labels, _ = self._objective_inputs(batch)
         loss, _ = self.model.pareto_head.pcgrad_loss(objectives, labels)
         return loss
 
     def _objective_validation_loss(self, batch: CanonicalTrainingBatch) -> torch.Tensor:
-        if batch.target_sequence is None or not batch.objective_labels:
-            raise ValueError("objective validation requires target sequences and explicit labels")
-        one_hot = F.one_hot(batch.target_sequence.long(), num_classes=20).to(batch.pair_features.dtype)
-        objectives = self.model.pareto_head(self.model._seq_to_repr(one_hot))
-        label_keys = {
-            "evolutionary_plausibility": "evol",
-            "structural_stability": "stab",
-            "expression_efficiency": "expr",
-            "substrate_selectivity": "sel",
-            "assembly_compatibility": "asm",
-        }
-        labels = {
-            short_name: batch.objective_labels.get(full_name)
-            for full_name, short_name in label_keys.items()
-        }
+        objectives, labels, _ = self._objective_inputs(batch)
         losses = self.model.pareto_head._task_losses(objectives, labels)
         if not losses:
             raise ValueError("objective validation has no supported labels")
@@ -391,7 +513,7 @@ class CanonicalTrainer:
         if self.regime == TrainingRegime.SEQUENCE:
             return ("evoformer", "node_connector", "base_mpnn", "multi_scale_designer", "_seq_to_repr", "sequence_policy")
         if self.regime == TrainingRegime.OBJECTIVE:
-            return ("_seq_to_repr", "pareto_head")
+            return ("objective_feature_encoder", "pareto_head")
         return ("sequence_policy",)
 
     def train_step(self, batch: CanonicalTrainingBatch) -> dict[str, Any]:
@@ -432,6 +554,9 @@ class CanonicalTrainer:
                 source = self._last_objective_sources[name]
                 if source not in state["label_sources"]:
                     state["label_sources"].append(source)
+                kind = self._last_objective_kinds[name]
+                if kind not in state["label_kinds"]:
+                    state["label_kinds"].append(kind)
         for parameter in self.model.parameters():
             if parameter.requires_grad and not torch.isfinite(parameter).all():
                 raise FloatingPointError("optimizer produced non-finite trainable parameters")
@@ -569,15 +694,34 @@ class CanonicalTrainer:
             "n_domains": self.model.n_domains,
             "n_modules": self.model.n_modules,
         }
+        git = git_provenance(Path(__file__).resolve().parents[1])
+        runtime = runtime_provenance()
         return CheckpointManifest(
             config_hash=config_hash(config),
             state_schema_hash=state_schema_hash(self.model.state_dict()),
+            objective_schema_hash=config_hash({
+                name: list(OBJECTIVE_FEATURE_PLAN[name])
+                for name in self.model.objective_status
+            }),
             dataset_manifest=self.dataset_manifest,
+            dataset_version=self.dataset_version,
+            dataset_hash=self.dataset_hash,
+            preprocessing_hash=self.preprocessing_hash,
+            git_commit=git["git_commit"],
+            git_worktree_clean=git["git_worktree_clean"],
+            source_tree_hash=git["source_tree_hash"],
+            environment_hash=runtime["environment_hash"],
+            python_version=runtime["python_version"],
+            torch_version=runtime["torch_version"],
+            platform=runtime["platform"],
+            training_regime=self.regime.value,
+            random_seed=self.random_seed,
         )
 
     def save_checkpoint(self, path: str | Path) -> None:
         manifest = self._manifest()
         payload = {
+            "artifact_type": "canonical_training_checkpoint",
             "model_state": self.model.state_dict(),
             "optimizer_state": self.optimizer.state_dict(),
             "scheduler_state": self.scheduler.state_dict() if self.scheduler is not None else None,
@@ -594,28 +738,50 @@ class CanonicalTrainer:
                     if self.model._reference_policy is not None
                     else None
                 ),
+                "resumed_from_manifest": self._resume_source_manifest,
+                "rng_state": {
+                    "python": random.getstate(),
+                    "numpy": np.random.get_state(),
+                    "torch": torch.get_rng_state(),
+                    "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                    "generator": self.generator.get_state() if self.generator is not None else None,
+                    "generator_device": str(self.generator.device) if self.generator is not None else None,
+                },
             },
         }
         torch.save(payload, path)
 
     def resume(self, path: str | Path) -> None:
         payload = torch.load(path, map_location="cpu", weights_only=False)
+        if isinstance(payload, dict) and payload.get("artifact_type") == "component_transfer_checkpoint":
+            raise ValueError("component-transfer checkpoints cannot be resumed as canonical training state")
         if not isinstance(payload, dict) or not all(
             key in payload for key in ("model_state", "optimizer_state", "manifest", "training")
         ):
             raise ValueError("checkpoint is not a canonical training checkpoint")
+        if payload.get("artifact_type", "canonical_training_checkpoint") != "canonical_training_checkpoint":
+            raise ValueError("checkpoint artifact type is not canonical training state")
         actual = CheckpointManifest(**payload["manifest"])
         actual.validate()
         expected = self._manifest()
-        if actual.dataset_manifest != expected.dataset_manifest:
-            raise ValueError("checkpoint dataset manifest does not match this trainer")
+        training = payload["training"]
+        compatibility = validate_checkpoint_compatibility(actual, expected)
+        if compatibility in ("incompatible", "unverified-provenance"):
+            raise ValueError(f"checkpoint provenance is not compatible with this trainer: {compatibility}")
+        if actual.dataset_manifest != expected.dataset_manifest or actual.dataset_hash != expected.dataset_hash:
+            raise ValueError("checkpoint dataset identity does not match this trainer")
+        if actual.dataset_version != expected.dataset_version:
+            raise ValueError("checkpoint dataset version does not match this trainer")
+        if actual.preprocessing_hash != expected.preprocessing_hash:
+            raise ValueError("checkpoint preprocessing is incompatible")
         if actual.config_hash != expected.config_hash:
             raise ValueError("checkpoint model configuration is incompatible")
         if actual.state_schema_hash != expected.state_schema_hash:
             raise ValueError("checkpoint model state schema is incompatible")
-        training = payload["training"]
-        if training["regime"] != self.regime.value:
+        if actual.training_regime != self.regime.value or training["regime"] != self.regime.value:
             raise ValueError("checkpoint training regime does not match this trainer")
+        if actual.random_seed != expected.random_seed:
+            raise ValueError("checkpoint random seed does not match this trainer")
         self.model.load_state_dict(payload["model_state"], strict=True)
         self.optimizer.load_state_dict(payload["optimizer_state"])
         saved_scheduler = payload.get("scheduler_state")
@@ -639,6 +805,22 @@ class CanonicalTrainer:
             object.__setattr__(self.model, "_reference_policy", reference_policy)
         self.epoch = int(training["epoch"])
         self.global_step = int(training["global_step"])
+        self._resume_source_manifest = asdict(actual)
+        rng_state = training.get("rng_state")
+        if rng_state is not None:
+            random.setstate(rng_state["python"])
+            np.random.set_state(rng_state["numpy"])
+            torch.set_rng_state(rng_state["torch"])
+            saved_cuda_state = rng_state.get("cuda")
+            if saved_cuda_state is not None:
+                if not torch.cuda.is_available() or len(saved_cuda_state) != torch.cuda.device_count():
+                    raise ValueError("checkpoint CUDA RNG state does not match the current environment")
+                torch.cuda.set_rng_state_all(saved_cuda_state)
+            generator_state = rng_state.get("generator")
+            if generator_state is not None:
+                if self.generator is None:
+                    self.generator = torch.Generator(device=rng_state.get("generator_device", "cpu"))
+                self.generator.set_state(generator_state)
 
     @classmethod
     def from_checkpoint(
@@ -652,9 +834,15 @@ class CanonicalTrainer:
     ) -> "CanonicalTrainer":
         """Construct a regime trainer and strictly restore a saved training state."""
         payload = torch.load(path, map_location="cpu", weights_only=False)
-        if not isinstance(payload, dict) or "training" not in payload:
+        if (
+            not isinstance(payload, dict)
+            or payload.get("artifact_type", "canonical_training_checkpoint") != "canonical_training_checkpoint"
+            or "training" not in payload
+        ):
             raise ValueError("checkpoint is not a canonical training checkpoint")
         training = payload["training"]
+        manifest = CheckpointManifest(**payload["manifest"])
+        manifest.validate()
         regime = TrainingRegime(training["regime"])
         if regime == TrainingRegime.PREFERENCE:
             if training.get("preference_reference_state") is None:
@@ -678,7 +866,11 @@ class CanonicalTrainer:
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             scheduler=scheduler,
-            dataset_manifest=payload["manifest"].get("dataset_manifest", ""),
+            dataset_manifest=manifest.dataset_manifest,
+            dataset_hash=manifest.dataset_hash,
+            dataset_version=manifest.dataset_version,
+            preprocessing_hash=manifest.preprocessing_hash,
+            random_seed=manifest.random_seed,
         )
         trainer.resume(path)
         return trainer
@@ -687,6 +879,7 @@ class CanonicalTrainer:
 __all__ = [
     "CanonicalTrainingBatch",
     "CanonicalTrainer",
+    "ObjectiveLabelKind",
     "TrainingRegime",
     "configure_trainable_components",
     "gradient_flow_report",
