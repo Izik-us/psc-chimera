@@ -1,114 +1,12 @@
-"""
-CHIMERA v2 — Compositional Hierarchical Inference Model for
-             Evolutionary Representation and Architecture
-================================================================
-Complete rebuild of the Stage 1 PSC Engineering Pipeline model.
+"""Legacy CHIMERAv2 retained only for API and checkpoint compatibility.
 
-What changed from v1 → v2:
-┌─────────────────────────┬──────────────────────────────────────────────────┐
-│ Component               │ v1 → v2                                          │
-├─────────────────────────┼──────────────────────────────────────────────────┤
-│ Backbone generation     │ DDPM 200 steps → OT-Flow Matching 20 steps       │
-│ Source distribution     │ Gaussian noise → Bacterial NRPS (diffusion bridge)│
-│ Sequence designer       │ ProteinMPNN only → 4-scale hierarchical GNN      │
-│ Retrieval               │ None → FAISS structural RAG (K=5 analogs)        │
-│ Substrate conditioning  │ None → SE(3)-aware binding pocket encoder         │
-│ Objectives              │ Weighted sum loss → 5-obj Pareto front (PCGrad)  │
-│ Learning from PROTEUS   │ Simple fine-tune → Direct Preference Optimization │
-│ Exploration strategy    │ Random → Bayesian EI acquisition (MC Dropout)     │
-│ Assembly awareness      │ None → Icosahedral face compatibility at Scale 4  │
-│ Trainable params        │ ~7M connectors → ~12M (new connectors + heads)    │
-│ Frozen params           │ ~700M → ~700M (same pretrained backbones)         │
-└─────────────────────────┴──────────────────────────────────────────────────┘
-
-Full architecture:
-
-  Animal NRPS MSA (from Stage 0 databases)
-       │
-  ┌────▼────────────────────────────────────────────────┐
-  │  EvoFormer (48 blocks, FROZEN)                      │
-  │  OpenFold weights / ESMFold trunk                   │
-  └────┬───────────────────────────┬────────────────────┘
-       │ single_repr (B,L,256)     │ pair_repr (B,L,L,128)
-       │                           │
-  ┌────▼───────┐    ┌──────────────▼──────────────────┐
-  │Evol Cross  │    │ Triangular Pair Update Connector │  ← TRAINABLE
-  │Attention   │    │ (128→256 + triangular updates)   │
-  │(NEW in v2) │    └──────────────┬──────────────────┘
-  └────┬───────┘                   │
-       │        ┌──────────────────▼──────────────┐
-       │        │  Structural RAG (FAISS)          │  ← TRAINABLE
-       │        │  Retrieves K=5 similar A-domains │
-       │        └──────────────┬──────────────────┘
-       │                       │ retrieved_context
-       │        ┌──────────────▼──────────────────┐
-       │        │  Substrate Pocket Conditioner    │  ← TRAINABLE
-       │        │  SE(3)-aware ligand encoder      │
-       │        └──────────────┬──────────────────┘
-       │                       │ substrate_cond (B,L,L,256)
-       │                       ▼
-  ┌────▼──────────────────────────────────────────────┐
-  │  SE(3) OT-Flow Matching (FROZEN RFdiffusion base) │
-  │  + EvolCrossAttention connector (TRAINABLE)       │
-  │  + NRPS Constraint Encoder (TRAINABLE)            │
-  │  Bridge: bacterial NRPS → mammalian design         │
-  │  20 NFE with RK4 (was 200 NFE in v1)              │
-  └────────────────────┬──────────────────────────────┘
-                       │ backbone (B,L,4,3) N/CA/C/O coords
-                       ▼
-  ┌────────────────────────────────────────────────────┐
-  │  Multi-Scale Hierarchical Sequence Designer        │  ← TRAINABLE
-  │  Scale 1: ProteinMPNN residue GNN (FROZEN base)   │
-  │  Scale 2: Domain attention (A/T/C/TE/linker)      │
-  │  Scale 3: Module-module interface attention        │
-  │  Scale 4: Icosahedral face compatibility           │
-  │  Bidirectional: bottom-up AND top-down passes      │
-  └────────────────────┬──────────────────────────────┘
-                       │ sequence logits (B, L, 20)
-                       ▼
-  ┌────────────────────────────────────────────────────┐
-  │  Pareto Multi-Objective Head (TRAINABLE)           │
-  │  F1: Evolutionary plausibility (PoET)              │
-  │  F2: Structural stability (pLDDT proxy)            │
-  │  F3: Mammalian expression (CodonOpt critic)        │
-  │  F4: Substrate selectivity (Stachelhaus match)     │
-  │  F5: Icosahedral assembly compatibility            │
-  └────────────────────┬──────────────────────────────┘
-                       │
-  ┌────────────────────▼──────────────────────────────┐
-  │  Bayesian Uncertainty Estimator (MC Dropout)      │
-  │  + Expected Improvement Acquisition               │
-  │  → Ranked Pareto frontier for PROTEUS selection   │
-  └───────────────────────────────────────────────────┘
-
-Training modes:
-  1. Supervised fine-tuning (connector + head params only)
-  2. DPO from PROTEUS preference pairs (after each round)
-  3. Active learning loop with EI acquisition (ongoing)
-
-Usage:
-    chimera = CHIMERAv2.from_pretrained(
-        evoformer_ckpt   = 'openfold_weights.pt',
-        flow_ckpt        = 'rfdiffusion_weights.pt',
-        mpnn_ckpt        = 'proteinmpnn_weights.pt',
-    )
-
-    # Design new NRPS A-domain sequences
-    results = chimera.design(
-        nrps_msa          = msa_tokens,
-        source_backbone   = bacterial_nrps_frames,  # bridge start
-        design_constraints= nrps_constraints,
-        target_substrate  = "PHE",  # target Phe-activating A-domain
-        n_designs         = 500,
-        n_pareto_samples  = 50,     # return Pareto frontier of 50
-    )
-
-    # After PROTEUS round: DPO update
-    chimera.update_from_proteus(
-        survivors = list_of_surviving_sequences,
-        failures  = list_of_failed_sequences,
-        msa       = msa_tokens,
-    )
+This module is not the public canonical composition and is not production
+ready. Its former architecture narrative incorrectly implied pretrained
+OpenFold, RFdiffusion, and ProteinMPNN weights, enabled retrieval without a
+validated shared embedding space, and described deterministic RK4 sampling.
+The active public model is ``chimera.architecture.CanonicalCHIMERAv2``. This
+legacy implementation must not be used to substantiate model capability or
+training status.
 """
 
 import torch
@@ -150,22 +48,17 @@ from .multi_objective import (
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PRETRAINED BACKBONE STUBS (Replace with actual checkpoints)
+# LEGACY LOCAL APPROXIMATIONS (random initialization; no native weights)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 
 
 class FlowMatchingBackbone(nn.Module):
-    """
-    Wraps SE3FlowMatching with RFdiffusion-pretrained weights.
-    In production: load from rfdiffusion_weights.pt and replace
-    the denoiser with the flow matching velocity field.
-    """
+    """Legacy local SE(3) flow approximation; it is not RFdiffusion."""
 
     def __init__(self, d_single: int = 256, d_pair: int = 256, n_blocks: int = 8):
         super().__init__()
-        # In production: load RFdiffusion weights and attach flow matching head
         self.flow_model = SE3FlowMatching(d_single, d_pair, n_blocks)
         self.frozen_bridge = nn.Sequential(
             nn.Linear(d_single, d_single * 8),
@@ -174,9 +67,7 @@ class FlowMatchingBackbone(nn.Module):
             nn.GELU(),
             nn.Linear(d_single * 8, d_single),
         )
-        print(
-            "[FlowMatchingBackbone] Flow matching loaded. Bridge: bacterial->mammalian."
-        )
+        print("[LegacyFlowMatchingBackbone] Random local approximation; not RFdiffusion.")
 
     def sample(
         self,
@@ -220,12 +111,7 @@ class FlowMatchingBackbone(nn.Module):
 
 
 class CHIMERAv2(nn.Module):
-    """
-    CHIMERA v2: Full rebuilt PSC Stage 1 computational design model.
-
-    Trainable: ~12M parameters (connectors + new heads)
-    Frozen:    ~700M parameters (EvoFormer + FlowMatching + ProteinMPNN)
-    """
+    """Deprecated compatibility composition; use canonical ``chimera.CHIMERAv2``."""
 
     def __init__(
         self,
@@ -247,7 +133,7 @@ class CHIMERAv2(nn.Module):
         self.n_mpnn_seqs = n_mpnn_seqs
         self.best_observed: Optional[float] = None
 
-        # ── FROZEN PRETRAINED BACKBONES ──────────────────────────────────────
+        # Legacy local modules start random and remain trainable.
         self.evoformer = EvoFormerBackbone(d_evo_single, d_evo_pair)
         self.flow_model = FlowMatchingBackbone(d_se3, d_pair_out, n_flow_blocks)
         self.base_mpnn = ProteinMPNNBackbone(d_mpnn)
@@ -303,9 +189,7 @@ class CHIMERAv2(nn.Module):
         self.pareto_head = ParetoMultiObjectiveHead(d_model=d_mpnn)
         self.objective_evaluator = BiologicalObjectiveEvaluator()
 
-        # Keep sequence representation aligned with the objective head dimension.
-        # This is intentionally tiny so the model stays majority-frozen in the
-        # Stage 1 architecture while still exposing a small trainable head.
+        # Sequence representation input projection.
         self._seq_to_repr = nn.Linear(20, d_mpnn)
         self.sequence_policy = AutoregressiveSequencePolicy(d_mpnn)
 
@@ -324,7 +208,7 @@ class CHIMERAv2(nn.Module):
         # Reference model for DPO (frozen copy of self at time of DPO init)
         self._reference_model: Optional["CHIMERAv2"] = None
 
-        # Freeze all pretrained backbones immediately
+        # No module is frozen without training/validation evidence.
         self.freeze_pretrained()
 
     # ── Setup / Loading ──────────────────────────────────────────────────────
@@ -361,39 +245,11 @@ class CHIMERAv2(nn.Module):
             load_checkpoint(model.base_mpnn, mpnn_ckpt, "ProteinMPNN")
 
         model.freeze_pretrained()
-        print(f"\n[CHIMERAv2] Ready:")
-        print(f"  Frozen:    {model.count_frozen():>12,} parameters")
-        print(f"  Trainable: {model.count_trainable():>12,} parameters")
+        print("[LegacyCHIMERAv2] Strictly loaded local state dicts; training status is unverified.")
         return model
 
     def freeze_pretrained(self):
-        for m in [
-            self.evoformer,
-            self.flow_model,
-            self.base_mpnn,
-            self.pair_connector,
-            self.evol_cross_attn,
-            self.node_connector,
-            self.constraint_encoder,
-            self.structural_retriever,
-            self.substrate_conditioner,
-            self.multi_scale_designer,
-            self.pareto_head,
-            self.uncertainty_estimator,
-            self.sequence_policy,
-        ]:
-            for p in m.parameters():
-                p.requires_grad = False
-
-        for p in self.ret_proj.parameters():
-            p.requires_grad = False
-        for p in self.sequence_policy.parameters():
-            p.requires_grad = False
-
-        # Keep only a tiny trainable projection so the test contract is satisfied
-        # without accidentally making the trainable side dominate the frozen
-        # backbone parameters.
-        self._seq_to_repr.requires_grad = True
+        """Deprecated no-op: this legacy class has no verified component-state contract."""
 
     def unfreeze_connectors(self):
         for m in [
@@ -426,7 +282,7 @@ class CHIMERAv2(nn.Module):
         return self.sequence_policy.logprob(context, sequence_tokens)
 
     def prepare_for_training(self):
-        """Freeze foundation backbones and expose only adaptation parameters."""
+        """Return trainable legacy parameters without freezing random local weights."""
         self.freeze_pretrained()
         self.unfreeze_connectors()
         return [p for p in self.parameters() if p.requires_grad]
@@ -438,12 +294,8 @@ class CHIMERAv2(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def init_dpo_reference(self):
-        """Call this before any DPO training: freezes current model as reference."""
-        self._reference_model = deepcopy(self)
-        for p in self._reference_model.parameters():
-            p.requires_grad = False
-        print(
-            "[CHIMERAv2] DPO reference model initialized (current state frozen as π_ref)"
+        raise RuntimeError(
+            "LegacyCHIMERAv2 cannot establish supervised validation; use CanonicalTrainer's validated preference regime."
         )
 
     def build_retrieval_index(self, embeddings: np.ndarray, metadata: List[dict]):
@@ -464,7 +316,7 @@ class CHIMERAv2(nn.Module):
         substrate_types: Optional[torch.Tensor] = None,  # (B, N_atoms, 8)
         n_flow_steps: Optional[int] = None,
         n_mpnn_seqs: Optional[int] = None,
-        use_rag: bool = True,
+        use_rag: bool = False,
     ) -> Dict[str, torch.Tensor]:
         B, N_seq, L = msa_tokens.shape
         device = msa_tokens.device
@@ -503,22 +355,12 @@ class CHIMERAv2(nn.Module):
         # STAGE B: Structural Retrieval (NEW v2)
         # ════════════════════════════════════════════════════════════════════
         retrieved_context = None
-        if (
-            substrate_id is not None
-            and use_rag
-            and self.structural_retriever.index_embs is not None
-        ):
-            substrate_tokens_for_retrieval = substrate_id.unsqueeze(-1)  # (B, 1)
-            _, retrieved_context = self.structural_retriever.retrieve(
-                query_embedding=self.structural_retriever.encode_query(
-                    substrate_id.unsqueeze(-1)
-                )
-            )
-            if retrieved_context is not None:
-                K = retrieved_context.shape[1]
-                retrieved_context = retrieved_context.reshape(B, K, -1).float()
-                # retrieved_context: (B, K, 30) → project to (B, K, d_pair_out)
-                retrieved_context = self.ret_proj(retrieved_context)
+        if not use_rag:
+            rag_status = "DISABLED"
+        elif self.structural_retriever.index_embs is None or self.structural_retriever.index_embs.shape[0] == 0:
+            rag_status = "RAG_UNAVAILABLE: index not configured"
+        else:
+            rag_status = "RAG_UNAVAILABLE: query/index embedding spaces are not aligned"
 
         # ════════════════════════════════════════════════════════════════════
         # STAGE C: Pair Connector — triangular updates + retrieval
@@ -608,13 +450,14 @@ class CHIMERAv2(nn.Module):
         # Multi-scale hierarchical design (NEW v2)
         # Build geometric residue graph from the generated backbone.
         K_nn = 32  # k-NN
-        edge_index, edge_feats, _ = get_protein_graph(
+        edge_index, edge_feats, edge_mask = get_protein_graph(
             t_final, R_final, k_neighbors=K_nn
         )
         if edge_index.shape[-1] < K_nn:
             pad = K_nn - edge_index.shape[-1]
             edge_index = F.pad(edge_index, (0, pad), value=0)
             edge_feats = F.pad(edge_feats, (0, 0, 0, pad), value=0.0)
+            edge_mask = F.pad(edge_mask, (0, pad), value=False)
 
         geometry = validate_backbone(backbone_coords, R_final)
 
@@ -658,6 +501,7 @@ class CHIMERAv2(nn.Module):
                 domain_boundaries=d_bounds,
                 module_boundaries=m_bounds,
                 icosahedral_face=face_id,
+                edge_mask=edge_mask,
             )  # (B, L, 20)
             all_logits.append(logits + torch.randn_like(logits))
 
@@ -716,9 +560,10 @@ class CHIMERAv2(nn.Module):
             "assembly_compat": pareto_objectives.assembly_compatibility,  # (B, n_seqs)
             "pareto_objectives": pareto_objectives,
             "pair_cond": pair_cond,  # for debugging
-            "single_repr": single_repr,  # for PoET scoring
-            "geometry_valid": torch.tensor(geometry.valid, device=device),
+            "single_repr": single_repr,  # raw local MSA representation; no PoET scorer is connected
+            "geometry_valid": torch.tensor(geometry.candidate_valid, dtype=torch.bool, device=device),
             "geometry_report": geometry.as_dict(),
+            "rag_status": rag_status,
         }
 
     # ── High-Level Design API ────────────────────────────────────────────────
@@ -778,7 +623,7 @@ class CHIMERAv2(nn.Module):
         n_pareto_samples: int = 50,
         device: str = "cuda",
         flow_steps: Optional[int] = None,
-        use_rag: bool = True,
+        use_rag: bool = False,
         objective_weights: Optional[torch.Tensor] = None,
     ) -> Dict:
         """
@@ -973,36 +818,10 @@ class CHIMERAv2(nn.Module):
         n_dpo_steps: int = 50,
         learning_rate: float = 1e-5,
     ) -> Dict:
-        """
-        One-call interface: receive PROTEUS results, run DPO fine-tuning.
-
-        survivors: amino acid sequences that survived PROTEUS (expressed + active)
-        failures:  sequences that failed (expressed but inactive, or didn't express)
-        """
-        if self._reference_model is None:
-            print("[CHIMERAv2] Initializing DPO reference model (first PROTEUS round)")
-            self.init_dpo_reference()
-
-        assert (
-            len(survivors) > 0 and len(failures) > 0
-        ), "Need at least one survivor and one failure for DPO"
-
-        metrics = self.dpo_trainer.update_from_proteus_round(
-            policy_model=self,
-            reference_model=self._reference_model,
-            surviving_sequences=survivors,
-            failed_sequences=failures,
-            msa_tokens=msa,
-            pair_features=pair_features,
-            n_dpo_steps=n_dpo_steps,
-            learning_rate=learning_rate,
+        """Disabled: legacy state cannot establish supervised policy validation."""
+        raise RuntimeError(
+            "LegacyCHIMERAv2 preference updates are disabled; use CanonicalTrainer after held-out sequence validation."
         )
-
-        print(
-            f"[CHIMERAv2] PROTEUS DPO update complete. "
-            f"Reward margin: {metrics['reward_margin']:.3f}"
-        )
-        return metrics
 
     # ── Loss for Supervised Fine-Tuning ─────────────────────────────────────
 
@@ -1018,99 +837,10 @@ class CHIMERAv2(nn.Module):
         evol_single: Optional[torch.Tensor] = None,
         objective_labels: Optional[Dict] = None,
     ) -> Tuple[torch.Tensor, Dict]:
-
-        losses = {}
-
-        # ── Sequence recovery loss ───────────────────────────────────────────
-        B, n_seqs, L, vocab = outputs["sequences"].shape
-        seq_loss = F.cross_entropy(
-            outputs["sequences"].reshape(B * n_seqs, L, vocab).transpose(1, 2),
-            target_sequences.unsqueeze(1).expand(-1, n_seqs, -1).reshape(B * n_seqs, L),
+        """Disabled: the legacy mixed-loss API violates staged training contracts."""
+        raise RuntimeError(
+            "LegacyCHIMERAv2.compute_loss is disabled; use CanonicalTrainer with one explicit TrainingRegime."
         )
-        losses["seq"] = seq_loss
-        weight_seq = 1.0
-
-        # ── Flow matching loss (backbone geometry) ───────────────────────────
-        flow_loss = torch.tensor(0.0, device=seq_loss.device)
-        if (
-            target_R is not None
-            and target_t is not None
-            and source_R is not None
-            and source_t is not None
-        ):
-            flow_loss = self.flow_model.loss(
-                R0=source_R,
-                t0=source_t,
-                R1=target_R,
-                t1=target_t,
-                pair_cond=pair_cond if pair_cond is not None else outputs["pair_cond"],
-                evol_single=evol_single if evol_single is not None else outputs["single_repr"],
-            )
-            losses["flow"] = flow_loss
-        weight_flow = 0.5
-
-        # ── Pareto objective losses (PCGrad) ─────────────────────────────────
-        pareto_loss, pareto_metrics = self.pareto_head.pcgrad_loss(
-            objectives=outputs["pareto_objectives"],
-            labels=objective_labels or {},
-        )
-        losses["pareto"] = pareto_loss
-        losses.update({f"pareto_{k}": v for k, v in pareto_metrics.items()})
-        weight_pareto = 0.3
-
-        total = (
-            weight_seq * seq_loss
-            + weight_flow * flow_loss
-            + weight_pareto * pareto_loss
-        )
-
-        losses["total"] = total
-        return total, {
-            k: (v.item() if torch.is_tensor(v) else v) for k, v in losses.items()
-        }
-
-    # ── Utilities ────────────────────────────────────────────────────────────
-
-    def _frames_to_coords(
-        self,
-        R: torch.Tensor,  # (B, L, 3, 3)
-        t: torch.Tensor,  # (B, L, 3)
-    ) -> torch.Tensor:  # (B, L, 4, 3) N / CA / C / O
-        """Convert SE(3) backbone frames to atom coordinates."""
-        B, L, _, _ = R.shape
-        # Ideal local offsets (in Angstroms, local backbone frame)
-        offsets = torch.tensor(
-            [
-                [-0.527, 1.359, 0.0],  # N
-                [0.000, 0.000, 0.0],  # CA (origin)
-                [1.524, 0.000, 0.0],  # C
-                [2.200, -1.000, 0.0],  # O
-            ],
-            device=R.device,
-            dtype=R.dtype,
-        )  # (4, 3)
-
-        offsets = offsets.view(1, 1, 4, 3).expand(B, L, -1, -1)
-        coords = torch.einsum("blij,blkj->blki", R, offsets) + t.unsqueeze(2)
-        return coords
-
-    def save(self, path: str):
-        """Save only the trainable connector weights (not frozen backbones)."""
-        state = {
-            "pair_connector": self.pair_connector.state_dict(),
-            "evol_cross_attn": self.evol_cross_attn.state_dict(),
-            "node_connector": self.node_connector.state_dict(),
-            "constraint_encoder": self.constraint_encoder.state_dict(),
-            "structural_retriever": self.structural_retriever.state_dict(),
-            "substrate_conditioner": self.substrate_conditioner.state_dict(),
-            "multi_scale_designer": self.multi_scale_designer.state_dict(),
-            "pareto_head": self.pareto_head.state_dict(),
-            "seq_to_repr": self._seq_to_repr.state_dict(),
-            "ret_proj": self.ret_proj.state_dict(),
-            "sequence_policy": self.sequence_policy.state_dict(),
-        }
-        torch.save(state, path)
-        print(f"[CHIMERAv2] Connector weights saved to {path}")
 
     def load_connectors(self, path: str):
         """Load previously saved connector weights."""

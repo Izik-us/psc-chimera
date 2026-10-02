@@ -26,20 +26,12 @@ class GeometryReport:
     torsion_abs_max: float
     torsion_planarity_error: float
     clash_count: int
+    candidate_valid: tuple[bool, ...]
+    candidate_metrics: tuple[dict, ...] = ()
 
     @property
     def valid(self) -> bool:
-        return (
-            self.finite
-            and self.rotation_orthogonality_error < 1e-3
-            and self.rotation_determinant_error < 1e-3
-            and self.ca_bond_max_error < 0.5
-            and self.peptide_bond_mean < 2.0
-            and self.bond_length_max_error < 0.5
-            and self.bond_angle_max_error < 0.5
-            and self.torsion_planarity_error < 0.5
-            and self.clash_count == 0
-        )
+        return all(self.candidate_valid)
 
     def as_dict(self) -> Dict[str, float | bool | int]:
         return {
@@ -55,6 +47,8 @@ class GeometryReport:
             "torsion_planarity_error": self.torsion_planarity_error,
             "clash_count": self.clash_count,
             "valid": self.valid,
+            "candidate_valid": list(self.candidate_valid),
+            "candidate_metrics": list(self.candidate_metrics),
         }
 
 
@@ -68,13 +62,39 @@ def validate_backbone(
         raise ValueError("coords must have shape (B, L, 4, 3)")
     if clash_distance <= 0:
         raise ValueError("clash_distance must be positive")
+    if coords.shape[0] < 1:
+        raise ValueError("coords batch must not be empty")
+    if rotations is not None and rotations.shape != (*coords.shape[:2], 3, 3):
+        raise ValueError("rotations must have shape (B, L, 3, 3)")
+    if coords.shape[0] > 1:
+        reports = [
+            validate_backbone(
+                coords[index:index + 1],
+                rotations[index:index + 1] if rotations is not None else None,
+                clash_distance,
+            )
+            for index in range(coords.shape[0])
+        ]
+        return GeometryReport(
+            finite=all(report.finite for report in reports),
+            rotation_orthogonality_error=max(report.rotation_orthogonality_error for report in reports),
+            rotation_determinant_error=max(report.rotation_determinant_error for report in reports),
+            ca_bond_mean=sum(report.ca_bond_mean for report in reports) / len(reports),
+            ca_bond_max_error=max(report.ca_bond_max_error for report in reports),
+            peptide_bond_mean=sum(report.peptide_bond_mean for report in reports) / len(reports),
+            bond_length_max_error=max(report.bond_length_max_error for report in reports),
+            bond_angle_max_error=max(report.bond_angle_max_error for report in reports),
+            torsion_abs_max=max(report.torsion_abs_max for report in reports),
+            torsion_planarity_error=max(report.torsion_planarity_error for report in reports),
+            clash_count=sum(report.clash_count for report in reports),
+            candidate_valid=tuple(report.valid for report in reports),
+            candidate_metrics=tuple(report.as_dict() for report in reports),
+        )
     finite = bool(torch.isfinite(coords).all())
     if rotations is None:
         rotation_error = 0.0
         determinant_error = 0.0
     else:
-        if rotations.shape != (*coords.shape[:2], 3, 3):
-            raise ValueError("rotations must have shape (B, L, 3, 3)")
         identity = torch.eye(3, device=rotations.device, dtype=rotations.dtype)
         rotation_error = float(
             (rotations.transpose(-1, -2) @ rotations - identity).abs().max()
@@ -193,6 +213,17 @@ def validate_backbone(
     clash_mask = (distances < clash_distance) & ~excluded.unsqueeze(0)
     clash_count = int(clash_mask.sum().item() // 2)
 
+    metric_values = (
+        finite
+        and rotation_error < 1e-3
+        and determinant_error < 1e-3
+        and (float(ca_error.max()) if ca_error.numel() else 0.0) < 0.5
+        and (float(c_to_n.mean()) if c_to_n.numel() else 0.0) < 2.0
+        and float(bond_error) < 0.5
+        and float(angle_error) < 0.5
+        and float(planarity_error) < 0.5
+        and clash_count == 0
+    )
     return GeometryReport(
         finite=finite,
         rotation_orthogonality_error=rotation_error,
@@ -205,4 +236,5 @@ def validate_backbone(
         torsion_abs_max=float(torsion_abs),
         torsion_planarity_error=float(planarity_error),
         clash_count=clash_count,
+        candidate_valid=(bool(metric_values),),
     )

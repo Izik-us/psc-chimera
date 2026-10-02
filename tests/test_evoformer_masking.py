@@ -35,3 +35,32 @@ def test_msa_mask_semantics_are_true_means_padding():
     assert torch.count_nonzero(single[:, 2]) == 0
     assert torch.count_nonzero(pair[:, 2]) == 0
     assert torch.count_nonzero(pair[:, :, 2]) == 0
+
+
+def test_msa_representation_exchanges_information_across_sequences():
+    torch.manual_seed(31)
+    encoder = EvoFormerBackbone(d_single=32, d_pair=16).eval()
+    tokens_a = torch.tensor([[[1, 2, 3, 4], [5, 6, 7, 8]]])
+    tokens_b = tokens_a.clone()
+    tokens_b[0, 0, 1] = 9
+
+    encoded_a = encoder.encode_msa(tokens_a)
+    encoded_b = encoder.encode_msa(tokens_b)
+
+    assert not torch.allclose(encoded_a[0, 1], encoded_b[0, 1])
+
+
+def test_masked_msa_reconstruction_trains_encoder_and_head():
+    torch.manual_seed(32)
+    encoder = EvoFormerBackbone(d_single=32, d_pair=16)
+    tokens = torch.tensor([[[1, 2, 3, 4], [5, 6, 7, 8]]])
+    loss = encoder.masked_reconstruction_loss(
+        tokens,
+        mask_probability=1.0,
+        generator=torch.Generator().manual_seed(4),
+    )
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert encoder.msa_column_encoder.layers[0].self_attn.in_proj_weight.grad is not None
+    assert encoder.reconstruction_head.weight.grad is not None

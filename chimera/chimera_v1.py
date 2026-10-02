@@ -1,66 +1,11 @@
-"""
-CHIMERA — Compositional Hierarchical Inference Model for
-          Evolutionary Representation and Architecture
-==========================================================
+"""Archived CHIMERA v1 compatibility implementation.
 
-The complete Stage 1 hybrid model of the PSC Engineering Pipeline.
-Integrates three pretrained architectures via novel connector modules
-that are the only trainable components during fine-tuning.
-
-Architecture:
-    ┌─────────────────────────────────────────────────────────┐
-    │                    CHIMERA                              │
-    │                                                         │
-    │  Animal NRPS MSA                                        │
-    │       │                                                 │
-    │  ┌────▼────────────┐                                    │
-    │  │   EvoFormer     │  (frozen pretrained weights)       │
-    │  │  48 blocks      │                                    │
-    │  └────┬────────────┘                                    │
-    │       │                                                 │
-    │   single_repr (B,L,256)    pair_repr (B,L,L,128)       │
-    │       │                         │                       │
-    │  ┌────▼──────────┐  ┌───────────▼───────────────┐      │
-    │  │ node_projection│  │   pair_projection         │  ← NOVEL CONNECTORS │
-    │  │ (256→128)     │  │   (128→256) + cross-attn  │      │
-    │  └────┬──────────┘  └───────────┬───────────────┘      │
-    │       │                         │                       │
-    │       │             ┌───────────▼──────────────┐        │
-    │       │             │   SE3Denoiser (8 blocks)  │        │
-    │       │             │   IPA conditioned on      │        │
-    │       │             │   projected pair_repr     │        │
-    │       │             └───────────┬──────────────┘        │
-    │       │                         │                       │
-    │       │             (B,L,3,3) R, (B,L,3) t             │
-    │       │                         │                       │
-    │  ┌────▼──────────────────────────▼──────────┐           │
-    │  │           ProteinMPNN                    │           │
-    │  │  node = geometric_features +             │           │
-    │  │         evol_node_features (from EvoF)   │           │
-    │  └────────────────────┬─────────────────────┘           │
-    │                       │                                 │
-    │              logits (B, L, 20)                          │
-    │              + PoET score feedback                      │
-    └───────────────────────┘─────────────────────────────────┘
-
-Trainable parameters: ~7M (connectors only)
-Frozen parameters:    ~700M (pretrained EvoFormer + SE3 + MPNN)
-
-Usage:
-    chimera = CHIMERA.from_pretrained(
-        evoformer_checkpoint='openfold_weights.pt',
-        se3_checkpoint='rfdiffusion_weights.pt',
-        mpnn_checkpoint='proteinmpnn_weights.pt',
-    )
-    # Fine-tune on NRPS-specific data
-    chimera.freeze_pretrained()   # freeze base models
-    chimera.unfreeze_connectors() # train only connectors
-
-    sequences, backbones = chimera(
-        nrps_msa=msa_tokens,              # animal NRPS MSA from Stage 0
-        design_constraints=constraints,    # A-domain hotspot residues
-        n_diffusion_steps=200,
-    )
+This implementation is not the public canonical model. Historical pretrained,
+PoET, and biological-performance descriptions are not verified properties of
+the available code or checkpoints. Checkpoint loading is restricted to exact
+local state-dict schemas; native OpenFold, RFdiffusion, and ProteinMPNN weights
+require their own upstream adapters. Use ``chimera.CHIMERAv2`` and
+``CanonicalTrainer`` for the staged architecture and training contract.
 """
 
 import torch
@@ -240,8 +185,8 @@ class CHIMERA(nn.Module):
     For NRPS A-domain reprogramming:
       Input MSA = animal NRPS family (Stage 0 sequences)
       Constraints = target substrate binding pocket geometry (theozyme)
-      Output = sequences predicted to fold correctly AND maintain evolutionary
-               plausibility within the animal NRPS family
+    Historical intended output only; this implementation does not establish
+    foldability or experimentally validated evolutionary plausibility.
 
     For de novo insert domain design:
       Input MSA = closest known enzyme family for target chemistry
@@ -299,13 +244,7 @@ class CHIMERA(nn.Module):
         self.n_diffusion_steps = n_diffusion_steps
 
     def freeze_pretrained(self):
-        """Freeze all pretrained model weights. Train only connectors."""
-        for param in self.evoformer.parameters():
-            param.requires_grad = False
-        for param in self.se3denoiser.parameters():
-            param.requires_grad = False
-        for param in self.mpnn.parameters():
-            param.requires_grad = False
+        """Deprecated no-op: this archived class has no verified pretrained state."""
 
     def unfreeze_connectors(self):
         """Ensure connector modules are trainable."""
@@ -424,7 +363,7 @@ class CHIMERA(nn.Module):
             "sequences": sequence_logits,  # (B, L, 20) — softmax for probabilities
             "R_frames": R_pred,  # (B, L, 3, 3)
             "t_coords": t_pred,  # (B, L, 3)
-            "poet_embedding": poet_emb,  # (B, L, 512) for PoET scoring
+            "poet_embedding": poet_emb,  # historical key; no PoET scorer is bundled
             "single_repr": single_repr,  # (B, L, 256) raw EvoFormer output
             "pair_repr": pair_cond,  # (B, L, L, 256) projected
         }
@@ -438,12 +377,11 @@ class CHIMERA(nn.Module):
         **kwargs,
     ) -> "CHIMERA":
         """
-        Instantiate CHIMERA and load pretrained weights.
+        Strictly load checkpoints exported for this exact archived module layout.
 
         Compatible checkpoint sources:
-          evoformer_checkpoint: OpenFold (openfold.github.io) or AlphaFold2 weights
-          se3_checkpoint:       RFdiffusion (github.com/RosettaCommons/RFdiffusion)
-          mpnn_checkpoint:      ProteinMPNN (github.com/dauparas/ProteinMPNN)
+          checkpoint inputs must match each local module's state-dict schema.
+          Native OpenFold/RFdiffusion/ProteinMPNN weights require native adapters.
         """
         model = cls(**kwargs)
 
@@ -455,18 +393,18 @@ class CHIMERA(nn.Module):
                 for k, v in state.items()
                 if "evoformer" in k
             }
-            model.evoformer.load_state_dict(evof_state, strict=False)
-            print(f"Loaded EvoFormer weights from {evoformer_checkpoint}")
+            model.evoformer.load_state_dict(evof_state, strict=True)
+            print(f"Loaded schema-compatible local MSA state from {evoformer_checkpoint}; training status is unverified")
 
         if se3_checkpoint:
             state = torch.load(se3_checkpoint, map_location="cpu")
-            model.se3denoiser.load_state_dict(state, strict=False)
-            print(f"Loaded SE3Denoiser weights from {se3_checkpoint}")
+            model.se3denoiser.load_state_dict(state, strict=True)
+            print(f"Loaded schema-compatible local SE(3) state from {se3_checkpoint}; training status is unverified")
 
         if mpnn_checkpoint:
             state = torch.load(mpnn_checkpoint, map_location="cpu")
-            model.mpnn.load_state_dict(state, strict=False)
-            print(f"Loaded ProteinMPNN weights from {mpnn_checkpoint}")
+            model.mpnn.load_state_dict(state, strict=True)
+            print(f"Loaded schema-compatible local sequence state from {mpnn_checkpoint}; training status is unverified")
 
         return model
 

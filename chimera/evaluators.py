@@ -5,6 +5,7 @@ experimental activity, or assembly free energy without the corresponding
 external model and calibration data.
 """
 
+from dataclasses import dataclass
 from typing import Dict
 
 import torch
@@ -13,6 +14,19 @@ import torch.nn.functional as F
 from .codon_optimizer import sliding_window_optimize
 from .geometry import validate_backbone
 from .icosahedral import interface_compatibility
+
+
+@dataclass(frozen=True)
+class ObjectiveOutput:
+    """A value together with its computational provenance and validity limits."""
+
+    name: str
+    value: torch.Tensor
+    source: str
+    calibrated: bool
+    differentiable: bool
+    uncertainty_available: bool
+    biological_measurement: bool = False
 
 
 class BiologicalObjectiveEvaluator:
@@ -57,11 +71,35 @@ class BiologicalObjectiveEvaluator:
             lo, hi = self.target_gc
             expression.append(max(0.0, 1.0 - max(lo - gc, gc - hi) / 0.5))
 
-        structural = torch.full(
-            (n,), 1.0 if geometry.valid else 0.0, dtype=torch.float32, device=sequences.device
+        structural = torch.tensor(
+            geometry.candidate_valid, dtype=torch.float32, device=sequences.device
         )
+        if structural.numel() == 1 and n > 1:
+            structural = structural.expand(n)
+        elif structural.numel() != n:
+            raise ValueError("geometry batch must be 1 or match candidate count")
         selectivity = self._selectivity(sequences).to(sequences.device)
         assembly = self._assembly(backbone_coords, rotations, faces, n)
+        objective_outputs = {
+            "evolutionary_plausibility": ObjectiveOutput(
+                "evolutionary_plausibility", self._sequence_entropy(sequences),
+                "normalized_sequence_entropy_proxy", False, False, False,
+            ),
+            "structural_validity": ObjectiveOutput(
+                "structural_validity", structural, "backbone_sanity_checks", False, False, False,
+            ),
+            "expression_efficiency": ObjectiveOutput(
+                "expression_efficiency", torch.tensor(expression, device=sequences.device),
+                "rule_based_codon_optimization_proxy", False, False, False,
+            ),
+            "substrate_selectivity": ObjectiveOutput(
+                "substrate_selectivity", selectivity, "target_profile_match_proxy", False, False, False,
+            ),
+            "assembly_compatibility": ObjectiveOutput(
+                "assembly_compatibility", assembly, "icosahedral_interface_geometry_proxy",
+                False, True, False,
+            ),
+        }
         return {
             # This is sequence entropy/complexity, not a PoET likelihood.
             "evolutionary_plausibility_proxy": self._sequence_entropy(sequences),
@@ -69,6 +107,7 @@ class BiologicalObjectiveEvaluator:
             "expression_proxy": torch.tensor(expression, device=sequences.device),
             "selectivity_proxy": selectivity,
             "assembly_proxy": assembly,
+            "objective_outputs": objective_outputs,
             "geometry": geometry.as_dict(),
         }
 

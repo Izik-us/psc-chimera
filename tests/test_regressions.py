@@ -58,6 +58,22 @@ def test_geometry_marks_degenerate_torsion_as_nonfinite():
     assert not report.valid
 
 
+def test_geometry_reports_mixed_candidate_validity_independently():
+    valid = torch.zeros(1, 1, 4, 3)
+    valid[0, 0, 0] = torch.tensor([1.46 * math.cos(1.91), 1.46 * math.sin(1.91), 0.0])
+    valid[0, 0, 2] = torch.tensor([1.53, 0.0, 0.0])
+    valid[0, 0, 3] = torch.tensor([1.53, 0.0, 1.23])
+    invalid = torch.zeros_like(valid)
+
+    report = validate_backbone(torch.cat([valid, invalid], dim=0))
+
+    assert report.candidate_valid == (True, False)
+    assert report.as_dict()["candidate_valid"] == [True, False]
+    assert report.candidate_metrics[0]["valid"] is True
+    assert report.candidate_metrics[1]["valid"] is False
+    assert report.valid is False
+
+
 def test_pcgrad_releases_graph_after_last_loss():
     parameter = torch.nn.Parameter(torch.tensor([1.0]))
     losses = [(parameter - 2).pow(2).sum(), (parameter + 2).pow(2).sum()]

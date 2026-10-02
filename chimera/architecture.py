@@ -1,6 +1,6 @@
 """Canonical CHIMERA v2 composition root.
 
-The local EvoFormer and ProteinMPNN backbones remain explicitly documented
+The local MSA and ProteinMPNN-inspired backbones remain explicitly documented
 approximations/stubs. Legacy ``CHIMERAv2`` remains isolated in
 ``chimera.chimera_v2`` for compatibility and is not instantiated here.
 """
@@ -8,7 +8,9 @@ approximations/stubs. Legacy ``CHIMERAv2`` remains isolated in
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 from typing import Optional, Dict, Tuple
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -18,7 +20,7 @@ import warnings
 from .bayesian import BayesianUncertaintyEstimator
 from .conditioning import SubstratePocketConditioner
 from .components import (
-    EvoFormerBackbone,
+    MSARepresentationBackbone,
     TriangularPairUpdateConnector,
     EvolCrossAttentionConnector,
     NodeProjectionConnector,
@@ -94,6 +96,7 @@ class CanonicalCHIMERAv2(nn.Module):
         self.d_se3 = d_se3
         self.d_pair_out = d_pair_out
         self.d_mpnn = d_mpnn
+        self.n_flow_blocks = n_flow_blocks
         self.n_flow_steps = n_flow_steps
         self.n_mpnn_seqs = n_mpnn_seqs
         self.n_domains = n_domains
@@ -102,7 +105,7 @@ class CanonicalCHIMERAv2(nn.Module):
         self._is_canonical_composition = True
         self._reference_policy: Optional[AutoregressiveSequencePolicy] = None
 
-        self.evoformer = EvoFormerBackbone(d_evo_single, d_evo_pair)
+        self.evoformer = MSARepresentationBackbone(d_evo_single, d_evo_pair)
         self.flow_model = FlowMatchingBackbone(d_se3, d_pair_out, n_flow_blocks)
         self.base_mpnn = ProteinMPNNBackbone(d_mpnn)
         self.pair_connector = TriangularPairUpdateConnector(d_evo_pair, d_pair_out)
@@ -131,7 +134,55 @@ class CanonicalCHIMERAv2(nn.Module):
         self.ret_proj = nn.Linear(30, d_pair_out)
         self.uncertainty_estimator = BayesianUncertaintyEstimator(n_samples=n_mc_dropout)
         self.dpo_trainer = DPOTrainer(beta=0.1)
-        self.freeze_pretrained()
+        self._component_names = (
+            "evoformer",
+            "flow_model",
+            "base_mpnn",
+            "pair_connector",
+            "evol_cross_attn",
+            "node_connector",
+            "constraint_encoder",
+            "structural_retriever",
+            "substrate_conditioner",
+            "multi_scale_designer",
+            "pareto_head",
+            "_seq_to_repr",
+            "sequence_policy",
+            "ret_proj",
+            "uncertainty_estimator",
+        )
+        self.component_status = {
+            name: {
+                "initialization": "random",
+                "training_status": "not_started",
+                "training_steps": 0,
+                "checkpoint_source": None,
+                "checkpoint_sha256": None,
+                "migration_status": "none",
+                "training_dataset_manifest": None,
+            }
+            for name in self._component_names
+        }
+        self.objective_calibration = {
+            name: None
+            for name in (
+                "evolutionary_plausibility",
+                "structural_stability",
+                "expression_efficiency",
+                "substrate_selectivity",
+                "assembly_compatibility",
+            )
+        }
+        self.objective_status = {
+            name: {
+                "initialization": "random",
+                "training_status": "not_started",
+                "training_steps": 0,
+                "label_sources": [],
+                "training_dataset_manifest": None,
+            }
+            for name in self.objective_calibration
+        }
 
     @classmethod
     def from_pretrained(
@@ -143,16 +194,17 @@ class CanonicalCHIMERAv2(nn.Module):
     ) -> "CanonicalCHIMERAv2":
         model = cls(**kwargs)
         modules = (
-            (model.evoformer, evoformer_ckpt, "EvoFormer approximation"),
-            (model.flow_model, flow_ckpt, "canonical flow backbone"),
-            (model.base_mpnn, mpnn_ckpt, "ProteinMPNN-inspired stub"),
+            ("evoformer", model.evoformer, evoformer_ckpt, "CHIMERA MSA approximation"),
+            ("flow_model", model.flow_model, flow_ckpt, "canonical SB flow backbone"),
+            ("base_mpnn", model.base_mpnn, mpnn_ckpt, "ProteinMPNN-inspired local module"),
         )
-        for module, path, name in modules:
+        for component_name, module, path, name in modules:
             if path is None:
                 continue
-            checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+            checkpoint_path = Path(path).expanduser().resolve()
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             state = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
-            if name == "canonical flow backbone":
+            if component_name == "flow_model":
                 state = cls._migrate_flow_state_dict(state, module.state_dict())
             try:
                 module.load_state_dict(state, strict=True)
@@ -161,7 +213,11 @@ class CanonicalCHIMERAv2(nn.Module):
                     f"{name} checkpoint is incompatible with this module: {path}; "
                     "native OpenFold/RFdiffusion/ProteinMPNN checkpoints need explicit adapters"
                 ) from exc
-        model.freeze_pretrained()
+            model.component_status[component_name].update(
+                initialization="loaded_unverified",
+                checkpoint_source=str(checkpoint_path),
+                checkpoint_sha256=hashlib.sha256(checkpoint_path.read_bytes()).hexdigest(),
+            )
         return model
 
     @staticmethod
@@ -277,51 +333,153 @@ class CanonicalCHIMERAv2(nn.Module):
         return migrated
 
     def freeze_pretrained(self) -> None:
-        frozen = (
-            self.evoformer,
-            self.flow_model,
-            self.base_mpnn,
-            self.pair_connector,
-            self.evol_cross_attn,
-            self.node_connector,
-            self.constraint_encoder,
-            self.structural_retriever,
-            self.substrate_conditioner,
-            self.multi_scale_designer,
-            self.pareto_head,
-            self.uncertainty_estimator,
-            self.sequence_policy,
-            self.ret_proj,
-        )
-        for module in frozen:
+        """Freeze only components explicitly marked trained, never random weights."""
+        for name in self._component_names:
+            if self.component_status[name]["training_status"] != "validated":
+                continue
+            module = getattr(self, name)
             for parameter in module.parameters():
                 parameter.requires_grad_(False)
-        for parameter in self._seq_to_repr.parameters():
-            parameter.requires_grad_(True)
 
     def unfreeze_connectors(self) -> None:
-        trainable = (
-            self.pair_connector,
-            self.evol_cross_attn,
-            self.node_connector,
-            self.constraint_encoder,
-            self.structural_retriever,
-            self.substrate_conditioner,
-            self.multi_scale_designer,
-            self.pareto_head,
-            self._seq_to_repr,
-            self.ret_proj,
-            self.uncertainty_estimator,
-            self.sequence_policy,
-        )
-        for module in trainable:
-            for parameter in module.parameters():
-                parameter.requires_grad_(True)
+        self.prepare_for_training("sequence")
 
-    def prepare_for_training(self) -> list[torch.nn.Parameter]:
-        self.freeze_pretrained()
-        self.unfreeze_connectors()
+    def prepare_for_training(self, regime: str = "sequence") -> list[torch.nn.Parameter]:
+        from .training import configure_trainable_components
+
+        configure_trainable_components(self, regime)
         return [parameter for parameter in self.parameters() if parameter.requires_grad]
+
+    def inference_readiness(self) -> dict:
+        """Report component training state; module existence is not readiness."""
+        required = (
+            "evoformer", "flow_model", "base_mpnn", "pair_connector",
+            "evol_cross_attn", "node_connector", "constraint_encoder",
+            "substrate_conditioner", "multi_scale_designer", "pareto_head",
+            "_seq_to_repr", "sequence_policy",
+        )
+        statuses = {name: dict(self.component_status[name]) for name in required}
+        incompatible = [name for name, state in statuses.items() if state["initialization"] == "incompatible_checkpoint"]
+        trained = [
+            name for name, state in statuses.items()
+            if state["training_status"] == "validated"
+            and state.get("training_dataset_manifest")
+            and state.get("validation", {}).get("dataset_manifest")
+        ]
+        if incompatible:
+            state = "INCOMPATIBLE_CHECKPOINT"
+        elif (
+            len(trained) == len(required)
+            and all(
+                state["training_status"] == "validated"
+                and state.get("training_dataset_manifest")
+                and state.get("validation", {}).get("dataset_manifest")
+                for state in self.objective_status.values()
+            )
+            and all(self.objective_calibration.values())
+        ):
+            state = "TRAINED"
+        elif trained:
+            state = "PARTIALLY_TRAINED"
+        else:
+            state = "UNINITIALIZED"
+        reasons = []
+        if len(trained) != len(required):
+            reasons.append("one or more required components are not marked trained")
+        if not all(self.objective_calibration.values()):
+            reasons.append("one or more objective predictors lack calibration evidence")
+        if any(
+            state["training_status"] != "validated"
+            or not state.get("training_dataset_manifest")
+            or not state.get("validation", {}).get("dataset_manifest")
+            for state in self.objective_status.values()
+        ):
+            reasons.append("one or more objective heads have no supervised labels")
+        if len(trained) != len(required):
+            reasons.append("one or more model components lack held-out validation")
+        return {"state": state, "components": statuses, "reasons": reasons}
+
+    def objective_provenance(self) -> dict[str, dict]:
+        return {
+            name: {
+                "source": (
+                    "validated_neural_surrogate"
+                    if state["training_status"] == "validated"
+                    else "loaded_unverified_neural_surrogate"
+                    if state["initialization"] == "loaded_unverified"
+                    else "random_neural_surrogate"
+                    if state["training_steps"] == 0
+                    else "unvalidated_neural_surrogate"
+                ),
+                "initialization": state["initialization"],
+                "training_status": state["training_status"],
+                "training_steps": state["training_steps"],
+                "label_sources": list(state["label_sources"]),
+                "calibrated": self.objective_calibration[name] is not None,
+                "differentiable": True,
+                "uncertainty_available": self.objective_calibration[name] is not None and state["training_status"] == "validated",
+                "biological_measurement": False,
+            }
+            for name, state in self.objective_status.items()
+        }
+
+    def record_objective_calibration(
+        self,
+        name: str,
+        predicted_mean: torch.Tensor,
+        epistemic_std: torch.Tensor,
+        targets: torch.Tensor,
+        *,
+        calibration_manifest: str,
+    ) -> dict[str, float | int | str]:
+        """Record empirical held-out calibration evidence for one objective predictor."""
+        if name not in self.objective_status:
+            raise ValueError(f"unknown objective: {name}")
+        status = self.objective_status[name]
+        validation = status.get("validation")
+        if status["training_status"] != "validated" or not validation:
+            raise RuntimeError("objective must be trained and held-out validated before calibration")
+        if not calibration_manifest:
+            raise ValueError("calibration_manifest is required")
+        used_manifests = {
+            status.get("training_dataset_manifest"),
+            validation.get("dataset_manifest"),
+        }
+        if calibration_manifest in used_manifests:
+            raise ValueError("calibration data must be distinct from training and validation data")
+        if predicted_mean.shape != epistemic_std.shape or predicted_mean.shape != targets.shape:
+            raise ValueError("calibration predictions, uncertainty, and targets must have matching shapes")
+        if predicted_mean.numel() < 30:
+            raise ValueError("uncertainty calibration requires at least 30 held-out examples")
+        if not all(torch.isfinite(value).all() for value in (predicted_mean, epistemic_std, targets)):
+            raise ValueError("calibration data must be finite")
+        if torch.any(epistemic_std < 0):
+            raise ValueError("epistemic_std must be non-negative")
+        residual = targets - predicted_mean
+        one_sigma_coverage = float((residual.abs() <= epistemic_std).float().mean())
+        if not 0.58 <= one_sigma_coverage <= 0.78:
+            raise ValueError(
+                "one-sigma coverage is outside the accepted calibration band [0.58, 0.78]"
+            )
+        record = {
+            "method": "heldout_one_sigma_coverage",
+            "calibration_manifest": calibration_manifest,
+            "examples": int(predicted_mean.numel()),
+            "rmse": float(residual.square().mean().sqrt()),
+            "mae": float(residual.abs().mean()),
+            "one_sigma_coverage": one_sigma_coverage,
+        }
+        self.objective_calibration[name] = record
+        return record
+
+    def require_inference_ready(self, *, allow_experimental: bool = False) -> dict:
+        readiness = self.inference_readiness()
+        if readiness["state"] != "TRAINED" and not allow_experimental:
+            raise RuntimeError(
+                f"Canonical CHIMERA is {readiness['state']}; production inference requires "
+                "trained components and calibrated objectives. Use explicit experimental mode to proceed."
+            )
+        return readiness
 
     def count_frozen(self) -> int:
         return sum(parameter.numel() for parameter in self.parameters() if not parameter.requires_grad)
@@ -330,9 +488,15 @@ class CanonicalCHIMERAv2(nn.Module):
         return sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad)
 
     def init_dpo_reference(self) -> None:
-        self._reference_policy = deepcopy(self.sequence_policy).eval()
-        for parameter in self._reference_policy.parameters():
+        policy_status = self.component_status["sequence_policy"]
+        if policy_status["training_status"] != "validated" or not policy_status.get("validation"):
+            raise RuntimeError(
+                "DPO reference initialization requires a supervised, validated sequence policy"
+            )
+        reference_policy = deepcopy(self.sequence_policy).eval()
+        for parameter in reference_policy.parameters():
             parameter.requires_grad_(False)
+        object.__setattr__(self, "_reference_policy", reference_policy)
 
     def build_retrieval_index(self, embeddings, metadata) -> None:
         self.structural_retriever.build_index(embeddings, metadata)
@@ -479,11 +643,14 @@ class CanonicalCHIMERAv2(nn.Module):
             )
 
         retrieved_context = None
-        if use_rag and substrate_id is not None and self.structural_retriever.index_embs is not None:
-            raise RuntimeError(
-                "Structural retrieval is provisional: the learned substrate query encoder "
-                "is not aligned to the externally supplied structure embedding space."
-            )
+        if not use_rag:
+            rag_status = "DISABLED"
+        elif self.structural_retriever.index_embs is None or self.structural_retriever.index_embs.shape[0] == 0:
+            rag_status = "RAG_UNAVAILABLE: index not configured"
+        elif substrate_id is None:
+            rag_status = "RAG_UNAVAILABLE: substrate query missing"
+        else:
+            rag_status = "RAG_UNAVAILABLE: query/index embedding spaces are not aligned"
         pair_cond = self.pair_connector(pair_repr, retrieved_context)
         if substrate_id is not None:
             substrate_id = substrate_id.to(device=device, dtype=torch.long)
@@ -559,6 +726,7 @@ class CanonicalCHIMERAv2(nn.Module):
                 domain_boundaries=domain_bounds,
                 module_boundaries=module_bounds,
                 icosahedral_face=face_id,
+                edge_mask=edge_mask,
             ))
         logits = torch.stack(logits_per_draw, dim=1)
         if constraints is not None and constraints.fixed_sequence is not None:
@@ -589,6 +757,30 @@ class CanonicalCHIMERAv2(nn.Module):
             substrate_selectivity=objective_flat.substrate_selectivity.reshape(B, n_draws),
             assembly_compatibility=objective_flat.assembly_compatibility.reshape(B, n_draws),
         )
+        candidate_coords = backbone_coords[:, None].expand(-1, n_draws, -1, -1, -1).reshape(
+            B * n_draws, L, 4, 3
+        )
+        candidate_rotations = R_final[:, None].expand(-1, n_draws, -1, -1, -1).reshape(
+            B * n_draws, L, 3, 3
+        )
+        candidate_faces = face_id[:, None].expand(-1, n_draws).reshape(B * n_draws)
+        proxy_evaluation = self.objective_evaluator.evaluate(
+            sampled.reshape(B * n_draws, L),
+            candidate_coords,
+            rotations=candidate_rotations,
+            faces=candidate_faces,
+        )
+        proxy_outputs = proxy_evaluation["objective_outputs"]
+        proxy_scores = torch.stack(
+            [
+                proxy_outputs["evolutionary_plausibility"].value,
+                proxy_outputs["structural_validity"].value,
+                proxy_outputs["expression_efficiency"].value,
+                proxy_outputs["substrate_selectivity"].value,
+                proxy_outputs["assembly_compatibility"].value,
+            ],
+            dim=-1,
+        ).reshape(B, n_draws, 5)
         return {
             "sequences": F.one_hot(sampled, num_classes=20).to(logits.dtype),
             "sequence_tokens": sampled,
@@ -606,8 +798,12 @@ class CanonicalCHIMERAv2(nn.Module):
             "pareto_objectives": objectives,
             "pair_cond": pair_cond,
             "single_repr": single_repr,
-            "geometry_valid": torch.tensor(geometry.valid, device=device),
+            "geometry_valid": torch.tensor(geometry.candidate_valid, dtype=torch.bool, device=device),
             "geometry_report": geometry.as_dict(),
+            "objective_provenance": self.objective_provenance(),
+            "objective_proxy_outputs": proxy_outputs,
+            "objective_proxy_scores": proxy_scores,
+            "rag_status": rag_status,
         }
 
     def sequence_policy_loss(
@@ -617,14 +813,22 @@ class CanonicalCHIMERAv2(nn.Module):
         padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Teacher-forced token loss, separate from no-grad sequence sampling."""
-        logits = self.sequence_policy(conditioning_context, target_sequence)
-        loss = F.cross_entropy(logits.transpose(1, 2), target_sequence, reduction="none")
+        if target_sequence.ndim != 2:
+            raise ValueError("target_sequence must have shape (B,L)")
+        if torch.any((target_sequence < 0) | (target_sequence > self.sequence_policy.vocab_size)):
+            raise ValueError("target_sequence contains tokens outside amino-acid vocabulary plus padding")
         if padding_mask is None:
-            return loss.mean()
+            padding_mask = target_sequence.eq(self.sequence_policy.vocab_size)
         if padding_mask.shape != target_sequence.shape or padding_mask.dtype != torch.bool:
             raise ValueError("padding_mask must be bool and match target_sequence")
-        valid = (~padding_mask).to(loss.dtype)
-        return (loss * valid).sum() / valid.sum().clamp_min(1)
+        padding_mask = padding_mask | target_sequence.eq(self.sequence_policy.vocab_size)
+        valid = ~padding_mask
+        if not valid.any():
+            raise ValueError("target_sequence must contain at least one supervised residue")
+        safe_targets = target_sequence.masked_fill(padding_mask, 0)
+        logits = self.sequence_policy(conditioning_context, safe_targets)
+        loss = F.cross_entropy(logits.transpose(1, 2), safe_targets, reduction="none")
+        return (loss * valid.to(loss.dtype)).sum() / valid.sum()
 
     def sequence_logprob(self, sequence_tokens, msa_tokens, pair_features, source_R, source_t):
         """Score candidate sequence under a deterministic MSA conditioning context."""
@@ -633,14 +837,14 @@ class CanonicalCHIMERAv2(nn.Module):
             context = self.node_connector(single)
         return self.sequence_policy.logprob(context, sequence_tokens)
 
-    def init_dpo_reference(self) -> None:
-        self._reference_policy = deepcopy(self.sequence_policy).eval()
-        for parameter in self._reference_policy.parameters():
-            parameter.requires_grad_(False)
-
     def update_from_proteus(self, survivors, failures, msa, pair_features, n_dpo_steps=50, learning_rate=1e-5, best_context_batch_index=0):
         if not survivors or not failures:
             raise ValueError("Need at least one survivor and one failure for DPO")
+        policy_status = self.component_status["sequence_policy"]
+        if policy_status["training_status"] != "validated" or not policy_status.get("validation"):
+            raise RuntimeError(
+                "PROTEUS preference updates require a supervised, validated sequence policy"
+            )
         if self._reference_policy is None:
             self.init_dpo_reference()
         if msa.ndim != 3 or pair_features.ndim != 4 or msa.shape[0] != pair_features.shape[0]:
@@ -663,13 +867,16 @@ class CanonicalCHIMERAv2(nn.Module):
         batch_context = context.expand(n_pairs, -1, -1).contiguous()
         mask = torch.ones_like(chosen, dtype=torch.bool)
         batch = DPOBatch(batch_context, chosen, rejected, mask, mask)
-        trainable = [parameter for parameter in self.sequence_policy.parameters() if parameter.requires_grad]
-        if not trainable:
-            raise RuntimeError("Sequence policy is frozen; call prepare_for_training first")
-        optimizer = torch.optim.AdamW(trainable, lr=learning_rate)
+        from .training import CanonicalTrainer, TrainingRegime
+
+        trainer = CanonicalTrainer(
+            self,
+            TrainingRegime.PREFERENCE,
+            learning_rate=learning_rate,
+        )
         metrics = {}
         for _ in range(n_dpo_steps):
-            metrics = self.dpo_trainer.step(optimizer, self.sequence_policy, self._reference_policy, batch)
+            metrics = trainer.train_preference_step(batch)
         return metrics
 
     def set_best_observed(self, value: Optional[float]) -> None:
@@ -690,7 +897,9 @@ class CanonicalCHIMERAv2(nn.Module):
         flow_steps: Optional[int] = None,
         use_rag: bool = False,
         objective_weights: Optional[torch.Tensor] = None,
+        experimental: bool = False,
     ) -> Dict:
+        readiness = self.require_inference_ready(allow_experimental=experimental)
         if n_designs < 1 or n_pareto_samples < 1 or n_pareto_samples > n_designs:
             raise ValueError("design counts must satisfy 1 <= n_pareto_samples <= n_designs")
         if target_substrate not in SUBSTRATE_TOKENS:
@@ -705,8 +914,9 @@ class CanonicalCHIMERAv2(nn.Module):
                 if value is not None and value.shape[0] != 1:
                     raise ValueError(f"design constraints {name} must have batch size 1")
         batch_size = min(8, n_designs)
-        sequences, objective_batches = [], []
+        sequences, objective_batches, proxy_batches = [], [], []
         objective_contexts = []
+        rag_statuses = []
         remaining = n_designs
         while remaining:
             current = min(batch_size, remaining)
@@ -722,6 +932,7 @@ class CanonicalCHIMERAv2(nn.Module):
                 use_rag=use_rag,
             )
             sequences.append(outputs["sequence_tokens"][:, 0].detach().cpu())
+            rag_statuses.append(outputs["rag_status"])
             objective_contexts.append(outputs["objective_context"][:, 0].detach())
             objective_batches.append(torch.stack([
                 outputs["evol_plausibility"][:, 0],
@@ -730,13 +941,33 @@ class CanonicalCHIMERAv2(nn.Module):
                 outputs["substrate_selectivity"][:, 0],
                 outputs["assembly_compat"][:, 0],
             ], dim=-1).detach().cpu())
+            proxy_batches.append(outputs["objective_proxy_scores"][:, 0].detach().cpu())
             remaining -= current
         all_sequences = torch.cat(sequences)[:n_designs]
-        all_objectives = torch.cat(objective_batches)[:n_designs]
+        if readiness["state"] == "TRAINED":
+            all_objectives = torch.cat(objective_batches)[:n_designs]
+            ranking_source = "validated_calibrated_neural_surrogates"
+            objective_names = [
+                "evolutionary_plausibility", "structural_stability",
+                "expression_efficiency", "substrate_selectivity", "assembly_compatibility",
+            ]
+        else:
+            all_objectives = torch.cat(proxy_batches)[:n_designs]
+            ranking_source = "deterministic_proxy_evaluator"
+            objective_names = [
+                "normalized_sequence_entropy_proxy", "backbone_sanity_validity",
+                "rule_based_codon_optimization_proxy", "target_profile_match_proxy",
+                "icosahedral_interface_geometry_proxy",
+            ]
         pareto_front, pareto_indices = self.pareto_head.compute_pareto_frontier(all_objectives)
         acquisition_scores = torch.zeros(n_designs)
         acquisition_status = "not computed: explicit objective_weights and historical best_observed are required"
-        if self.best_observed is not None and objective_weights is not None:
+        if (
+            self.best_observed is not None
+            and objective_weights is not None
+            and readiness["state"] == "TRAINED"
+            and self.component_status["pareto_head"]["training_status"] == "validated"
+        ):
             objective_context = torch.cat(objective_contexts, dim=0)[:n_designs]
 
             def normalized_objectives(result):
@@ -793,6 +1024,11 @@ class CanonicalCHIMERAv2(nn.Module):
             "acquisition_scores": acquisition_scores,
             "acquisition_status": acquisition_status,
             "total_generated": int(all_sequences.shape[0]),
+            "readiness": readiness,
+            "objective_provenance": self.objective_provenance(),
+            "ranking_source": ranking_source,
+            "objective_names": objective_names,
+            "rag_status": rag_statuses[0] if rag_statuses and len(set(rag_statuses)) == 1 else "MIXED",
         }
 
     @torch.no_grad()
@@ -811,6 +1047,7 @@ class CanonicalCHIMERAv2(nn.Module):
 
     def load_connectors(self, path: str) -> None:
         state = torch.load(path, map_location="cpu", weights_only=False)
+        checkpoint_path = Path(path).expanduser().resolve()
         for name, values in state.items():
             module_name = "_seq_to_repr" if name == "seq_to_repr" else name
             if not hasattr(self, module_name):
@@ -822,6 +1059,15 @@ class CanonicalCHIMERAv2(nn.Module):
                 )
             if module_name == "multi_scale_designer":
                 values = dict(values)
+                edge_type_key = "edge_type_embedding.weight"
+                if edge_type_key not in values:
+                    values[edge_type_key] = self.multi_scale_designer.edge_type_embedding.weight.detach().cpu().clone()
+                    self.component_status[module_name]["migration_status"] = "new edge-type embeddings retain random initialization"
+                    warnings.warn(
+                        "Legacy multi-scale checkpoint has no edge-type embeddings; initialized these new parameters randomly and left them trainable.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
                 legacy_edge_weight = values.get("edge_proj.weight")
                 current_edge_weight = self.multi_scale_designer.edge_proj.weight
                 if (
@@ -841,6 +1087,12 @@ class CanonicalCHIMERAv2(nn.Module):
                         stacklevel=2,
                     )
             getattr(self, module_name).load_state_dict(values, strict=True)
+            if module_name in self.component_status:
+                self.component_status[module_name].update(
+                    initialization="loaded_unverified",
+                    checkpoint_source=str(checkpoint_path),
+                    checkpoint_sha256=hashlib.sha256(checkpoint_path.read_bytes()).hexdigest(),
+                )
 
 
 CHIMERAv2 = CanonicalCHIMERAv2

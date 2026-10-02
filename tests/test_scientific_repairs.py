@@ -10,6 +10,7 @@ from chimera.lie import relative_rotation, so3_exp as canonical_so3_exp, so3_log
 from chimera.icosahedral import icosahedral_face_normals, icosahedron_vertices_and_faces
 from chimera.pcgrad import project_conflicting_gradients
 from chimera.schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
+from chimera.evaluators import BiologicalObjectiveEvaluator, ObjectiveOutput
 
 
 def test_so3_log_exp_roundtrip():
@@ -147,3 +148,22 @@ def test_dropout_uncertainty_restores_mode():
     assert not model.training
     assert result["mean"].shape == (4, 1)
     assert result["epistemic_std"].shape == (4, 1)
+
+
+def test_objective_evaluator_reports_proxy_provenance_and_nonbiological_status():
+    sequences = torch.tensor([[0, 1, 2, 3], [4, 5, 6, 7]])
+    coords = torch.zeros(1, 4, 4, 3)
+
+    result = BiologicalObjectiveEvaluator().evaluate(sequences, coords)
+
+    entropy = result["objective_outputs"]["evolutionary_plausibility"]
+    expression = result["objective_outputs"]["expression_efficiency"]
+    assembly = result["objective_outputs"]["assembly_compatibility"]
+    assert isinstance(entropy, ObjectiveOutput)
+    assert entropy.source == "normalized_sequence_entropy_proxy"
+    assert entropy.biological_measurement is False
+    assert expression.source == "rule_based_codon_optimization_proxy"
+    assert expression.calibrated is False
+    assert assembly.source == "icosahedral_interface_geometry_proxy"
+    assert assembly.differentiable is True
+    assert result["structural_validity"].shape == (2,)
