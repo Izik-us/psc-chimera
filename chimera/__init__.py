@@ -43,6 +43,13 @@ from .training import (
     TrainingRegime,
     gradient_flow_report,
 )
+from .objective_schema import (
+    OBJECTIVE_SCHEMA,
+    OBJECTIVE_SCHEMA_VERSION,
+    objective_schema_hash,
+    validate_objective_target,
+)
+from .readiness import PreProductionGateEvidence, preproduction_readiness_report
 from .adapters import (
     BackboneEncoder,
     StructureGenerator,
@@ -78,4 +85,6 @@ __all__ = [
     "RFdiffusionCLIAdapter", "ProteinMPNNAdapter",
     "CanonicalTrainingBatch", "CanonicalTrainer", "TrainingRegime", "ObjectiveLabelKind",
     "gradient_flow_report",
+    "OBJECTIVE_SCHEMA", "OBJECTIVE_SCHEMA_VERSION", "objective_schema_hash",
+    "validate_objective_target", "PreProductionGateEvidence", "preproduction_readiness_report",
 ]

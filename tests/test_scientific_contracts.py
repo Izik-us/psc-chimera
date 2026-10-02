@@ -141,12 +141,11 @@ def test_canonical_pareto_head_performs_gradient_surgery():
         "stab": torch.zeros(2),
         "expr": torch.ones(2),
         "sel": torch.zeros(2),
-        "asm": torch.ones(2),
     }
     total, metrics = head.pcgrad_loss(objectives, labels)
     total.backward()
     assert torch.isfinite(total)
-    assert metrics["pcgrad_task_count"] == 5
+    assert metrics["pcgrad_task_count"] == 4
     for feature in features.values():
         assert feature.grad is not None and torch.isfinite(feature.grad).all()
 

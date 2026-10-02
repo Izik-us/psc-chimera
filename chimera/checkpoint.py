@@ -16,7 +16,8 @@ import subprocess
 class CheckpointManifest:
     """Machine-readable description of the architecture and provenance a checkpoint belongs to."""
 
-    format_version: int = 3
+    format_version: int = 4
+    serialization_revision: int = 1
     chimera_version: str = "2.0.0"
     transport: str = "se3_schrodinger_bridge"
     sequence_policy: str = "autoregressive"
@@ -38,8 +39,23 @@ class CheckpointManifest:
     python_version: str | None = None
     torch_version: str | None = None
     platform: str | None = None
+    numpy_version: str | None = None
+    cuda_available: bool | None = None
+    cuda_version: str | None = None
+    cudnn_version: int | None = None
+    cuda_device_names: str | None = None
+    deterministic_algorithms_enabled: bool | None = None
+    cudnn_deterministic: bool | None = None
+    cudnn_benchmark: bool | None = None
+    matmul_allow_tf32: bool | None = None
+    cudnn_allow_tf32: bool | None = None
     training_regime: str | None = None
     random_seed: int | None = None
+    min_validation_examples: int | None = None
+    optimizer_class: str | None = None
+    optimizer_hash: str | None = None
+    scheduler_class: str | None = None
+    scheduler_hash: str | None = None
 
     def has_complete_provenance(self) -> bool:
         required = (
@@ -56,13 +72,33 @@ class CheckpointManifest:
             "python_version",
             "torch_version",
             "platform",
+            "numpy_version",
             "training_regime",
+            "optimizer_class",
+            "optimizer_hash",
+            "scheduler_class",
+            "scheduler_hash",
         )
-        return all(getattr(self, name) for name in required) and self.git_worktree_clean is not None
+        runtime_flags = (
+            self.cuda_available,
+            self.deterministic_algorithms_enabled,
+            self.cudnn_deterministic,
+            self.cudnn_benchmark,
+            self.matmul_allow_tf32,
+            self.cudnn_allow_tf32,
+        )
+        return (
+            all(getattr(self, name) for name in required)
+            and self.git_worktree_clean is not None
+            and self.min_validation_examples is not None
+            and all(value is not None for value in runtime_flags)
+        )
 
     def validate(self, expected: "CheckpointManifest" | None = None) -> None:
-        if self.format_version not in (1, 2, 3):
+        if self.format_version not in (1, 2, 3, 4):
             raise ValueError(f"unsupported checkpoint format_version={self.format_version}")
+        if self.serialization_revision < 0:
+            raise ValueError("serialization_revision must be non-negative")
         if self.transport != "se3_schrodinger_bridge":
             raise ValueError("checkpoint does not declare the canonical SE(3) SB transport")
         if self.sequence_policy != "autoregressive":
@@ -79,6 +115,8 @@ class CheckpointManifest:
             "config_hash", "state_schema_hash", "objective_schema_hash", "git_commit", "source_tree_hash", "dataset_manifest",
             "dataset_version", "dataset_hash", "preprocessing_hash", "environment_hash",
             "python_version", "torch_version", "platform", "training_regime",
+            "numpy_version", "cuda_version", "cuda_device_names", "optimizer_class",
+            "optimizer_hash", "scheduler_class", "scheduler_hash",
         ):
             value = getattr(self, name)
             if value is not None and not isinstance(value, str):
@@ -87,29 +125,19 @@ class CheckpointManifest:
             raise ValueError("random_seed must be a non-negative integer or None")
         if self.git_worktree_clean is not None and not isinstance(self.git_worktree_clean, bool):
             raise ValueError("git_worktree_clean must be a boolean or None")
-        if expected is not None:
-            expected_dict = asdict(expected)
-            actual_dict = asdict(self)
-            if self.format_version in (1, 2):
-                unavailable_fields = (
-                    (
-                        "config_hash", "state_schema_hash", "objective_schema_hash", "git_commit",
-                        "git_worktree_clean", "source_tree_hash", "dataset_manifest", "dataset_version",
-                        "dataset_hash", "preprocessing_hash", "environment_hash", "python_version",
-                        "torch_version", "platform", "training_regime", "random_seed",
-                    )
-                    if self.format_version == 1
-                    else (
-                        "objective_schema_hash", "dataset_version", "training_regime", "random_seed",
-                        "git_worktree_clean", "source_tree_hash",
-                    )
-                )
-                for key in unavailable_fields:
-                    actual_dict.pop(key, None)
-                    expected_dict.pop(key, None)
-                expected_dict["format_version"] = self.format_version
-            if actual_dict != expected_dict:
-                raise ValueError("checkpoint manifest does not match the expected architecture contract")
+        for name in (
+            "cuda_available", "deterministic_algorithms_enabled", "cudnn_deterministic",
+            "cudnn_benchmark", "matmul_allow_tf32", "cudnn_allow_tf32",
+        ):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"{name} must be a boolean or None")
+        if self.cudnn_version is not None and not isinstance(self.cudnn_version, int):
+            raise ValueError("cudnn_version must be an integer or None")
+        if self.min_validation_examples is not None and (
+            not isinstance(self.min_validation_examples, int) or self.min_validation_examples < 1
+        ):
+            raise ValueError("min_validation_examples must be a positive integer or None")
 
 
 def state_schema_hash(state_dict: Mapping[str, Any]) -> str:
@@ -131,26 +159,70 @@ def config_hash(config: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def runtime_provenance() -> dict[str, str | None]:
+def runtime_provenance() -> dict[str, Any]:
+    try:
+        import numpy as np
+
+        numpy_version = str(np.__version__)
+    except Exception:
+        numpy_version = None
     try:
         import torch
 
         torch_version = str(torch.__version__)
+        cuda_available = bool(torch.cuda.is_available())
+        cuda_version = str(torch.version.cuda) if torch.version.cuda is not None else None
+        cudnn_version = torch.backends.cudnn.version()
+        cuda_device_names = (
+            json.dumps(
+                [torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())],
+                separators=(",", ":"),
+            )
+            if cuda_available else None
+        )
+        deterministic_algorithms_enabled = bool(torch.are_deterministic_algorithms_enabled())
+        cudnn_deterministic = bool(torch.backends.cudnn.deterministic)
+        cudnn_benchmark = bool(torch.backends.cudnn.benchmark)
+        matmul_allow_tf32 = bool(torch.backends.cuda.matmul.allow_tf32)
+        cudnn_allow_tf32 = bool(torch.backends.cudnn.allow_tf32)
     except Exception:
         torch_version = None
+        cuda_available = None
+        cuda_version = None
+        cudnn_version = None
+        cuda_device_names = None
+        deterministic_algorithms_enabled = None
+        cudnn_deterministic = None
+        cudnn_benchmark = None
+        matmul_allow_tf32 = None
+        cudnn_allow_tf32 = None
     result = {
         "python_version": platform.python_version(),
         "torch_version": torch_version,
         "platform": platform.platform(),
+        "numpy_version": numpy_version,
+        "cuda_available": cuda_available,
+        "cuda_version": cuda_version,
+        "cudnn_version": cudnn_version,
+        "cuda_device_names": cuda_device_names,
+        "deterministic_algorithms_enabled": deterministic_algorithms_enabled,
+        "cudnn_deterministic": cudnn_deterministic,
+        "cudnn_benchmark": cudnn_benchmark,
+        "matmul_allow_tf32": matmul_allow_tf32,
+        "cudnn_allow_tf32": cudnn_allow_tf32,
     }
-    result["environment_hash"] = (
-        config_hash(result) if all(result.values()) else None
+    required_runtime = (
+        result["python_version"],
+        result["torch_version"],
+        result["numpy_version"],
+        result["platform"],
     )
+    result["environment_hash"] = config_hash(result) if all(required_runtime) else None
     return result
 
 
 def git_provenance(repository_root: str | Path) -> dict[str, Any]:
-    """Return commit and source-tree identity without inventing missing Git metadata."""
+    """Hash commit, tracked source diffs, and only untracked source/config files."""
     root = Path(repository_root).resolve()
     try:
         commit = subprocess.check_output(
@@ -162,22 +234,34 @@ def git_provenance(repository_root: str | Path) -> dict[str, Any]:
             text=True,
             stderr=subprocess.DEVNULL,
         )
-        paths = subprocess.check_output(
-            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        diff = subprocess.check_output(
+            [
+                "git", "diff", "--binary", "HEAD", "--",
+                "*.py", "*.pyi", "*.toml", "*.yaml", "*.yml", "*.ini",
+            ],
+            cwd=root,
+            stderr=subprocess.DEVNULL,
+        )
+        untracked_paths = subprocess.check_output(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
             cwd=root,
             stderr=subprocess.DEVNULL,
         ).decode("utf-8").split("\0")
     except (OSError, subprocess.CalledProcessError):
         return {"git_commit": None, "git_worktree_clean": None, "source_tree_hash": None}
 
-    source_extensions = {".ini", ".json", ".md", ".py", ".pyi", ".sh", ".toml", ".txt", ".yaml", ".yml"}
-    source_files = {}
+    source_extensions = {".ini", ".py", ".pyi", ".toml", ".yaml", ".yml"}
+    untracked_files = {}
     try:
-        for relative in sorted(set(paths) - {""}):
+        for relative in sorted(set(untracked_paths) - {""}):
             path = root / relative
-            if path.suffix.lower() in source_extensions and path.is_file():
-                source_files[relative.replace("\\", "/")] = hashlib.sha256(path.read_bytes()).hexdigest()
-        tree_hash = config_hash(source_files)
+            if path.suffix.lower() in source_extensions and path.is_file() and "data" not in path.parts:
+                untracked_files[relative.replace("\\", "/")] = hashlib.sha256(path.read_bytes()).hexdigest()
+        tree_hash = config_hash({
+            "commit": commit,
+            "tracked_source_diff": hashlib.sha256(diff).hexdigest(),
+            "untracked_source_files": untracked_files,
+        })
     except OSError:
         tree_hash = None
     return {
@@ -203,6 +287,8 @@ def load_manifest(path: str | Path) -> CheckpointManifest:
 def validate_checkpoint_compatibility(
     actual: CheckpointManifest,
     expected: CheckpointManifest,
+    *,
+    migration_id: str | None = None,
 ) -> str:
     """Return a compatibility verdict for checkpoint provenance validation."""
     try:
@@ -213,18 +299,17 @@ def validate_checkpoint_compatibility(
     if actual == expected:
         return "exact-compatible" if actual.has_complete_provenance() else "unverified-provenance"
 
-    if actual.format_version == expected.format_version == 3:
-        actual_dict = asdict(actual)
-        expected_dict = asdict(expected)
-        for field in ("git_commit", "git_worktree_clean", "source_tree_hash"):
-            actual_dict.pop(field)
-            expected_dict.pop(field)
-        if actual_dict == expected_dict:
-            if actual.has_complete_provenance() and expected.has_complete_provenance():
+    if migration_id == "v4-serialization-metadata-v0-to-v1":
+        if (
+            actual.format_version == expected.format_version == 4
+            and actual.serialization_revision == 0
+            and expected.serialization_revision == 1
+        ):
+            actual_dict = asdict(actual)
+            expected_dict = asdict(expected)
+            actual_dict.pop("serialization_revision")
+            expected_dict.pop("serialization_revision")
+            if actual_dict == expected_dict and actual.has_complete_provenance() and expected.has_complete_provenance():
                 return "expected-compatible"
-            return "unverified-provenance"
-    try:
-        actual.validate(expected)
-    except ValueError:
         return "incompatible"
-    return "expected-compatible" if actual.has_complete_provenance() else "unverified-provenance"
+    return "incompatible"
