@@ -260,7 +260,6 @@ without a demonstrated consumer.
 | `scripts/train_codon_optimizer.py` | `codon tooling` | Downstream codon optimizer training; uses clustered splitting. |
 | `scripts/install.sh`, `scripts/install.ps1` | `development tooling` | Installation helpers; not model entrypoints. |
 | `scripts/install_fast.sh`, `scripts/install_fast.ps1` | `development tooling` | Accelerated/development installation helpers; verify dependency parity before treating as canonical install. |
-| `push_to_github.sh` | `legacy tooling` | Retired root-level bootstrap helper; it now exits without modifying repository or remote state. Its predecessor contained stale architecture instructions and force-push behavior. |
 | `scripts/__init__.py` | `development tooling` | Package marker only. |
 
 ## Test inventory
@@ -315,9 +314,10 @@ contract protected; many files also cover regressions or multiple layers.
   `data/training_data.py` contained historical descriptions in active-looking
   paths. Their module headers now label that material historical without
   changing model/data behavior.
-- The predecessor of root-level `push_to_github.sh` contained stale
-  architecture prose and force-pushing commands. It was inspected, not
-  executed; the path now contains a retirement stub that refuses to run.
+- The retired root-level `push_to_github.sh` helper had no callers and was
+  replaced with a no-op stub in the low-risk cleanup; this final pass removed
+  that inert stub. Its predecessor had unsafe force-push/remote-replacement
+  behavior and was never executed during the cleanup.
 - A complete production input-preprocessing/request/result/telemetry path is
   not established. `InferenceConfig` is not yet wired end-to-end into
   `CanonicalCHIMERAv2.design()`.
@@ -335,7 +335,9 @@ contract protected; many files also cover regressions or multiple layers.
 Stage A is complete. The follow-up low-risk cleanup labels misleading
 historical module/data descriptions, clarifies the README's canonical
 representation and PCGrad boundaries, labels the prior dependency inventory
-as historical, and retires the unsafe push helper without deleting it.
+as historical, and retired the unsafe push helper. The final pass removed its
+inert stub and an unrelated zero-byte root artifact after verifying neither
+had a consumer.
 Architecture moves/splits require their own import-compatibility plan and
 focused tests. No scientific architecture, objective semantics, or model
 mathematics were changed.
