@@ -1,5 +1,6 @@
 import json
 import hashlib
+import pickle
 import random
 from pathlib import Path
 
@@ -19,7 +20,7 @@ def test_public_chimera_is_independent_canonical_composition():
     import chimera.domain_schema as domain_schema
     import chimera.chimera_v2 as legacy_module
     from chimera.flow_matching import FlowMatchingBackbone, InvariantPointAttention
-    from chimera.multi_objective import MultiScaleNRPSDesigner
+    from chimera.sequence_design import MultiScaleNRPSDesigner
 
     assert CHIMERAv2 is architecture.CanonicalCHIMERAv2
     assert CHIMERAv2 is not LegacyCHIMERAv2
@@ -50,13 +51,17 @@ def test_public_chimera_is_independent_canonical_composition():
 
 
 def test_canonical_and_legacy_objective_imports_are_isolated():
+    import chimera.multi_objective as compatibility
+
     from chimera.bayesian import BayesianUncertaintyEstimator as CanonicalBayesian
     from chimera.dpo import DPOTrainer as CanonicalDPO
+    from chimera.objective_schema import ParetoObjectives
     from chimera.multi_objective import (
         BayesianUncertaintyEstimator as LegacyBayesian,
         DPOTrainer as LegacyDPO,
         LegacyBayesianUncertaintyEstimator,
         LegacyDPOTrainer,
+        ParetoObjectives as CompatibilityParetoObjectives,
     )
 
     assert CanonicalBayesian.__module__ == "chimera.bayesian"
@@ -65,6 +70,39 @@ def test_canonical_and_legacy_objective_imports_are_isolated():
     assert LegacyDPO is LegacyDPOTrainer
     assert CanonicalBayesian is not LegacyBayesian
     assert CanonicalDPO is not LegacyDPO
+    assert ParetoObjectives.__module__ == "chimera.objective_schema"
+    assert CompatibilityParetoObjectives is ParetoObjectives
+    legacy_globals = (
+        "ParetoObjectives",
+        "MultiScaleNRPSDesigner",
+        "StructuralRetriever",
+        "ProteusPreferencePair",
+        "LegacyDPOTrainer",
+        "DPOTrainer",
+        "LegacyAutoregressiveSequencePolicy",
+        "AutoregressiveSequencePolicy",
+        "LegacyParetoMultiObjectiveHead",
+        "ParetoMultiObjectiveHead",
+        "LegacyBayesianUncertaintyEstimator",
+        "BayesianUncertaintyEstimator",
+    )
+    for symbol in legacy_globals:
+        serialized_global = f"cchimera.multi_objective\n{symbol}\n.".encode()
+        assert pickle.loads(serialized_global) is getattr(compatibility, symbol)
+
+
+def test_canonical_retrieval_and_sequence_design_have_owned_modules():
+    from chimera.multi_objective import (
+        MultiScaleNRPSDesigner as CompatibilityDesigner,
+        StructuralRetriever as CompatibilityRetriever,
+    )
+    from chimera.retrieval import StructuralRetriever
+    from chimera.sequence_design import MultiScaleNRPSDesigner
+
+    assert MultiScaleNRPSDesigner.__module__ == "chimera.sequence_design"
+    assert StructuralRetriever.__module__ == "chimera.retrieval"
+    assert CompatibilityDesigner is MultiScaleNRPSDesigner
+    assert CompatibilityRetriever is StructuralRetriever
 
 
 def test_canonical_synthetic_forward_and_backward():

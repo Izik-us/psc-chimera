@@ -65,6 +65,16 @@ PROTEUS preference data
 DPO update of the actual autoregressive sequence policy
 ```
 
+Implementation ownership follows that path: `chimera/architecture.py`
+composes the model; `components.py` contains local representation/connectors;
+`flow_matching.py` supplies the velocity network and `schrodinger_bridge.py`
+the bridge objective and sampler; `sequence_design.py` owns hierarchical
+sequence design; and `objective_schema.py` / `pareto_pcgrad.py` own objective
+contracts and prediction. Optional retrieval is isolated in `retrieval.py`.
+`multi_objective.py` is only a compatibility import shim; its historical
+implementations are isolated in `legacy_optimization.py` and are not imported
+by canonical architecture code.
+
 ### Scientific status of the transport model
 
 The canonical bridge implementation is in `chimera/schrodinger_bridge.py`.

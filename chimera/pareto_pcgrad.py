@@ -18,8 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .multi_objective import ParetoObjectives
-from .objective_schema import validate_objective_target
+from .objective_schema import ParetoObjectives, validate_objective_target
 
 
 class ObjectiveFeatureSource(str, Enum):
