@@ -26,7 +26,6 @@ from .model_store import (
     verify_asset,
 )
 
-
 GATE_VERSION = "1"
 _TEST_COUNT = re.compile(r"(?P<count>\d+)\s+(?P<kind>passed|failed|errors?|skipped)")
 
@@ -69,7 +68,10 @@ def _git_check(root: Path) -> tuple[Check, dict[str, Any]]:
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         identity = {"commit": None, "branch": None, "worktree_clean": None}
-        return Check("source_identity", "UNAVAILABLE", str(exc), evidence=identity), identity
+        return (
+            Check("source_identity", "UNAVAILABLE", str(exc), evidence=identity),
+            identity,
+        )
     identity = {
         "commit": commit or None,
         "branch": branch or None,
@@ -80,9 +82,11 @@ def _git_check(root: Path) -> tuple[Check, dict[str, Any]]:
     result = Check(
         "source_identity",
         "PASS" if commit and clean else "FAIL",
-        "Git commit and clean worktree recorded"
-        if commit and clean
-        else "worktree is dirty; evidence identifies the commit but is not release-ready",
+        (
+            "Git commit and clean worktree recorded"
+            if commit and clean
+            else "worktree is dirty; evidence identifies the commit but is not release-ready"
+        ),
         evidence=identity,
     )
     return result, identity
@@ -130,10 +134,12 @@ def _package_check(root: Path) -> Check:
                     },
                 )
             code = (
-                "import importlib.metadata, json, chimera; "
+                "import importlib.metadata, json, pathlib, chimera; "
                 "print(json.dumps({'version': chimera.__version__, "
                 "'distribution_version': importlib.metadata.version('psc-chimera'), "
-                "'module': chimera.__file__}))"
+                "'module': chimera.__file__, "
+                "'architecture_manifest': pathlib.Path(chimera.__file__).with_name("
+                "'architecture_dependencies.json').is_file()}))"
             )
             imported = subprocess.run(
                 [str(environment_python), "-I", "-c", code],
@@ -147,7 +153,8 @@ def _package_check(root: Path) -> Check:
                 return Check(
                     "package_import",
                     "FAIL",
-                    imported.stderr.strip() or "isolated installed-package import failed",
+                    imported.stderr.strip()
+                    or "isolated installed-package import failed",
                     evidence={
                         "install_command": install_command,
                         "returncode": imported.returncode,
@@ -174,7 +181,8 @@ def _package_check(root: Path) -> Check:
                 return Check(
                     "package_import",
                     "FAIL",
-                    cli.stderr.strip() or "installed chimera console entry point failed",
+                    cli.stderr.strip()
+                    or "installed chimera console entry point failed",
                     evidence={
                         "install_command": install_command,
                         "cli_returncode": cli.returncode,
@@ -229,19 +237,23 @@ def _package_check(root: Path) -> Check:
         identity.get("version") == __version__
         and identity.get("distribution_version") == __version__
         and installed_tree
+        and identity.get("architecture_manifest") is True
     )
     return Check(
         "package_import",
         "PASS" if matches else "FAIL",
-        "regular no-dependency installation, isolated import, and console entry point verified"
-        if matches
-        else "installed package and distribution metadata identity do not match",
+        (
+            "regular no-dependency installation, isolated import, and console entry point verified"
+            if matches
+            else "installed package and distribution metadata identity do not match"
+        ),
         evidence={
             "version": identity.get("version"),
             "distribution_version": identity.get("distribution_version"),
             "module": module_path,
             "module_from_install_target": installed_tree,
             "packaged_model_count": len(model_inventory),
+            "architecture_manifest_packaged": identity.get("architecture_manifest"),
         },
     )
 
@@ -265,7 +277,11 @@ def _compile_check(root: Path) -> Check:
     return Check(
         "compile",
         "PASS" if completed.returncode == 0 else "FAIL",
-        "compileall completed" if completed.returncode == 0 else completed.stderr.strip(),
+        (
+            "compileall completed"
+            if completed.returncode == 0
+            else completed.stderr.strip()
+        ),
         evidence={"command": command, "returncode": completed.returncode},
     )
 
@@ -307,7 +323,10 @@ def _test_check(root: Path) -> Check:
     summary_lines = [
         line.strip()
         for line in output.splitlines()
-        if " passed" in line or " failed" in line or " skipped" in line or " error" in line
+        if " passed" in line
+        or " failed" in line
+        or " skipped" in line
+        or " error" in line
     ]
     summary = summary_lines[-1] if summary_lines else ""
     values = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
@@ -352,7 +371,10 @@ def _test_check(root: Path) -> Check:
     )
 
 
-def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any]], str | None]:
+def _manifest_check(
+    model_cache: Path | None,
+    workspace_root: Path | None = None,
+) -> tuple[Check, list[dict[str, Any]], str | None]:
     manifest_path = Path(__file__).with_name("model_dependencies.json")
     try:
         manifest_bytes = manifest_path.read_bytes()
@@ -364,11 +386,15 @@ def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any
         or document.get("manifest_id") != DEPENDENCY_MANIFEST.get("manifest_id")
         or not isinstance(document.get("dependencies"), list)
     ):
-        return Check(
-            "external_dependency_manifest",
-            "FAIL",
-            "dependency manifest schema or package identity mismatch",
-        ), [], hashlib.sha256(manifest_bytes).hexdigest()
+        return (
+            Check(
+                "external_dependency_manifest",
+                "FAIL",
+                "dependency manifest schema or package identity mismatch",
+            ),
+            [],
+            hashlib.sha256(manifest_bytes).hexdigest(),
+        )
     dependencies = document["dependencies"]
     required_fields = (
         "artifact_id",
@@ -385,7 +411,9 @@ def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any
         "license_url",
         "required",
     )
-    ids = [entry.get("artifact_id") for entry in dependencies if isinstance(entry, dict)]
+    ids = [
+        entry.get("artifact_id") for entry in dependencies if isinstance(entry, dict)
+    ]
     if (
         len(ids) != len(dependencies)
         or len(ids) != len(set(ids))
@@ -408,9 +436,7 @@ def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any
     cache_entries = list_assets(model_cache)
     rows = []
     blockers = []
-    known_by_id = {
-        artifact_id: key for key, artifact_id in ASSET_ALIASES.items()
-    }
+    known_by_id = {artifact_id: key for key, artifact_id in ASSET_ALIASES.items()}
     for asset in cache_entries:
         metadata = asset["metadata"]
         verification = (
@@ -427,21 +453,15 @@ def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any
             "state": verification["state"],
             "integrity": verification["integrity"],
             "compatibility": verification["compatibility"],
-            "native_status": verification.get(
-                "native_status", "NATIVE_UNVERIFIED"
-            ),
+            "native_status": verification.get("native_status", "NATIVE_UNVERIFIED"),
             "native_validation": verification.get("native_validation"),
             "architecture_verified": verification["compatibility"] == "VALID",
-            "runtime_verified": verification.get("native_status")
-            == "NATIVE_VERIFIED",
+            "runtime_verified": verification.get("native_status") == "NATIVE_VERIFIED",
             "native_smoke_verified": (
                 verification.get("native_status") == "NATIVE_VERIFIED"
                 and isinstance(verification.get("native_validation"), dict)
-                and verification["native_validation"].get("status")
-                == "NATIVE_VERIFIED"
-                and verification["native_validation"].get("evidence", {}).get(
-                    "result"
-                )
+                and verification["native_validation"].get("status") == "NATIVE_VERIFIED"
+                and verification["native_validation"].get("evidence", {}).get("result")
                 == "PASS"
             ),
             "sha256": verification.get("sha256"),
@@ -466,8 +486,13 @@ def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any
         "poet_weights.pt",
     }
     unregistered_files = []
+    workspace_root = (
+        workspace_root.resolve()
+        if workspace_root is not None
+        else Path(__file__).resolve().parent.parent
+    )
     for relative in ("", "Models", "weights"):
-        directory = Path(__file__).resolve().parent.parent / relative
+        directory = workspace_root / relative
         for filename in sorted(workspace_names):
             candidate = directory / filename
             if not candidate.is_file():
@@ -485,13 +510,19 @@ def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any
                     "upstream_origin": "UNVERIFIED",
                 }
             )
+    blockers.extend(
+        f"unregistered workspace model file: {entry['path']}"
+        for entry in unregistered_files
+    )
     return (
         Check(
             "external_dependency_manifest",
             "PASS" if not blockers else "FAIL",
-            "dependency manifest parsed; no unavailable required pretrained assets"
-            if not blockers
-            else "required model dependency is missing, corrupt, or compatibility-unknown",
+            (
+                "dependency manifest parsed; no unavailable required pretrained assets"
+                if not blockers
+                else "required model dependency is missing, corrupt, or compatibility-unknown"
+            ),
             evidence={
                 "manifest_id": document["manifest_id"],
                 "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
@@ -503,6 +534,468 @@ def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any
         rows,
         hashlib.sha256(manifest_bytes).hexdigest(),
     )
+
+
+def _architecture_manifest_check(
+    dependency_rows: list[dict[str, Any]],
+    manifest_path: os.PathLike[str] | str | None = None,
+    repository_root: os.PathLike[str] | str | None = None,
+) -> tuple[Check, str | None]:
+    """Validate the complete source inventory and refuse an unselected composition."""
+    manifest_path = (
+        Path(manifest_path)
+        if manifest_path is not None
+        else Path(__file__).with_name("architecture_dependencies.json")
+    )
+    inventory_root = (
+        Path(repository_root)
+        if repository_root is not None
+        else manifest_path.parent.parent
+    )
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        document = json.loads(manifest_bytes)
+    except (OSError, json.JSONDecodeError) as exc:
+        return Check("architecture_dependency_closure", "FAIL", str(exc)), None
+
+    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+    allowed_statuses = {
+        "NATIVE_VERIFIED",
+        "LOCAL_VERIFIED",
+        "VERIFIED_APPROXIMATION",
+        "PRESENT_NOT_INTEGRATED",
+        "INTEGRATED_NOT_VERIFIED",
+        "MISSING",
+        "INCOMPATIBLE",
+        "UNAVAILABLE",
+        "OPTIONAL",
+        "TRAINING_ONLY",
+        "RESEARCH_ONLY",
+        "DEPRECATED",
+        "DEAD_CODE",
+    }
+    components = document.get("components")
+    assets = document.get("external_assets")
+    runtimes = document.get("runtime_dependencies")
+    removed_dependencies = document.get("removed_dependencies")
+    workspace_model_files = document.get("workspace_model_file_dispositions")
+    data_manifest_record = {}
+    if isinstance(assets, list):
+        data_manifest_record = next(
+            (
+                asset
+                for asset in assets
+                if isinstance(asset, dict) and asset.get("id") == "data_manifests"
+            ),
+            {},
+        )
+    data_assets = data_manifest_record.get("files")
+    candidate = document.get("candidate_composition")
+    closure = document.get("production_closure")
+    if (
+        document.get("schema_version") != 1
+        or document.get("manifest_id") != "psc-chimera-architecture-dependencies-v1"
+        or not isinstance(components, list)
+        or not isinstance(assets, list)
+        or not isinstance(runtimes, list)
+        or not isinstance(removed_dependencies, list)
+        or not isinstance(workspace_model_files, list)
+        or not isinstance(data_assets, list)
+        or not isinstance(candidate, dict)
+        or not isinstance(closure, dict)
+    ):
+        return (
+            Check(
+                "architecture_dependency_closure",
+                "FAIL",
+                "architecture dependency manifest schema or identity is invalid",
+            ),
+            manifest_hash,
+        )
+
+    component_ids = [item.get("id") for item in components if isinstance(item, dict)]
+    asset_ids = [item.get("id") for item in assets if isinstance(item, dict)]
+    runtime_ids = [item.get("id") for item in runtimes if isinstance(item, dict)]
+    data_asset_ids = [item.get("id") for item in data_assets if isinstance(item, dict)]
+    if (
+        len(component_ids) != len(components)
+        or len(asset_ids) != len(assets)
+        or len(runtime_ids) != len(runtimes)
+        or len(data_asset_ids) != len(data_assets)
+        or len(set(component_ids)) != len(component_ids)
+        or len(set(asset_ids)) != len(asset_ids)
+        or len(set(runtime_ids)) != len(runtime_ids)
+        or len(set(data_asset_ids)) != len(data_asset_ids)
+    ):
+        return (
+            Check(
+                "architecture_dependency_closure",
+                "FAIL",
+                "architecture manifest entries must be objects with unique IDs",
+            ),
+            manifest_hash,
+        )
+
+    known_components = set(component_ids)
+    known_assets = set(asset_ids)
+    known_runtimes = set(runtime_ids)
+    blockers: list[str] = []
+    missing_tests: list[str] = []
+    for component in components:
+        required_fields = (
+            "id",
+            "name",
+            "source",
+            "symbol",
+            "status",
+            "scope",
+            "required_by_candidate",
+            "dependencies",
+            "external_assets",
+            "configuration",
+            "tests",
+            "verification",
+            "blockers",
+        )
+        if any(field not in component for field in required_fields):
+            blockers.append(f"{component.get('id')}: incomplete inventory record")
+            continue
+        if component["status"] not in allowed_statuses:
+            blockers.append(
+                f"{component['id']}: unknown status {component['status']!r}"
+            )
+        if not isinstance(component["required_by_candidate"], bool):
+            blockers.append(f"{component['id']}: required_by_candidate must be boolean")
+        for dependency in component["dependencies"]:
+            if dependency not in known_components | known_runtimes:
+                blockers.append(
+                    f"{component['id']}: unresolved dependency {dependency}"
+                )
+        for asset_id in component["external_assets"]:
+            if asset_id not in known_assets:
+                blockers.append(
+                    f"{component['id']}: unresolved external asset {asset_id}"
+                )
+        for test_path in component["tests"]:
+            if not (inventory_root / test_path).is_file():
+                missing_tests.append(f"{component['id']}: {test_path}")
+        if component["required_by_candidate"] and component["blockers"]:
+            blockers.extend(
+                f"{component['id']}: {reason}" for reason in component["blockers"]
+            )
+        verification = component["verification"]
+        if not isinstance(verification, dict) or any(
+            not isinstance(verification.get(field), bool)
+            for field in (
+                "code_exists",
+                "imported",
+                "instantiated",
+                "executed",
+                "tested",
+                "identity_recorded",
+                "represented_in_production_artifact",
+            )
+        ):
+            blockers.append(f"{component['id']}: incomplete verification facts")
+    for asset in assets:
+        if asset.get("status") not in allowed_statuses:
+            blockers.append(f"{asset.get('id')}: unknown external asset status")
+    for runtime in runtimes:
+        if not runtime.get("distribution") or not runtime.get("declared"):
+            blockers.append(
+                f"{runtime.get('id')}: missing runtime identity or declaration"
+            )
+        if not isinstance(runtime.get("required_by_candidate"), bool):
+            blockers.append(
+                f"{runtime.get('id')}: required_by_candidate must be boolean"
+            )
+        if runtime.get("status") not in allowed_statuses:
+            blockers.append(f"{runtime.get('id')}: unknown runtime dependency status")
+        if runtime.get("required_by_candidate") and runtime.get("status") not in {
+            "NATIVE_VERIFIED",
+            "LOCAL_VERIFIED",
+        }:
+            blockers.append(f"{runtime.get('id')}: required runtime is not verified")
+    for dependency in removed_dependencies:
+        if (
+            not isinstance(dependency, dict)
+            or not dependency.get("distribution")
+            or dependency.get("status") != "DEPRECATED"
+            or not dependency.get("reason")
+        ):
+            blockers.append("removed dependency record is incomplete")
+    declared_workspace_paths = set()
+    for file_record in workspace_model_files:
+        if not isinstance(file_record, dict):
+            blockers.append("workspace model-file disposition must be an object")
+            continue
+        relative_path = file_record.get("path")
+        if (
+            not isinstance(relative_path, str)
+            or not relative_path
+            or file_record.get("status") != "DEPRECATED"
+            or not file_record.get("disposition")
+            or not re.fullmatch(r"[0-9a-f]{64}", str(file_record.get("sha256", "")))
+        ):
+            blockers.append("workspace model-file disposition is incomplete")
+            continue
+        normalized_path = relative_path.replace("\\", "/")
+        if normalized_path in declared_workspace_paths:
+            blockers.append(
+                f"duplicate workspace model-file disposition: {normalized_path}"
+            )
+        declared_workspace_paths.add(normalized_path)
+        candidate_path = (inventory_root / normalized_path).resolve()
+        try:
+            candidate_path.relative_to(inventory_root.resolve())
+        except ValueError:
+            blockers.append(f"{normalized_path}: path escapes the repository root")
+            continue
+        if candidate_path.exists():
+            blockers.append(
+                f"{normalized_path}: removed or unregistered model file is still present"
+            )
+
+    data_asset_discrepancies = []
+    for data_asset in data_assets:
+        asset_id = data_asset.get("id")
+        asset_path = data_asset.get("path")
+        if (
+            not asset_id
+            or not isinstance(asset_path, str)
+            or data_asset.get("status") not in allowed_statuses
+            or not isinstance(data_asset.get("sha256"), str)
+        ):
+            blockers.append(f"{asset_id or 'data asset'}: incomplete inventory record")
+            continue
+        resolved_path = (inventory_root / asset_path).resolve()
+        try:
+            resolved_path.relative_to(inventory_root.resolve())
+        except ValueError:
+            blockers.append(f"{asset_id}: path escapes the repository root")
+            continue
+        try:
+            if resolved_path.is_file():
+                digest = hashlib.sha256()
+                with resolved_path.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                actual_hash = digest.hexdigest()
+                actual_size = resolved_path.stat().st_size
+                if data_asset.get("file_count") is not None:
+                    data_asset_discrepancies.append(
+                        f"{asset_id}: expected a directory asset, found a file"
+                    )
+            elif resolved_path.is_dir():
+                expected_algorithm = (
+                    "sha256(sorted(filename + ':' + file_sha256 joined by LF; "
+                    "no trailing LF))"
+                )
+                if data_asset.get("hash_algorithm") != expected_algorithm:
+                    blockers.append(f"{asset_id}: unsupported directory hash algorithm")
+                    continue
+                files = sorted(
+                    child for child in resolved_path.rglob("*") if child.is_file()
+                )
+                digest_lines = []
+                actual_size = 0
+                for child in files:
+                    child_digest = hashlib.sha256()
+                    with child.open("rb") as stream:
+                        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                            child_digest.update(chunk)
+                    digest_lines.append(
+                        f"{child.relative_to(resolved_path).as_posix()}:{child_digest.hexdigest()}"
+                    )
+                    actual_size += child.stat().st_size
+                actual_hash = hashlib.sha256(
+                    "\n".join(digest_lines).encode("utf-8")
+                ).hexdigest()
+                if not isinstance(data_asset.get("file_count"), int):
+                    blockers.append(f"{asset_id}: directory file count is not declared")
+                    continue
+                if data_asset.get("file_count") != len(files):
+                    data_asset_discrepancies.append(
+                        f"{asset_id}: file count differs from inventory"
+                    )
+            else:
+                data_asset_discrepancies.append(f"{asset_id}: asset is missing")
+                continue
+        except OSError as exc:
+            data_asset_discrepancies.append(f"{asset_id}: cannot read asset ({exc})")
+            continue
+        if actual_hash != data_asset["sha256"]:
+            data_asset_discrepancies.append(
+                f"{asset_id}: SHA-256 differs from inventory"
+            )
+        if actual_size != data_asset.get("size_bytes"):
+            data_asset_discrepancies.append(f"{asset_id}: size differs from inventory")
+        if data_asset.get("status") not in {
+            "TRAINING_ONLY",
+            "RESEARCH_ONLY",
+            "OPTIONAL",
+        }:
+            blockers.extend(
+                discrepancy
+                for discrepancy in data_asset_discrepancies
+                if discrepancy.startswith(f"{asset_id}:")
+            )
+
+    candidate_pipeline = candidate.get("pipeline", [])
+    for component_id in candidate_pipeline:
+        if component_id not in known_components:
+            blockers.append(f"candidate pipeline: unresolved component {component_id}")
+    required_ids = closure.get("required_candidate_dependencies", [])
+    for component_id in required_ids:
+        if component_id not in known_components:
+            blockers.append(
+                f"production closure: unresolved required component {component_id}"
+            )
+        elif not next(item for item in components if item["id"] == component_id).get(
+            "required_by_candidate"
+        ):
+            blockers.append(
+                f"production closure: {component_id} is not marked required_by_candidate"
+            )
+
+    cache_rows = {item["artifact_id"]: item for item in dependency_rows}
+    external_cache_discrepancies = []
+    for asset in assets:
+        artifact_id = asset.get("artifact_id")
+        if artifact_id is None or artifact_id not in cache_rows:
+            continue
+        actual = cache_rows[artifact_id]
+        if actual.get("native_status") != asset.get("status"):
+            external_cache_discrepancies.append(
+                f"{artifact_id}: inventory={asset.get('status')} cache={actual.get('native_status')}"
+            )
+        expected_hash = asset.get("sha256")
+        if expected_hash is not None and actual.get("sha256") != expected_hash:
+            external_cache_discrepancies.append(
+                f"{artifact_id}: recorded local SHA-256 differs from model cache"
+            )
+
+    production_composition = document.get("production_composition")
+    if production_composition is None or closure.get("selected_composition_id") is None:
+        blockers.append("no selected production composition")
+    if closure.get("selected_artifact_id") is None:
+        blockers.append("no selected production artifact")
+    if closure.get("status") != "READY":
+        blockers.append(
+            f"declared production closure status is {closure.get('status')!r}"
+        )
+    blockers.extend(closure.get("blockers", []))
+    blockers.extend(f"missing test reference: {test}" for test in missing_tests)
+    blockers.extend(
+        f"external cache mismatch: {detail}" for detail in external_cache_discrepancies
+    )
+
+    passed = not blockers
+    return (
+        Check(
+            "architecture_dependency_closure",
+            "PASS" if passed else "FAIL",
+            (
+                "architecture dependency closure is selected and complete"
+                if passed
+                else "architecture inventory is structurally checked, but production closure is incomplete"
+            ),
+            evidence={
+                "manifest_id": document["manifest_id"],
+                "manifest_sha256": manifest_hash,
+                "component_count": len(components),
+                "candidate_required_component_count": sum(
+                    component.get("required_by_candidate") is True
+                    for component in components
+                ),
+                "external_asset_count": len(assets),
+                "data_asset_count": len(data_assets),
+                "runtime_dependency_count": len(runtimes),
+                "removed_dependency_count": len(removed_dependencies),
+                "workspace_model_file_disposition_count": len(workspace_model_files),
+                "production_composition": production_composition,
+                "production_artifact": document.get("production_artifact"),
+                "blockers": blockers,
+                "external_cache_discrepancies": external_cache_discrepancies,
+                "data_asset_discrepancies": data_asset_discrepancies,
+            },
+        ),
+        manifest_hash,
+    )
+
+
+def production_dependency_inventory(
+    manifest_path: os.PathLike[str] | str | None = None,
+) -> dict[str, Any]:
+    """Return the declared production/candidate closure without implying readiness."""
+    path = (
+        Path(manifest_path)
+        if manifest_path is not None
+        else Path(__file__).with_name("architecture_dependencies.json")
+    )
+    manifest_bytes = path.read_bytes()
+    document = json.loads(manifest_bytes)
+    candidate = document["candidate_composition"]
+    closure = document["production_closure"]
+    components = document["components"]
+    assets = document["external_assets"]
+    runtimes = document["runtime_dependencies"]
+    blockers = list(closure["blockers"])
+    for component in components:
+        if component["required_by_candidate"]:
+            blockers.extend(
+                f"{component['id']}: {reason}" for reason in component["blockers"]
+            )
+    return {
+        "manifest_id": document["manifest_id"],
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "production_status": closure["status"],
+        "production_composition": document["production_composition"],
+        "production_artifact": document["production_artifact"],
+        "candidate_composition": {
+            "composition_id": candidate["composition_id"],
+            "entrypoint": candidate["entrypoint"],
+            "readiness": candidate["readiness"],
+            "required_components": [
+                {
+                    "id": component["id"],
+                    "source": component["source"],
+                    "symbol": component["symbol"],
+                    "status": component["status"],
+                    "dependencies": component["dependencies"],
+                    "external_assets": component["external_assets"],
+                    "blockers": component["blockers"],
+                }
+                for component in components
+                if component["required_by_candidate"]
+            ],
+            "required_runtime_dependencies": [
+                {
+                    "id": dependency["id"],
+                    "distribution": dependency["distribution"],
+                    "declared": dependency["declared"],
+                    "status": dependency["status"],
+                    "identity_status": dependency["identity_status"],
+                }
+                for dependency in runtimes
+                if dependency["required_by_candidate"]
+            ],
+            "required_external_assets": [
+                asset for asset in assets if asset["required_by_candidate"]
+            ],
+        },
+        "training_only_assets": [
+            {
+                "id": asset["id"],
+                "status": asset["status"],
+                "path": file_record["path"],
+                "sha256": file_record["sha256"],
+            }
+            for asset in assets
+            for file_record in asset.get("files", [])
+        ],
+        "blockers": blockers,
+    }
 
 
 def _unavailable(name: str, explanation: str) -> Check:
@@ -564,7 +1057,10 @@ def _runtime_checks() -> list[Check]:
                 "PASS",
                 "CUDA tensor smoke completed",
                 required=True,
-                evidence={"cuda_available": True, "device": torch.cuda.get_device_name(0)},
+                evidence={
+                    "cuda_available": True,
+                    "device": torch.cuda.get_device_name(0),
+                },
             )
     return [
         Check(
@@ -597,7 +1093,9 @@ def _migration_policy_check() -> Check:
 
 
 def _evidence_identity(evidence: dict[str, Any]) -> str:
-    payload = {key: value for key, value in evidence.items() if key != "evidence_sha256"}
+    payload = {
+        key: value for key, value in evidence.items() if key != "evidence_sha256"
+    }
     return _canonical_hash(payload)
 
 
@@ -629,8 +1127,13 @@ def run_production_gate(
     )
     dependency_check, dependency_rows, dependency_manifest_sha256 = _manifest_check(
         Path(model_cache).expanduser().resolve() if model_cache is not None else None,
+        repository_root,
     )
     checks.append(dependency_check)
+    architecture_check, architecture_manifest_sha256 = _architecture_manifest_check(
+        dependency_rows
+    )
+    checks.append(architecture_check)
     checks.extend(_runtime_checks())
     checks.append(_migration_policy_check())
     checks.extend(
@@ -663,9 +1166,7 @@ def run_production_gate(
     )
 
     failures = [
-        check.name
-        for check in checks
-        if check.required and check.status != "PASS"
+        check.name for check in checks if check.required and check.status != "PASS"
     ]
     test_result = next((check for check in checks if check.name == "tests"), None)
     test_evidence = test_result.evidence if test_result and test_result.evidence else {}
@@ -684,11 +1185,12 @@ def run_production_gate(
     for distribution in (
         "torch",
         "numpy",
-        "transformers",
-        "fair-esm",
         "einops",
+        "fair-esm",
         "biopython",
         "faiss-cpu",
+        "scipy",
+        "matplotlib",
     ):
         try:
             environment["declared_runtime_versions"][distribution] = (
@@ -726,7 +1228,8 @@ def run_production_gate(
             (check.status for check in checks if check.name == "compile"), "UNAVAILABLE"
         ),
         "import_result": next(
-            (check.status for check in checks if check.name == "package_import"), "UNAVAILABLE"
+            (check.status for check in checks if check.name == "package_import"),
+            "UNAVAILABLE",
         ),
         "inference_smoke_result": "UNAVAILABLE",
         "determinism_result": "UNAVAILABLE",
@@ -735,6 +1238,8 @@ def run_production_gate(
         "dependency_result": dependency_check.status,
         "dependency_manifest_sha256": dependency_manifest_sha256,
         "dependencies": dependency_rows,
+        "architecture_dependency_result": architecture_check.status,
+        "architecture_dependency_manifest_sha256": architecture_manifest_sha256,
         "timestamp": generated_at,
         "runtime_metadata": environment,
         "checks": [asdict(check) for check in checks],

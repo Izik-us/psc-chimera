@@ -34,7 +34,7 @@ jobs:
 
     - name: Install package and development extras
       run: |
-        pip install -e '.[dev]'
+        pip install -e '.[dev,viz]'
 
     - name: Compile Python sources
       run: |

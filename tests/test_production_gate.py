@@ -84,6 +84,21 @@ def test_required_dependency_needs_verified_native_smoke(monkeypatch):
     assert f"{artifact_id} native smoke" in check.evidence["blockers"]
 
 
+def test_unregistered_workspace_model_file_blocks_dependencies(monkeypatch, tmp_path):
+    monkeypatch.setattr("chimera.production_gate.list_assets", lambda model_cache: [])
+    candidate = tmp_path / "Models" / "poet_weights.pt"
+    candidate.parent.mkdir()
+    candidate.write_bytes(b"unregistered")
+
+    check, _, _ = _manifest_check(None, workspace_root=tmp_path)
+
+    assert check.status == "FAIL"
+    assert any(
+        blocker.startswith("unregistered workspace model file:")
+        for blocker in check.evidence["blockers"]
+    )
+
+
 def test_gate_cannot_be_given_caller_authored_pass_evidence(tmp_path, monkeypatch):
     assert "evidence" not in inspect.signature(run_production_gate).parameters
     passed = Check("tests", "PASS", "test command executed", evidence={"passed": 1})
@@ -105,7 +120,16 @@ def test_gate_cannot_be_given_caller_authored_pass_evidence(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         "chimera.production_gate._manifest_check",
-        lambda model_cache: (Check("external_dependency_manifest", "PASS", "manifest checked", evidence={"manifest_sha256": "abc"}), [], "abc"),
+        lambda model_cache, workspace_root=None: (
+            Check(
+                "external_dependency_manifest",
+                "PASS",
+                "manifest checked",
+                evidence={"manifest_sha256": "abc"},
+            ),
+            [],
+            "abc",
+        ),
     )
     monkeypatch.setattr(
         "chimera.production_gate._runtime_checks",

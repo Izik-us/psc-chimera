@@ -25,12 +25,16 @@ def _write_json(value: Any) -> None:
 
 
 def _add_models_parser(subparsers: Any) -> None:
-    models = subparsers.add_parser("models", help="list, acquire, inspect, or verify upstream model assets")
+    models = subparsers.add_parser(
+        "models", help="list, acquire, inspect, or verify upstream model assets"
+    )
     actions = models.add_subparsers(dest="models_action", required=True)
     listing = actions.add_parser("list", help="list declared assets and cache status")
     listing.add_argument("--cache-dir", default=None)
     for action in ("fetch", "verify", "inspect"):
-        command = actions.add_parser(action, help=f"{action.title()} one declared model asset")
+        command = actions.add_parser(
+            action, help=f"{action.title()} one declared model asset"
+        )
         choices = [*ASSET_ALIASES, *ASSET_ALIASES.values()]
         if action == "verify":
             choices.append("all")
@@ -51,14 +55,26 @@ def _add_models_parser(subparsers: Any) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chimera", description="PSC-CHIMERA tools")
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     version_command = commands.add_parser("version", help="show the software version")
     version_command.set_defaults(command="version")
     _add_models_parser(commands)
-    gate = commands.add_parser("production-gate", help="execute production checks and emit evidence")
+    commands.add_parser(
+        "production-dependencies",
+        help="show the declared production candidate dependency closure",
+    )
+    gate = commands.add_parser(
+        "production-gate", help="execute production checks and emit evidence"
+    )
     gate.add_argument("--root", required=True, help="source repository root to inspect")
-    gate.add_argument("--output", default=None, help="new evidence JSON path; existing files are never replaced")
+    gate.add_argument(
+        "--output",
+        default=None,
+        help="new evidence JSON path; existing files are never replaced",
+    )
     gate.add_argument("--model-cache", default=None, help="model cache directory")
     return parser
 
@@ -70,6 +86,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "version":
             _write_json({"software": "psc-chimera", "version": __version__})
             return 0
+        if args.command == "production-dependencies":
+            from .production_gate import production_dependency_inventory
+
+            _write_json(production_dependency_inventory())
+            return 0
         if args.command == "models":
             if args.models_action == "list":
                 _write_json(list_assets(args.cache_dir))
@@ -77,7 +98,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.models_action == "fetch":
                 path = ensure_asset(args.asset, args.cache_dir)
                 _write_json(
-                    {"path": str(path), "verification": verify_asset(args.asset, args.cache_dir)}
+                    {
+                        "path": str(path),
+                        "verification": verify_asset(args.asset, args.cache_dir),
+                    }
                 )
                 return 0
             if args.models_action == "verify":
@@ -86,7 +110,14 @@ def main(argv: list[str] | None = None) -> int:
                         verify_asset(key, args.cache_dir) for key in ASSET_ALIASES
                     ]
                     _write_json({"offline": True, "results": results})
-                    return 0 if all(result["state"] == "INTEGRITY_VERIFIED" for result in results) else 1
+                    return (
+                        0
+                        if all(
+                            result["state"] == "INTEGRITY_VERIFIED"
+                            for result in results
+                        )
+                        else 1
+                    )
                 result = verify_asset(args.asset, args.cache_dir)
                 _write_json(result)
                 return 0 if result["state"] == "INTEGRITY_VERIFIED" else 1

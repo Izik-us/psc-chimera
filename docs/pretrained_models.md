@@ -101,20 +101,25 @@ The ESMFold and AlphaFold2 archives are large. Fetch them only when explicitly
 needed. `pip install .` and package imports do not fetch them. Upstream terms
 may restrict use or redistribution; consult the linked license before use.
 
-## Workspace files observed during the production baseline
+## Workspace file reconciliation
 
-The following ignored, outside-Git files existed in the inspected workspace.
-Their SHA-256 values are local observations, not upstream-published checksums.
-None had an identity-addressed CHIMERA manifest, so none counted as verified
-external dependencies or adapter-tested checkpoints:
+The ignored workspace contained duplicate model files and two files without a
+trustworthy identity. The exact paths below were removed after confirming that
+they were Git-ignored and recording their hashes in
+[`chimera/architecture_dependencies.json`](../chimera/architecture_dependencies.json).
 
-| Local file | Size | Local SHA-256 | Provenance / compatibility |
-| --- | ---: | --- | --- |
-| `Models/esm2_t30_150M_UR50D.pt` | 592,774,773 bytes | `881c7176cf198ef8dec26a3c375d40eb58d0c33df95c22562ca6cc6d3f812c62` | Bytes match the newly acquired identity-addressed ESM-2 file; the old path remains unmanifested and should not be used as the registered artifact. |
-| `Models/esm2_t30_150M_UR50D-contact-regression.pt` | 3,431 bytes | `6a604b96722ed052eef8a094ad90b275ba2e987d406315dbed0bdc6b3c4238a7` | Bytes match the acquired official auxiliary file; use its identity-addressed cache entry. |
-| `v_48_020.pt` and `weights/proteinmpnn_v48_020.pt` | 6,681,301 bytes each | `c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd` | Bytes match the acquired pinned ProteinMPNN file; use the identity-addressed entry and exact upstream source checkout. |
-| `weights/rfdiffusion_base.pt` | 22,328 bytes | `ba77dd3c33876e4208bb1eeecefc7c60a35c32a48a16f86cf2e834f8b7f3127c` | Present; origin and checkpoint validity unverified. |
-| `weights/poet_weights.pt` | 28,006,316 bytes | `7af41d5b0ac87545a63947ac3705f9667fd2c498876644b88dbf71ec15ce63c1` | Present but unidentified; no current source-code consumer or upstream identity found. Not declared as an operational dependency. |
+| Removed file | SHA-256 | Disposition |
+| --- | --- | --- |
+| `Models/esm2_t30_150M_UR50D.pt` | `881c7176cf198ef8dec26a3c375d40eb58d0c33df95c22562ca6cc6d3f812c62` | Exact duplicate of the ESM-2 cache asset; use only the identity-addressed model-store path. |
+| `Models/esm2_t30_150M_UR50D-contact-regression.pt` | `6a604b96722ed052eef8a094ad90b275ba2e987d406315dbed0bdc6b3c4238a7` | Exact duplicate of the ESM-2 auxiliary cache asset. |
+| `v_48_020.pt` | `c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd` | Exact duplicate of pinned ProteinMPNN cache asset. |
+| `weights/proteinmpnn_v48_020.pt` | `c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd` | Exact duplicate of pinned ProteinMPNN cache asset. |
+| `weights/rfdiffusion_base.pt` | `ba77dd3c33876e4208bb1eeecefc7c60a35c32a48a16f86cf2e834f8b7f3127c` | Untrusted 22,328-byte file; it did not match the registered 483,616,107-byte RFdiffusion checkpoint and was removed. |
+| `weights/poet_weights.pt` | `7af41d5b0ac87545a63947ac3705f9667fd2c498876644b88dbf71ec15ce63c1` | Unidentified 28,006,316-byte file with no source/revision or code consumer; removed. |
+
+These values are locally observed digests, not upstream-published hashes. The
+production gate now fails if any of the reconciled workspace filenames
+reappears outside the identity-addressed model store.
 
 An additional project inventory identified the Pouyet human codon-usage archive
 and its extracted data, plus the Fath2011 research data. Their scientific

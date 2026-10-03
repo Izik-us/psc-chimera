@@ -272,11 +272,19 @@ Research Prototype
 ## Production engineering entry points
 
 Install with `pip install .` (or `pip install -e .` for editable development).
+The core install includes only PyTorch, NumPy, and einops. Optional feature
+groups are `esm`, `retrieval`, `data`, `research`, and `viz`; development tools
+are in `dev`. Use only the extras required by the selected workflow.
 The installed CLI exposes `chimera --version`, identity-addressed model
 commands (`chimera models list|fetch|inspect|verify`), and the self-executing
-`chimera production-gate`. See
+`chimera production-gate`. `chimera production-dependencies` emits the
+machine-readable production-candidate closure and its current blockers. It
+reports `BLOCKED_INTERNAL`: no validated CHIMERA training artifact exists.
+See
 [`docs/PRODUCTION_ENGINEERING.md`](docs/PRODUCTION_ENGINEERING.md) for current
-contracts and explicit gaps.
+contracts and explicit gaps, and
+[`docs/ARCHITECTURE_DEPENDENCY_AUDIT.md`](docs/ARCHITECTURE_DEPENDENCY_AUDIT.md)
+for the component-level dependency inventory and release blockers.
 
 The local MSA/EvoFormer-like module, ProteinMPNN-inspired model, and custom
 SE(3) bridge remain distinct from upstream ESM/OpenFold, ProteinMPNN, and
