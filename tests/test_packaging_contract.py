@@ -7,6 +7,7 @@ from pathlib import Path
 from chimera import __version__
 from chimera.checkpoint import CheckpointManifest
 from chimera.cli import main
+from chimera.model_store import ASSET_ALIASES
 
 
 def test_package_and_checkpoint_share_authoritative_version():
@@ -120,4 +121,4 @@ def test_regular_install_exposes_import_and_cli_outside_source_tree(tmp_path: Pa
     )
     assert model_list.returncode == 0, model_list.stderr
     assets = json.loads(model_list.stdout)
-    assert len(assets) == 5
+    assert len(assets) == len(ASSET_ALIASES)

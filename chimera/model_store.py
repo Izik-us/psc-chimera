@@ -48,12 +48,22 @@ DEPENDENCIES = {
 }
 ASSET_ALIASES = {
     "esm2_t30_150m": "esm2-t30-150m-ur50d",
+    "esm2_t30_150m_contact_regression": "esm2-t30-150m-contact-regression",
+    "esm2_t30_150m_contact_regression": "esm2-t30-150m-contact-regression",
     "esmfold_v1": "esmfold-v1-3b",
     "proteinmpnn_v48_020": "proteinmpnn-v-48-020",
     "rfdiffusion_base": "rfdiffusion-base",
     "alphafold2_params_v23": "alphafold2-params-2022-12-06",
 }
 MODEL_MANIFEST_VERSION = 1
+NATIVE_STATUSES = {
+    "NATIVE_VERIFIED",
+    "NATIVE_UNVERIFIED",
+    "APPROXIMATION",
+    "MISSING",
+    "INCOMPATIBLE",
+    "UNAVAILABLE",
+}
 
 
 @dataclass(frozen=True)
@@ -158,6 +168,9 @@ def list_assets(root: os.PathLike[str] | str | None = None) -> list[dict[str, An
                     "state": "NOT_VERIFIED" if checkpoint.is_file() else "MISSING",
                     "integrity": "UNKNOWN",
                     "compatibility": "UNKNOWN",
+                    "native_status": "NATIVE_UNVERIFIED"
+                    if checkpoint.is_file()
+                    else "MISSING",
                 },
             }
         )
@@ -170,8 +183,7 @@ def verify_asset(
     """Verify local file and manifest hashes without network access.
 
     A locally recorded digest establishes cache integrity, not upstream origin.
-    Architecture compatibility remains UNKNOWN until a canonical upstream
-    loader and the CHIMERA adapter have both been exercised.
+    Native status changes only when explicit runtime evidence is recorded.
     """
     asset = _asset(key)
     directory = asset_directory(key, root)
@@ -183,6 +195,8 @@ def verify_asset(
             "state": "MISSING",
             "integrity": "UNAVAILABLE",
             "compatibility": "UNKNOWN",
+            "native_status": "MISSING",
+            "native_validation": None,
             "message": "required artifact unavailable locally" if asset.metadata["required"] else "artifact not cached",
         }
     if not manifest_path.is_file():
@@ -191,6 +205,8 @@ def verify_asset(
             "state": "UNKNOWN",
             "integrity": "UNKNOWN",
             "compatibility": "UNKNOWN",
+            "native_status": "NATIVE_UNVERIFIED",
+            "native_validation": None,
             "message": "checkpoint exists without a CHIMERA integrity manifest",
         }
     try:
@@ -201,11 +217,36 @@ def verify_asset(
             "state": "CORRUPT",
             "integrity": "INVALID",
             "compatibility": "UNKNOWN",
+            "native_status": "NATIVE_UNVERIFIED",
+            "native_validation": None,
             "message": f"invalid artifact manifest: {exc}",
         }
 
     expected_hash = manifest.get("sha256")
     actual_hash = _hash_file(checkpoint)
+    native_status = manifest.get("native_status", "NATIVE_UNVERIFIED")
+    native_validation = manifest.get("native_validation")
+    native_status_valid = (
+        isinstance(native_status, str)
+        and native_status in NATIVE_STATUSES
+        and (
+            (
+                native_status == "NATIVE_UNVERIFIED"
+                and native_validation is None
+            )
+            or (
+                isinstance(native_validation, dict)
+                and native_validation.get("status") == native_status
+                and isinstance(native_validation.get("detail"), str)
+                and bool(native_validation["detail"].strip())
+                and isinstance(native_validation.get("evidence"), dict)
+                and (
+                    native_status != "NATIVE_VERIFIED"
+                    or native_validation["evidence"].get("result") == "PASS"
+                )
+            )
+        )
+    )
     metadata_fields = (
         "model_family",
         "model_variant",
@@ -235,6 +276,7 @@ def verify_asset(
             else "locally_recorded"
         )
         and manifest.get("size_bytes") == checkpoint.stat().st_size
+        and native_status_valid
     )
     manifest_hash_valid = (
         isinstance(manifest.get("manifest_sha256"), str)
@@ -249,9 +291,31 @@ def verify_asset(
             "state": "CORRUPT",
             "integrity": "INVALID",
             "compatibility": "UNKNOWN",
+            "native_status": "NATIVE_UNVERIFIED",
+            "native_validation": None,
             "sha256": actual_hash,
             "message": "artifact, manifest, or published upstream checksum mismatch",
         }
+    if native_status == "NATIVE_VERIFIED":
+        message = (
+            "artifact integrity and local native-smoke evidence verified; "
+            "upstream origin remains checksum-unconfirmed"
+        )
+    elif native_status == "UNAVAILABLE":
+        message = (
+            "artifact integrity verified; native runtime unavailable: "
+            f"{native_validation['detail']}"
+        )
+    elif native_status == "INCOMPATIBLE":
+        message = (
+            "artifact integrity verified; native integration is incompatible: "
+            f"{native_validation['detail']}"
+        )
+    else:
+        message = (
+            "integrity verified; model architecture/adapter compatibility "
+            "is not established"
+        )
     return {
         "artifact_id": asset.artifact_id,
         "state": "INTEGRITY_VERIFIED",
@@ -263,10 +327,12 @@ def verify_asset(
         if published_hash is None
         else "UPSTREAM_CHECKSUM_MATCHED",
         "compatibility": manifest.get("compatibility_status", "UNKNOWN"),
+        "native_status": native_status,
+        "native_validation": native_validation,
         "sha256": actual_hash,
         "size_bytes": checkpoint.stat().st_size,
         "manifest_sha256": manifest["manifest_sha256"],
-        "message": "integrity verified; model architecture/adapter compatibility is not established",
+        "message": message,
     }
 
 
@@ -299,6 +365,8 @@ def _write_manifest(asset: Asset, checkpoint: Path, stage: Path) -> dict[str, An
         if metadata.get("upstream_sha256") is not None
         else "LOCAL_SHA256_RECORDED",
         "compatibility_status": "UNKNOWN",
+        "native_status": "NATIVE_UNVERIFIED",
+        "native_validation": None,
     }
     manifest["manifest_sha256"] = _manifest_hash(manifest)
     manifest_path = stage / "manifest.json"
@@ -313,7 +381,7 @@ def ensure_asset(
     root: os.PathLike[str] | str | None = None,
     *,
     force: bool = False,
-    timeout_seconds: int = 60,
+    timeout_seconds: int = 600,
 ) -> Path:
     """Explicitly fetch a declared asset, atomically publishing it after hashing."""
     asset = _asset(key)
@@ -386,6 +454,71 @@ def ensure_asset(
             shutil.rmtree(staging)
 
 
+def record_native_status(
+    key: str,
+    *,
+    status: str,
+    detail: str,
+    evidence: dict[str, Any] | None = None,
+    root: os.PathLike[str] | str | None = None,
+) -> dict[str, Any]:
+    """Persist local runtime evidence without changing artifact bytes or identity."""
+    if not isinstance(status, str) or status not in NATIVE_STATUSES:
+        raise ValueError(f"Unsupported native model status: {status}")
+    if status == "MISSING":
+        raise ValueError("MISSING is derived from cache absence and cannot be recorded")
+    if not isinstance(detail, str) or not detail.strip():
+        raise ValueError("Native model status detail cannot be empty")
+    if evidence is not None and not isinstance(evidence, dict):
+        raise TypeError("Native model status evidence must be a JSON object")
+    if status == "NATIVE_VERIFIED" and (
+        evidence is None or evidence.get("result") != "PASS"
+    ):
+        raise ValueError("NATIVE_VERIFIED requires evidence with result='PASS'")
+
+    verification = verify_asset(key, root)
+    if verification["state"] != "INTEGRITY_VERIFIED":
+        raise ModelIntegrityError(
+            f"Cannot record native status for an unverified artifact: {verification['message']}"
+        )
+
+    manifest_path = asset_directory(key, root) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["native_status"] = status
+    manifest["native_validation"] = {
+        "status": status,
+        "detail": detail,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "evidence": evidence or {},
+    }
+    manifest["compatibility_status"] = {
+        "NATIVE_VERIFIED": "VALID",
+        "INCOMPATIBLE": "INVALID",
+    }.get(status, "UNKNOWN")
+    manifest["manifest_sha256"] = _manifest_hash(manifest)
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=manifest_path.parent,
+            prefix=".manifest.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            stream.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, manifest_path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+    return verify_asset(key, root)
+
+
 def load_esm2(
     root: os.PathLike[str] | str | None = None,
     checkpoint: os.PathLike[str] | str | None = None,
@@ -407,7 +540,40 @@ def load_esm2(
         raise ModelStoreError(
             "fair-esm is required to load ESM-2; install the package's optional `esm` dependency."
         ) from exc
-    model, alphabet = esm.pretrained.load_model_and_alphabet_local(str(path))
+    import argparse
+    import torch
+
+    torch.serialization.add_safe_globals([argparse.Namespace])
+    model_data = torch.load(path, map_location="cpu", weights_only=True)
+    regression_path = asset_path("esm2_t30_150m_contact_regression", root)
+    regression_verification = verify_asset(
+        "esm2_t30_150m_contact_regression", root
+    )
+    if regression_verification["state"] == "INTEGRITY_VERIFIED":
+        regression_data = torch.load(
+            regression_path, map_location="cpu", weights_only=True
+        )
+    elif regression_verification["state"] == "MISSING":
+        regression_data = None
+    else:
+        raise ModelIntegrityError(
+            "ESM-2 contact-regression auxiliary is not integrity-verified: "
+            f"{regression_verification['message']}"
+        )
+    if not isinstance(model_data, dict) or (
+        regression_data is not None and not isinstance(regression_data, dict)
+    ):
+        raise ModelIntegrityError("ESM-2 checkpoint payload has an invalid structure")
+    try:
+        model, alphabet = esm.pretrained.load_model_and_alphabet_core(
+            path.stem,
+            model_data,
+            regression_data,
+        )
+    except (KeyError, RuntimeError, ValueError) as exc:
+        raise ModelIntegrityError(
+            f"Canonical fair-esm loader rejected the ESM-2 checkpoint: {exc}"
+        ) from exc
     model.eval()
     for parameter in model.parameters():
         parameter.requires_grad_(False)

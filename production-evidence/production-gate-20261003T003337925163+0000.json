@@ -1,0 +1,765 @@
+{
+  "artifact_identity": null,
+  "artifact_integrity_result": "UNAVAILABLE",
+  "biological_validation": "NOT ESTABLISHED",
+  "blockers": [
+    "source_identity",
+    "configuration",
+    "checkpoint_compatibility",
+    "artifact_integrity",
+    "provenance",
+    "inference_smoke",
+    "determinism_smoke"
+  ],
+  "checkpoint_compatibility_result": "UNAVAILABLE",
+  "checkpoint_identity": null,
+  "checks": [
+    {
+      "detail": "worktree is dirty; evidence identifies the commit but is not release-ready",
+      "evidence": {
+        "branch": "chimera-repair",
+        "commit": "082983a36037e3cbecdb9bc65590e224cc4c1082",
+        "worktree_clean": false,
+        "worktree_status": [
+          " M chimera/adapters.py",
+          " M chimera/codon_optimizer.py",
+          " M chimera/model_dependencies.json",
+          " M chimera/model_store.py",
+          " M chimera/production_gate.py",
+          " M chimera/protein_fitness.py",
+          " M docs/PRODUCTION_ENGINEERING.md",
+          " M docs/pretrained_models.md",
+          " M tests/test_packaging_contract.py",
+          " M tests/test_pretrained_manager.py",
+          " M tests/test_production_gate.py",
+          "?? production-evidence/production-gate-20261003T001851992773+0000.json",
+          "?? tests/test_native_model_smoke.py"
+        ]
+      },
+      "name": "source_identity",
+      "required": true,
+      "status": "FAIL"
+    },
+    {
+      "detail": "regular no-dependency installation, isolated import, and console entry point verified",
+      "evidence": {
+        "distribution_version": "2.0.0",
+        "module": "C:\\Users\\ng692\\AppData\\Local\\Temp\\chimera-package-gate-295cmcq6\\environment\\Lib\\site-packages\\chimera\\__init__.py",
+        "module_from_install_target": true,
+        "packaged_model_count": 6,
+        "version": "2.0.0"
+      },
+      "name": "package_import",
+      "required": true,
+      "status": "PASS"
+    },
+    {
+      "detail": "compileall completed",
+      "evidence": {
+        "command": [
+          "C:\\Users\\ng692\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+          "-m",
+          "compileall",
+          "-q",
+          "chimera",
+          "data",
+          "scripts"
+        ],
+        "returncode": 0
+      },
+      "name": "compile",
+      "required": true,
+      "status": "PASS"
+    },
+    {
+      "detail": "full pytest suite completed without failures or skips",
+      "evidence": {
+        "command": [
+          "C:\\Users\\ng692\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+          "-m",
+          "pytest",
+          "-q"
+        ],
+        "duration_seconds": 160.265,
+        "failures": 0,
+        "output_tail": "........................................................................ [ 35%]\n........................................................................ [ 70%]\n............................................................             [100%]\n============================== warnings summary ===============================\ntests/test_architecture_contract.py: 2 warnings\ntests/test_canonical_architecture.py: 25 warnings\ntests/test_canonical_autoregressive_policy.py: 2 warnings\ntests/test_chimera_v2.py: 4 warnings\ntests/test_probabilistic_optimization.py: 1 warning\ntests/test_public_contracts.py: 2 warnings\n  C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\chimera\\autoregressive_policy.py:32: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True\n    self.decoder = nn.TransformerEncoder(block, layers)\n\ntests/test_canonical_architecture.py::test_representation_regime_has_explicit_masked_token_gradient_path\n  C:\\Users\\ng692\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\torch\\nn\\modules\\transformer.py:529: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at C:\\actions-runner\\_work\\pytorch\\pytorch\\aten\\src\\ATen\\NestedTensorImpl.cpp:181.)\n    output = torch._nested_tensor_from_mask(\n\ntests/test_canonical_architecture.py::test_canonical_component_state_dict_shapes_match_legacy_layout\n  C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\tests\\test_canonical_architecture.py:900: UserWarning: Discarded legacy random frozen_bridge parameters; canonical flow uses Identity.\n    migrated = CHIMERAv2._migrate_flow_state_dict(old_state, new_state)\n\ntests/test_canonical_architecture.py::test_legacy_pareto_component_transfer_uses_explicit_strict_migration\n  C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\tests\\test_canonical_architecture.py:943: UserWarning: legacy learned assembly head retired; typed feature-fusion parameters retain current initialization\n    canonical.load_connectors(str(checkpoint_path))\n\ntests/test_chimera_v2.py::TestParetoOptimization::test_pareto_head_pcgrad_loss\n  C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\tests\\test_chimera_v2.py:324: DeprecationWarning: ParetoMultiObjectiveHead.pcgrad_loss is heuristic, not PCGrad; use the canonical MergeReadyParetoMultiObjectiveHead instead\n    loss, metrics = model.pcgrad_loss(obj, labels)\n\ntests/test_scientific_repairs.py::test_dpo_loss_is_finite_and_prefers_chosen\n  C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\tests\\test_scientific_repairs.py:121: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.\n  Consider using tensor.detach() first. (Triggered internally at C:\\actions-runner\\_work\\pytorch\\pytorch\\torch\\csrc\\autograd\\generated\\python_variable_methods.cpp:823.)\n    assert abs(float(loss) - math.log(2.0)) < 1e-6\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n204 passed, 41 warnings in 156.93s (0:02:36)\n\n",
+        "passed": 204,
+        "returncode": 0,
+        "skipped": 0,
+        "summary": "204 passed, 41 warnings in 156.93s (0:02:36)",
+        "test_count": 204
+      },
+      "name": "tests",
+      "required": true,
+      "status": "PASS"
+    },
+    {
+      "detail": "dependency manifest parsed; no unavailable required pretrained assets",
+      "evidence": {
+        "blockers": [],
+        "dependencies": [
+          {
+            "acquired": true,
+            "architecture_verified": true,
+            "artifact_id": "esm2-t30-150m-ur50d",
+            "compatibility": "VALID",
+            "declared": true,
+            "integrity": "VALID",
+            "integrity_verified": true,
+            "manifest_sha256": "b7bdae56314ba4765adf462390f5475b0fc9c17dc5cd21aaf5fee34ea43a95fd",
+            "native_smoke_verified": true,
+            "native_status": "NATIVE_VERIFIED",
+            "native_validation": {
+              "detail": "Real fair-esm checkpoint inference passed through the CHIMERA CodonOptimizer encoder.",
+              "evidence": {
+                "chimera_output_shape": [
+                  1,
+                  8,
+                  32
+                ],
+                "device": "cpu",
+                "input_length": 8,
+                "model_embedding_dimension": 640,
+                "repeat_tolerance": {
+                  "atol": 1e-06,
+                  "rtol": 1e-05
+                },
+                "representation_layer": 30,
+                "result": "PASS",
+                "runtime": {
+                  "fair_esm": "2.0.0",
+                  "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+                  "torch": "2.13.0+cpu"
+                },
+                "software": {
+                  "commit": "082983a36037e3cbecdb9bc65590e224cc4c1082",
+                  "version": "2.0.0",
+                  "worktree_clean": false
+                },
+                "test": "test_esm2_native_checkpoint_runs_through_codon_optimizer",
+                "upstream_revision": "2b369911bb5b4b0dda914521b9475cad1656b2ac"
+              },
+              "recorded_at": "2026-10-03T00:32:19.385337+00:00",
+              "status": "NATIVE_VERIFIED"
+            },
+            "required": false,
+            "runtime_verified": true,
+            "sha256": "881c7176cf198ef8dec26a3c375d40eb58d0c33df95c22562ca6cc6d3f812c62",
+            "state": "INTEGRITY_VERIFIED"
+          },
+          {
+            "acquired": true,
+            "architecture_verified": true,
+            "artifact_id": "esm2-t30-150m-contact-regression",
+            "compatibility": "VALID",
+            "declared": true,
+            "integrity": "VALID",
+            "integrity_verified": true,
+            "manifest_sha256": "aeceb3546c1de36a7f4a0028d5b2b1446e0251ae10695541699d18356fef0f03",
+            "native_smoke_verified": true,
+            "native_status": "NATIVE_VERIFIED",
+            "native_validation": {
+              "detail": "Real fair-esm checkpoint inference passed through the CHIMERA CodonOptimizer encoder.",
+              "evidence": {
+                "chimera_output_shape": [
+                  1,
+                  8,
+                  32
+                ],
+                "device": "cpu",
+                "input_length": 8,
+                "model_embedding_dimension": 640,
+                "repeat_tolerance": {
+                  "atol": 1e-06,
+                  "rtol": 1e-05
+                },
+                "representation_layer": 30,
+                "result": "PASS",
+                "runtime": {
+                  "fair_esm": "2.0.0",
+                  "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+                  "torch": "2.13.0+cpu"
+                },
+                "software": {
+                  "commit": "082983a36037e3cbecdb9bc65590e224cc4c1082",
+                  "version": "2.0.0",
+                  "worktree_clean": false
+                },
+                "test": "test_esm2_native_checkpoint_runs_through_codon_optimizer",
+                "upstream_revision": "2b369911bb5b4b0dda914521b9475cad1656b2ac"
+              },
+              "recorded_at": "2026-10-03T00:32:20.862879+00:00",
+              "status": "NATIVE_VERIFIED"
+            },
+            "required": false,
+            "runtime_verified": true,
+            "sha256": "6a604b96722ed052eef8a094ad90b275ba2e987d406315dbed0bdc6b3c4238a7",
+            "state": "INTEGRITY_VERIFIED"
+          },
+          {
+            "acquired": false,
+            "architecture_verified": false,
+            "artifact_id": "esmfold-v1-3b",
+            "compatibility": "UNKNOWN",
+            "declared": true,
+            "integrity": "UNKNOWN",
+            "integrity_verified": false,
+            "manifest_sha256": null,
+            "native_smoke_verified": false,
+            "native_status": "MISSING",
+            "native_validation": null,
+            "required": false,
+            "runtime_verified": false,
+            "sha256": null,
+            "state": "MISSING"
+          },
+          {
+            "acquired": true,
+            "architecture_verified": true,
+            "artifact_id": "proteinmpnn-v-48-020",
+            "compatibility": "VALID",
+            "declared": true,
+            "integrity": "VALID",
+            "integrity_verified": true,
+            "manifest_sha256": "49bf74399b500ae07fa83372ddf004cc40bcebca1e16044e7206eb0477ac7d6d",
+            "native_smoke_verified": true,
+            "native_status": "NATIVE_VERIFIED",
+            "native_validation": {
+              "detail": "The exact pinned ProteinMPNN runtime and checkpoint passed adapter sequence-design inference.",
+              "evidence": {
+                "device": "cpu",
+                "fixed_position_count": 1,
+                "input_shape": [
+                  1,
+                  8,
+                  4,
+                  3
+                ],
+                "log_probabilities_shape": [
+                  1,
+                  8,
+                  21
+                ],
+                "result": "PASS",
+                "runtime": {
+                  "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+                  "torch": "2.13.0+cpu"
+                },
+                "sequence_shape": [
+                  1,
+                  8
+                ],
+                "software": {
+                  "commit": "082983a36037e3cbecdb9bc65590e224cc4c1082",
+                  "version": "2.0.0",
+                  "worktree_clean": false
+                },
+                "test": "test_proteinmpnn_native_checkpoint_runs_through_adapter",
+                "upstream_revision": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57"
+              },
+              "recorded_at": "2026-10-03T00:32:22.732853+00:00",
+              "status": "NATIVE_VERIFIED"
+            },
+            "required": false,
+            "runtime_verified": true,
+            "sha256": "c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd",
+            "state": "INTEGRITY_VERIFIED"
+          },
+          {
+            "acquired": true,
+            "architecture_verified": false,
+            "artifact_id": "rfdiffusion-base",
+            "compatibility": "UNKNOWN",
+            "declared": true,
+            "integrity": "VALID",
+            "integrity_verified": true,
+            "manifest_sha256": "c1ea30d8eccd72ff440bc985d79ddee65b9a346328b7062e42e794f6e4a9c1ea",
+            "native_smoke_verified": false,
+            "native_status": "UNAVAILABLE",
+            "native_validation": {
+              "detail": "Native RFdiffusion inference cannot run in this environment: the pinned upstream SE3nv environment requires Python 3.9, PyTorch 1.9, CUDA 11.1, and DGL CUDA 11.1; this host has Python 3.12 and CPU-only PyTorch 2.13.",
+              "evidence": {
+                "checkpoint_safe_inspection": {
+                  "parameter_count": 59808046,
+                  "tensor_count": 5998
+                },
+                "environment_file": "env/SE3nv.yml",
+                "host_runtime": {
+                  "cuda_available": false,
+                  "python": "3.12.10",
+                  "torch": "2.13.0+cpu"
+                },
+                "required_runtime": [
+                  "Python 3.9",
+                  "PyTorch 1.9",
+                  "CUDA 11.1",
+                  "DGL CUDA 11.1"
+                ],
+                "result": "UNAVAILABLE",
+                "upstream_revision": "86507b6538f51fce57b5a72477165f03999ed7ae"
+              },
+              "recorded_at": "2026-10-03T00:23:53.529953+00:00",
+              "status": "UNAVAILABLE"
+            },
+            "required": false,
+            "runtime_verified": false,
+            "sha256": "0fcf7d7c32b4848030aca3a051e6768de194616f96ba6c38186351a33bfc6eca",
+            "state": "INTEGRITY_VERIFIED"
+          },
+          {
+            "acquired": true,
+            "architecture_verified": false,
+            "artifact_id": "alphafold2-params-2022-12-06",
+            "compatibility": "INVALID",
+            "declared": true,
+            "integrity": "VALID",
+            "integrity_verified": true,
+            "manifest_sha256": "60ef6b25576df57996c2ad618ca09604a006df900b9cb3e4ec1b2119ce89d676",
+            "native_smoke_verified": false,
+            "native_status": "INCOMPATIBLE",
+            "native_validation": {
+              "detail": "The AlphaFold2 parameter archive is not a standalone EvoFormer checkpoint and cannot satisfy the local CHIMERA EvoFormer approximation interface; native AlphaFold/OpenFold inference was not attempted.",
+              "evidence": {
+                "archive_file_count": 16,
+                "native_upstream_inference": "NOT_RUN",
+                "result": "INCOMPATIBLE",
+                "target": "local CHIMERA EvoFormer approximation",
+                "upstream_revision": "c77e5d2a8961d1a353632c462914ff0a32a950f6"
+              },
+              "recorded_at": "2026-10-03T00:29:13.259558+00:00",
+              "status": "INCOMPATIBLE"
+            },
+            "required": false,
+            "runtime_verified": false,
+            "sha256": "36d4b0220f3c735f3296d301152b738c9776d16981d054845a68a1370b26cfe3",
+            "state": "INTEGRITY_VERIFIED"
+          }
+        ],
+        "manifest_id": "psc-chimera-external-model-dependencies-v1",
+        "manifest_sha256": "71360ff345d0b0f8113b326794a604407bb3caf3d306d982b359031fbd044b15",
+        "unregistered_workspace_files": [
+          {
+            "local_sha256": "c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd",
+            "path": "C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\v_48_020.pt",
+            "size_bytes": 6681301,
+            "status": "UNREGISTERED_LOCAL_FILE",
+            "upstream_origin": "UNVERIFIED"
+          },
+          {
+            "local_sha256": "6a604b96722ed052eef8a094ad90b275ba2e987d406315dbed0bdc6b3c4238a7",
+            "path": "C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\Models\\esm2_t30_150M_UR50D-contact-regression.pt",
+            "size_bytes": 3431,
+            "status": "UNREGISTERED_LOCAL_FILE",
+            "upstream_origin": "UNVERIFIED"
+          },
+          {
+            "local_sha256": "881c7176cf198ef8dec26a3c375d40eb58d0c33df95c22562ca6cc6d3f812c62",
+            "path": "C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\Models\\esm2_t30_150M_UR50D.pt",
+            "size_bytes": 592774773,
+            "status": "UNREGISTERED_LOCAL_FILE",
+            "upstream_origin": "UNVERIFIED"
+          },
+          {
+            "local_sha256": "7af41d5b0ac87545a63947ac3705f9667fd2c498876644b88dbf71ec15ce63c1",
+            "path": "C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\weights\\poet_weights.pt",
+            "size_bytes": 28006316,
+            "status": "UNREGISTERED_LOCAL_FILE",
+            "upstream_origin": "UNVERIFIED"
+          },
+          {
+            "local_sha256": "c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd",
+            "path": "C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\weights\\proteinmpnn_v48_020.pt",
+            "size_bytes": 6681301,
+            "status": "UNREGISTERED_LOCAL_FILE",
+            "upstream_origin": "UNVERIFIED"
+          },
+          {
+            "local_sha256": "ba77dd3c33876e4208bb1eeecefc7c60a35c32a48a16f86cf2e834f8b7f3127c",
+            "path": "C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\weights\\rfdiffusion_base.pt",
+            "size_bytes": 22328,
+            "status": "UNREGISTERED_LOCAL_FILE",
+            "upstream_origin": "UNVERIFIED"
+          }
+        ]
+      },
+      "name": "external_dependency_manifest",
+      "required": true,
+      "status": "PASS"
+    },
+    {
+      "detail": "CPU tensor smoke completed",
+      "evidence": {
+        "device": "cpu",
+        "torch_version": "2.13.0+cpu"
+      },
+      "name": "cpu_runtime",
+      "required": true,
+      "status": "PASS"
+    },
+    {
+      "detail": "CUDA hardware/runtime is not available in this environment",
+      "evidence": {
+        "cuda_available": false
+      },
+      "name": "cuda_runtime",
+      "required": false,
+      "status": "UNAVAILABLE"
+    },
+    {
+      "detail": "known checkpoint formats validate; migration remains explicit",
+      "evidence": {
+        "explicit_migration_ids": [
+          "v4-serialization-metadata-v0-to-v1"
+        ],
+        "selected_checkpoint": null,
+        "supported_formats": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "name": "migration_policy",
+      "required": true,
+      "status": "PASS"
+    },
+    {
+      "detail": "no selected, versioned production inference configuration was found",
+      "evidence": null,
+      "name": "configuration",
+      "required": true,
+      "status": "UNAVAILABLE"
+    },
+    {
+      "detail": "no selected CHIMERA checkpoint and compatibility manifest were supplied by the repository",
+      "evidence": null,
+      "name": "checkpoint_compatibility",
+      "required": true,
+      "status": "UNAVAILABLE"
+    },
+    {
+      "detail": "no production model artifact was selected for manifest/hash verification",
+      "evidence": null,
+      "name": "artifact_integrity",
+      "required": true,
+      "status": "UNAVAILABLE"
+    },
+    {
+      "detail": "no production model artifact exists to link source, configuration, dataset, and upstream dependencies",
+      "evidence": null,
+      "name": "provenance",
+      "required": true,
+      "status": "UNAVAILABLE"
+    },
+    {
+      "detail": "no validated inference artifact/configuration is available for an honest production smoke",
+      "evidence": null,
+      "name": "inference_smoke",
+      "required": true,
+      "status": "UNAVAILABLE"
+    },
+    {
+      "detail": "no validated inference artifact/configuration is available for a reproducibility comparison",
+      "evidence": null,
+      "name": "determinism_smoke",
+      "required": true,
+      "status": "UNAVAILABLE"
+    }
+  ],
+  "compile_result": "PASS",
+  "configuration_identity": null,
+  "dependencies": [
+    {
+      "acquired": true,
+      "architecture_verified": true,
+      "artifact_id": "esm2-t30-150m-ur50d",
+      "compatibility": "VALID",
+      "declared": true,
+      "integrity": "VALID",
+      "integrity_verified": true,
+      "manifest_sha256": "b7bdae56314ba4765adf462390f5475b0fc9c17dc5cd21aaf5fee34ea43a95fd",
+      "native_smoke_verified": true,
+      "native_status": "NATIVE_VERIFIED",
+      "native_validation": {
+        "detail": "Real fair-esm checkpoint inference passed through the CHIMERA CodonOptimizer encoder.",
+        "evidence": {
+          "chimera_output_shape": [
+            1,
+            8,
+            32
+          ],
+          "device": "cpu",
+          "input_length": 8,
+          "model_embedding_dimension": 640,
+          "repeat_tolerance": {
+            "atol": 1e-06,
+            "rtol": 1e-05
+          },
+          "representation_layer": 30,
+          "result": "PASS",
+          "runtime": {
+            "fair_esm": "2.0.0",
+            "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+            "torch": "2.13.0+cpu"
+          },
+          "software": {
+            "commit": "082983a36037e3cbecdb9bc65590e224cc4c1082",
+            "version": "2.0.0",
+            "worktree_clean": false
+          },
+          "test": "test_esm2_native_checkpoint_runs_through_codon_optimizer",
+          "upstream_revision": "2b369911bb5b4b0dda914521b9475cad1656b2ac"
+        },
+        "recorded_at": "2026-10-03T00:32:19.385337+00:00",
+        "status": "NATIVE_VERIFIED"
+      },
+      "required": false,
+      "runtime_verified": true,
+      "sha256": "881c7176cf198ef8dec26a3c375d40eb58d0c33df95c22562ca6cc6d3f812c62",
+      "state": "INTEGRITY_VERIFIED"
+    },
+    {
+      "acquired": true,
+      "architecture_verified": true,
+      "artifact_id": "esm2-t30-150m-contact-regression",
+      "compatibility": "VALID",
+      "declared": true,
+      "integrity": "VALID",
+      "integrity_verified": true,
+      "manifest_sha256": "aeceb3546c1de36a7f4a0028d5b2b1446e0251ae10695541699d18356fef0f03",
+      "native_smoke_verified": true,
+      "native_status": "NATIVE_VERIFIED",
+      "native_validation": {
+        "detail": "Real fair-esm checkpoint inference passed through the CHIMERA CodonOptimizer encoder.",
+        "evidence": {
+          "chimera_output_shape": [
+            1,
+            8,
+            32
+          ],
+          "device": "cpu",
+          "input_length": 8,
+          "model_embedding_dimension": 640,
+          "repeat_tolerance": {
+            "atol": 1e-06,
+            "rtol": 1e-05
+          },
+          "representation_layer": 30,
+          "result": "PASS",
+          "runtime": {
+            "fair_esm": "2.0.0",
+            "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+            "torch": "2.13.0+cpu"
+          },
+          "software": {
+            "commit": "082983a36037e3cbecdb9bc65590e224cc4c1082",
+            "version": "2.0.0",
+            "worktree_clean": false
+          },
+          "test": "test_esm2_native_checkpoint_runs_through_codon_optimizer",
+          "upstream_revision": "2b369911bb5b4b0dda914521b9475cad1656b2ac"
+        },
+        "recorded_at": "2026-10-03T00:32:20.862879+00:00",
+        "status": "NATIVE_VERIFIED"
+      },
+      "required": false,
+      "runtime_verified": true,
+      "sha256": "6a604b96722ed052eef8a094ad90b275ba2e987d406315dbed0bdc6b3c4238a7",
+      "state": "INTEGRITY_VERIFIED"
+    },
+    {
+      "acquired": false,
+      "architecture_verified": false,
+      "artifact_id": "esmfold-v1-3b",
+      "compatibility": "UNKNOWN",
+      "declared": true,
+      "integrity": "UNKNOWN",
+      "integrity_verified": false,
+      "manifest_sha256": null,
+      "native_smoke_verified": false,
+      "native_status": "MISSING",
+      "native_validation": null,
+      "required": false,
+      "runtime_verified": false,
+      "sha256": null,
+      "state": "MISSING"
+    },
+    {
+      "acquired": true,
+      "architecture_verified": true,
+      "artifact_id": "proteinmpnn-v-48-020",
+      "compatibility": "VALID",
+      "declared": true,
+      "integrity": "VALID",
+      "integrity_verified": true,
+      "manifest_sha256": "49bf74399b500ae07fa83372ddf004cc40bcebca1e16044e7206eb0477ac7d6d",
+      "native_smoke_verified": true,
+      "native_status": "NATIVE_VERIFIED",
+      "native_validation": {
+        "detail": "The exact pinned ProteinMPNN runtime and checkpoint passed adapter sequence-design inference.",
+        "evidence": {
+          "device": "cpu",
+          "fixed_position_count": 1,
+          "input_shape": [
+            1,
+            8,
+            4,
+            3
+          ],
+          "log_probabilities_shape": [
+            1,
+            8,
+            21
+          ],
+          "result": "PASS",
+          "runtime": {
+            "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+            "torch": "2.13.0+cpu"
+          },
+          "sequence_shape": [
+            1,
+            8
+          ],
+          "software": {
+            "commit": "082983a36037e3cbecdb9bc65590e224cc4c1082",
+            "version": "2.0.0",
+            "worktree_clean": false
+          },
+          "test": "test_proteinmpnn_native_checkpoint_runs_through_adapter",
+          "upstream_revision": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57"
+        },
+        "recorded_at": "2026-10-03T00:32:22.732853+00:00",
+        "status": "NATIVE_VERIFIED"
+      },
+      "required": false,
+      "runtime_verified": true,
+      "sha256": "c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd",
+      "state": "INTEGRITY_VERIFIED"
+    },
+    {
+      "acquired": true,
+      "architecture_verified": false,
+      "artifact_id": "rfdiffusion-base",
+      "compatibility": "UNKNOWN",
+      "declared": true,
+      "integrity": "VALID",
+      "integrity_verified": true,
+      "manifest_sha256": "c1ea30d8eccd72ff440bc985d79ddee65b9a346328b7062e42e794f6e4a9c1ea",
+      "native_smoke_verified": false,
+      "native_status": "UNAVAILABLE",
+      "native_validation": {
+        "detail": "Native RFdiffusion inference cannot run in this environment: the pinned upstream SE3nv environment requires Python 3.9, PyTorch 1.9, CUDA 11.1, and DGL CUDA 11.1; this host has Python 3.12 and CPU-only PyTorch 2.13.",
+        "evidence": {
+          "checkpoint_safe_inspection": {
+            "parameter_count": 59808046,
+            "tensor_count": 5998
+          },
+          "environment_file": "env/SE3nv.yml",
+          "host_runtime": {
+            "cuda_available": false,
+            "python": "3.12.10",
+            "torch": "2.13.0+cpu"
+          },
+          "required_runtime": [
+            "Python 3.9",
+            "PyTorch 1.9",
+            "CUDA 11.1",
+            "DGL CUDA 11.1"
+          ],
+          "result": "UNAVAILABLE",
+          "upstream_revision": "86507b6538f51fce57b5a72477165f03999ed7ae"
+        },
+        "recorded_at": "2026-10-03T00:23:53.529953+00:00",
+        "status": "UNAVAILABLE"
+      },
+      "required": false,
+      "runtime_verified": false,
+      "sha256": "0fcf7d7c32b4848030aca3a051e6768de194616f96ba6c38186351a33bfc6eca",
+      "state": "INTEGRITY_VERIFIED"
+    },
+    {
+      "acquired": true,
+      "architecture_verified": false,
+      "artifact_id": "alphafold2-params-2022-12-06",
+      "compatibility": "INVALID",
+      "declared": true,
+      "integrity": "VALID",
+      "integrity_verified": true,
+      "manifest_sha256": "60ef6b25576df57996c2ad618ca09604a006df900b9cb3e4ec1b2119ce89d676",
+      "native_smoke_verified": false,
+      "native_status": "INCOMPATIBLE",
+      "native_validation": {
+        "detail": "The AlphaFold2 parameter archive is not a standalone EvoFormer checkpoint and cannot satisfy the local CHIMERA EvoFormer approximation interface; native AlphaFold/OpenFold inference was not attempted.",
+        "evidence": {
+          "archive_file_count": 16,
+          "native_upstream_inference": "NOT_RUN",
+          "result": "INCOMPATIBLE",
+          "target": "local CHIMERA EvoFormer approximation",
+          "upstream_revision": "c77e5d2a8961d1a353632c462914ff0a32a950f6"
+        },
+        "recorded_at": "2026-10-03T00:29:13.259558+00:00",
+        "status": "INCOMPATIBLE"
+      },
+      "required": false,
+      "runtime_verified": false,
+      "sha256": "36d4b0220f3c735f3296d301152b738c9776d16981d054845a68a1370b26cfe3",
+      "state": "INTEGRITY_VERIFIED"
+    }
+  ],
+  "dependency_manifest_sha256": "71360ff345d0b0f8113b326794a604407bb3caf3d306d982b359031fbd044b15",
+  "dependency_result": "PASS",
+  "determinism_result": "UNAVAILABLE",
+  "engineering_status": "BLOCKED",
+  "environment_identity": "dba86a001ebd71773480f62a61c377d0df075a2cd02a66b8705a652e18896027",
+  "evidence_path": "C:\\Users\\ng692\\OneDrive\\Desktop\\psc-chimera\\production-evidence\\production-gate-20261003T003337925163+0000.json",
+  "evidence_sha256": "513bcc401dee263bdf88bc55be76d4224fbee4e14b6358c31764615a8fe1b4d3",
+  "failure_count": 0,
+  "gate_version": "1",
+  "git_commit": "082983a36037e3cbecdb9bc65590e224cc4c1082",
+  "import_result": "PASS",
+  "inference_smoke_result": "UNAVAILABLE",
+  "runtime_metadata": {
+    "declared_runtime_versions": {
+      "biopython": "1.88",
+      "einops": "0.8.2",
+      "fair-esm": "2.0.0",
+      "faiss-cpu": "1.15.0",
+      "numpy": "2.5.2",
+      "torch": "2.13.0",
+      "transformers": "5.15.1"
+    },
+    "distribution_version": "2.0.0",
+    "executable": "C:\\Users\\ng692\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python_version": "3.12.10",
+    "software_version": "2.0.0"
+  },
+  "scientific_status": "NOT SCIENTIFICALLY VALIDATED",
+  "skip_count": 0,
+  "software_version": "2.0.0",
+  "test_command": [
+    "C:\\Users\\ng692\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+    "-m",
+    "pytest",
+    "-q"
+  ],
+  "test_count": 204,
+  "test_result": "PASS",
+  "timestamp": "2026-10-03T00:33:37.925163+00:00",
+  "worktree_clean": false,
+  "worktree_status": [
+    " M chimera/adapters.py",
+    " M chimera/codon_optimizer.py",
+    " M chimera/model_dependencies.json",
+    " M chimera/model_store.py",
+    " M chimera/production_gate.py",
+    " M chimera/protein_fitness.py",
+    " M docs/PRODUCTION_ENGINEERING.md",
+    " M docs/pretrained_models.md",
+    " M tests/test_packaging_contract.py",
+    " M tests/test_pretrained_manager.py",
+    " M tests/test_production_gate.py",
+    "?? production-evidence/production-gate-20261003T001851992773+0000.json",
+    "?? tests/test_native_model_smoke.py"
+  ]
+}

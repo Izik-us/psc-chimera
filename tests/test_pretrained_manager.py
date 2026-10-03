@@ -12,6 +12,7 @@ from chimera.model_store import (
 
 def test_public_manifest_contains_core_assets():
     assert "esm2_t30_150m" in PUBLIC_ASSETS
+    assert "esm2_t30_150m_contact_regression" in PUBLIC_ASSETS
     assert "esmfold_v1" in PUBLIC_ASSETS
     assert "proteinmpnn_v48_020" in PUBLIC_ASSETS
     assert "rfdiffusion_base" in PUBLIC_ASSETS
@@ -58,6 +59,19 @@ def test_download_is_atomic_and_manifest_records_local_hash(tmp_path: Path, monk
     assert result["integrity_basis"] == "LOCALLY_RECORDED_SHA256"
     assert result["upstream_origin"] == "CHECKSUM_UNCONFIRMED"
     assert result["compatibility"] == "UNKNOWN"
+    assert result["native_status"] == "NATIVE_UNVERIFIED"
+
+    recorded = model_store.record_native_status(
+        "esm2_t30_150m",
+        status="UNAVAILABLE",
+        detail="Native runtime was unavailable in the test fixture.",
+        evidence={"reason": "unit-test fixture"},
+        root=tmp_path,
+    )
+    assert recorded["state"] == "INTEGRITY_VERIFIED"
+    assert recorded["native_status"] == "UNAVAILABLE"
+    assert recorded["compatibility"] == "UNKNOWN"
+    assert "native runtime unavailable" in recorded["message"]
 
 
 def test_cached_artifact_tampering_is_detected(tmp_path: Path, monkeypatch):

@@ -8,6 +8,7 @@ these interfaces before they can be used in a production design run.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
@@ -16,6 +17,7 @@ from typing import Any, Mapping
 import torch
 
 from .backends import BackendUnavailable
+from .model_store import DEPENDENCIES, asset_path, verify_asset
 
 
 class BackboneEncoder(ABC):
@@ -175,15 +177,64 @@ class ProteinMPNNAdapter(SequenceDesigner):
 
     def __init__(self, checkpoint: str | Path, proteinmpnn_repo: str | Path | None = None, device: str | torch.device = "cpu", temperature: float = 0.1) -> None:
         self.checkpoint = _require_file(checkpoint, "ProteinMPNN")
+        registered_checkpoint = asset_path("proteinmpnn_v48_020")
+        if self.checkpoint.resolve() != registered_checkpoint.resolve():
+            raise BackendUnavailable(
+                "ProteinMPNN must be loaded from its identity-addressed model-store artifact"
+            )
+        verification = verify_asset("proteinmpnn_v48_020")
+        if verification["state"] != "INTEGRITY_VERIFIED":
+            raise BackendUnavailable(
+                f"ProteinMPNN checkpoint is not integrity-verified: {verification['message']}"
+            )
         repo = Path(proteinmpnn_repo) if proteinmpnn_repo else self.checkpoint.parent.parent
-        if not (repo / "protein_mpnn_utils.py").is_file():
+        utility_module = repo / "protein_mpnn_utils.py"
+        if not utility_module.is_file():
             raise BackendUnavailable(f"ProteinMPNN source not found under {repo}; provide proteinmpnn_repo")
         try:
-            from protein_mpnn_utils import ProteinMPNN
-        except ImportError as exc:
+            revision = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                text=True,
+                stderr=subprocess.PIPE,
+            ).strip()
+            source_changes = subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    str(repo),
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                ],
+                text=True,
+                stderr=subprocess.PIPE,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
             raise BackendUnavailable(
-                "ProteinMPNN source is not importable in the active Python environment; "
-                "install the pinned upstream implementation instead of mutating sys.path"
+                f"Unable to verify the ProteinMPNN source revision under {repo}"
+            ) from exc
+        expected_revision = DEPENDENCIES["proteinmpnn-v-48-020"]["upstream_revision"]
+        if revision != expected_revision:
+            raise BackendUnavailable(
+                f"ProteinMPNN source revision mismatch: expected {expected_revision}, found {revision}"
+            )
+        if source_changes.strip():
+            raise BackendUnavailable(
+                f"ProteinMPNN source checkout has uncommitted changes: {repo}"
+            )
+        try:
+            module_spec = importlib.util.spec_from_file_location(
+                "_chimera_pinned_protein_mpnn_utils",
+                utility_module,
+            )
+            if module_spec is None or module_spec.loader is None:
+                raise ImportError(f"Unable to load {utility_module}")
+            module = importlib.util.module_from_spec(module_spec)
+            module_spec.loader.exec_module(module)
+            ProteinMPNN = module.ProteinMPNN
+        except (ImportError, OSError, AttributeError) as exc:
+            raise BackendUnavailable(
+                f"Unable to import the pinned ProteinMPNN implementation from {utility_module}"
             ) from exc
 
         try:

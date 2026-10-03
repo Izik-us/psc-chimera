@@ -8,6 +8,7 @@ from chimera.production_gate import (
     Check,
     _canonical_hash,
     _evidence_identity,
+    _manifest_check,
     _test_check,
     run_production_gate,
 )
@@ -39,6 +40,48 @@ def test_gate_executes_required_test_command_and_records_failures(monkeypatch, t
 
     assert check.status == "FAIL"
     assert check.evidence["failures"] == 1
+
+
+def test_required_dependency_needs_verified_native_smoke(monkeypatch):
+    from chimera.model_store import DEPENDENCIES
+
+    artifact_id = "esm2-t30-150m-ur50d"
+    metadata = dict(DEPENDENCIES[artifact_id], required=True)
+    monkeypatch.setattr(
+        "chimera.production_gate.list_assets",
+        lambda model_cache: [
+            {
+                "artifact_id": artifact_id,
+                "metadata": metadata,
+                "present": True,
+                "manifest_present": True,
+                "verification": {},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "chimera.production_gate.verify_asset",
+        lambda key, model_cache: {
+            "state": "INTEGRITY_VERIFIED",
+            "integrity": "VALID",
+            "compatibility": "UNKNOWN",
+            "native_status": "NATIVE_UNVERIFIED",
+            "native_validation": None,
+            "sha256": "local-checksum",
+            "manifest_sha256": "manifest-checksum",
+        },
+    )
+
+    check, rows, _ = _manifest_check(None)
+
+    assert check.status == "FAIL"
+    assert rows[0]["declared"] is True
+    assert rows[0]["acquired"] is True
+    assert rows[0]["integrity_verified"] is True
+    assert rows[0]["architecture_verified"] is False
+    assert rows[0]["runtime_verified"] is False
+    assert rows[0]["native_smoke_verified"] is False
+    assert f"{artifact_id} native smoke" in check.evidence["blockers"]
 
 
 def test_gate_cannot_be_given_caller_authored_pass_evidence(tmp_path, monkeypatch):
