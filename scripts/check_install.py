@@ -8,21 +8,19 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from pathlib import Path
-
 
 REQUIRED = {
     "torch": "PyTorch",
-    "transformers": "Transformers / ESM-2 support",
-    "esm": "fair-esm",
-    "Bio": "Biopython",
-    "faiss": "FAISS structural retrieval",
     "numpy": "NumPy",
-    "scipy": "SciPy",
-    "pandas": "pandas",
-    "h5py": "h5py",
-    "rich": "rich",
-    "typer": "typer",
+    "einops": "einops",
+}
+
+OPTIONAL = {
+    "esm": "fair-esm ESM/codon workflows",
+    "Bio": "Biopython data acquisition",
+    "faiss": "FAISS retrieval",
+    "scipy": "SciPy research utilities",
+    "matplotlib": "matplotlib visualization",
 }
 
 
@@ -38,6 +36,7 @@ def main() -> int:
     torch = None
     if importlib.util.find_spec("torch") is not None:
         import torch as _torch
+
         torch = _torch
         print(f"PyTorch: {torch.__version__}")
         print(f"CUDA available: {torch.cuda.is_available()}")
@@ -53,11 +52,9 @@ def main() -> int:
         if not present:
             missing.append(module)
 
-    root = Path(__file__).resolve().parents[1]
-    weights = root / "weights"
-    for name in ("proteinmpnn_v48_020.pt", "rfdiffusion_base.pt"):
-        path = weights / name
-        print(f"{'OK  ' if path.is_file() and path.stat().st_size else 'MISS'} checkpoint: {path}")
+    for module, label in OPTIONAL.items():
+        present = importlib.util.find_spec(module) is not None
+        print(f"{'OK  ' if present else 'SKIP'} optional {label}: {module}")
 
     if missing:
         print("\nMissing runtime packages:", ", ".join(missing))
@@ -66,12 +63,14 @@ def main() -> int:
 
     try:
         import chimera
+
         print(f"\nCHIMERA import: OK (version {chimera.__version__})")
-    except Exception as exc:
+    except ImportError as exc:
         print(f"\nCHIMERA import: FAILED: {exc}")
         return 1
 
-    print("\nEnvironment looks ready.")
+    print("\nCore environment looks ready.")
+    print("Verify optional model assets with: chimera models verify --offline")
     return 0
 
 

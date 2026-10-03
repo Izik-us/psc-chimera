@@ -81,8 +81,14 @@ def test_regular_install_exposes_import_and_cli_outside_source_tree(tmp_path: Pa
             str(python),
             "-I",
             "-c",
-            "import importlib.metadata, chimera; "
+            "import importlib.metadata, pathlib, chimera; "
             "assert chimera.__version__ == importlib.metadata.version('psc-chimera'); "
+            "requirements = importlib.metadata.requires('psc-chimera') or []; "
+            "base = {item.split(';', 1)[0] for item in requirements "
+            "if ';' not in item}; "
+            "assert base == {'torch>=2.1.0', 'einops>=0.7.0', 'numpy>=1.24.0'}; "
+            "assert pathlib.Path(chimera.__file__).with_name("
+            "'architecture_dependencies.json').is_file(); "
             "print(chimera.__version__)",
         ],
         cwd=tmp_path,

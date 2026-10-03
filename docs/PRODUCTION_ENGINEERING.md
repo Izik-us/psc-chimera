@@ -33,9 +33,9 @@ manipulates `sys.path`.
 
 The declared Python floor is 3.10. CI currently tests 3.10 and 3.11; the
 baseline engineering environment ran Python 3.12. PyTorch/CUDA wheels remain
-platform-specific. Runtime dependencies in `setup.py` are explicit, but the
-current base install still includes a broad research/scientific stack; a
-smaller split between core and research extras remains outstanding.
+platform-specific. The base install includes PyTorch, NumPy, and einops.
+Optional workflow dependencies are isolated in extras; the architecture
+inventory records runtime scope and verification status.
 
 ## Configuration and inference
 
@@ -92,11 +92,21 @@ AlphaFold parameter archive is not an EvoFormer checkpoint. Exact hashes,
 runtime evidence, and these distinctions are maintained in
 [`pretrained_models.md`](./pretrained_models.md).
 
-The model store is a local filesystem registry for those upstream dependencies,
-not yet a registry for CHIMERA model artifacts. CHIMERA artifact lifecycle
-states (created/checked/validated/released/deprecated/retired), release
-artifacts, checkpoint-to-artifact manifests, dataset/preprocessing links, and
-retrieval-index compatibility are not implemented.
+The model store is a local filesystem registry for upstream dependencies, not
+a registry for CHIMERA model artifacts. The machine-readable architecture
+inventory reports that no CHIMERA production composition or trained artifact
+is selected. The identified duplicate/untrusted files in ignored `Models/` and
+`weights/` paths were removed; their hashes and dispositions are retained in
+[`pretrained_models.md`](./pretrained_models.md), and the gate rejects their
+reappearance.
+
+`chimera production-dependencies` prints the production closure and current
+release blockers as JSON. At present it reports a blocked research candidate,
+not an executable production release. The available 588-row codon dataset
+contains measured and proxy labels but does not supply the MSA/structure
+training examples and independent held-out calibration required by the
+canonical representation, flow, sequence, and objective components. It is
+therefore not a valid source from which to manufacture a production checkpoint.
 
 ## CLI and production gate
 
@@ -106,6 +116,7 @@ chimera models list
 chimera models fetch esm2_t30_150m
 chimera models fetch esm2_t30_150m_contact_regression
 chimera models verify --offline
+chimera production-dependencies
 chimera production-gate --root C:\path\to\psc-chimera --output C:\path\to\evidence.json
 ```
 
@@ -119,6 +130,8 @@ The gate does not accept a caller-constructed evidence object. It executes:
 - `python -m pytest -q`, parsing pass/fail/error/skip counts and treating skips
   as non-passing;
 - external lock schema validation and local cache hash/manifest verification;
+- architecture dependency graph, runtime records, data hashes, and reconciled
+  workspace model-file policy;
 - local CPU tensor smoke and CUDA tensor smoke when CUDA is available;
 - checkpoint-format/migration-policy validation.
 
@@ -135,9 +148,13 @@ There is no selected release checkpoint, CHIMERA artifact, or production
 inference configuration in the repository. Accordingly checkpoint
 compatibility, artifact integrity for a selected model, complete provenance,
 inference smoke, and deterministic smoke are emitted as `UNAVAILABLE` and
-block a release `PASS`. Optional missing external model assets are listed
-individually; they are not reported as successfully installed. This gate
-currently establishes engineering evidence collection, not a releasable model.
+block a release `PASS`. This is currently a training/data-adequacy blocker,
+not a missing ESM-2, ProteinMPNN, RFdiffusion, ESMFold, or OpenFold production
+dependency: none of those external foundation models is required by the
+selected local approximation candidate. Optional missing external model
+assets are listed individually; they are not reported as successfully
+installed. This gate currently establishes engineering evidence collection,
+not a releasable model.
 
 `preproduction_readiness_report(PreProductionGateEvidence(...))` remains for
 backwards compatibility as an evidence-summary API. It is not the production

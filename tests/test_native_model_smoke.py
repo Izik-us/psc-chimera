@@ -41,6 +41,7 @@ def _source_revision() -> dict[str, object]:
     }
 
 
+@pytest.mark.requires_weights
 def test_esm2_native_checkpoint_runs_through_codon_optimizer(monkeypatch):
     checkpoint = _verified_asset_or_skip("esm2_t30_150m")
     from chimera import model_store
@@ -65,12 +66,13 @@ def test_esm2_native_checkpoint_runs_through_codon_optimizer(monkeypatch):
     assert optimizer.esm_model is not None
     assert optimizer.esm_model.num_layers == 30
     assert optimizer.esm_model.embed_dim == 640
-    assert 140_000_000 <= sum(
-        parameter.numel() for parameter in optimizer.esm_model.parameters()
-    ) <= 160_000_000
+    assert (
+        140_000_000
+        <= sum(parameter.numel() for parameter in optimizer.esm_model.parameters())
+        <= 160_000_000
+    )
     assert all(
-        optimizer.esm_alphabet.get_idx(amino_acid) >= 0
-        for amino_acid in AA_TO_IDX
+        optimizer.esm_alphabet.get_idx(amino_acid) >= 0 for amino_acid in AA_TO_IDX
     )
 
     tokens = torch.tensor(
@@ -100,9 +102,9 @@ def test_esm2_native_checkpoint_runs_through_codon_optimizer(monkeypatch):
             "version": __version__,
             **_source_revision(),
         },
-        "upstream_revision": model_store.DEPENDENCIES[
-            "esm2-t30-150m-ur50d"
-        ]["upstream_revision"],
+        "upstream_revision": model_store.DEPENDENCIES["esm2-t30-150m-ur50d"][
+            "upstream_revision"
+        ],
         "runtime": {
             "fair_esm": version("fair-esm"),
             "torch": torch.__version__,
@@ -133,9 +135,7 @@ def _helical_backbone(length: int) -> torch.Tensor:
     coords = torch.empty((1, length, 4, 3), dtype=torch.float32)
     for index in range(length):
         angle = index * 1.745329252
-        ca = torch.tensor(
-            [2.3 * math.cos(angle), 2.3 * math.sin(angle), 1.5 * index]
-        )
+        ca = torch.tensor([2.3 * math.cos(angle), 2.3 * math.sin(angle), 1.5 * index])
         tangent = torch.tensor([-math.sin(angle), math.cos(angle), 0.0])
         radial = torch.tensor([math.cos(angle), math.sin(angle), 0.0])
         coords[0, index, 0] = (
@@ -151,6 +151,7 @@ def _helical_backbone(length: int) -> torch.Tensor:
     return coords
 
 
+@pytest.mark.requires_weights
 def test_proteinmpnn_native_checkpoint_runs_through_adapter(monkeypatch):
     checkpoint = _verified_asset_or_skip("proteinmpnn_v48_020")
     upstream_source = cache_root().parent / "upstream" / "ProteinMPNN"
@@ -205,9 +206,9 @@ def test_proteinmpnn_native_checkpoint_runs_through_adapter(monkeypatch):
                 "version": __version__,
                 **_source_revision(),
             },
-            "upstream_revision": model_store.DEPENDENCIES[
-                "proteinmpnn-v-48-020"
-            ]["upstream_revision"],
+            "upstream_revision": model_store.DEPENDENCIES["proteinmpnn-v-48-020"][
+                "upstream_revision"
+            ],
             "runtime": {"torch": torch.__version__, "python": sys.version},
             "device": "cpu",
             "input_shape": list(_helical_backbone(length).shape),
