@@ -172,7 +172,7 @@ For path-level review of the non-code directories: `.github/` contains
 `copilot-instructions.md`, `dependbot.yml`, and `workflows/tests.yml`;
 `production-evidence/` contains `phase1-final.json` and the two timestamped
 `production-gate-*.json` records. The seven baseline documentation files are
-`PIP_SETUP_WINDOWS.md`, `ARCHITECTURE_DEPENDENCY_AUDIT.md`,
+`OPTIONAL_BACKENDS.md`, `ARCHITECTURE_DEPENDENCY_AUDIT.md`,
 `ARCHITECTURE_CLEANUP_AUDIT.md`, `pretrained_models.md`,
 `PRE_PRODUCTION_ENGINEERING_GATE.md`, `PRODUCTION_ENGINEERING_BASELINE.md`,
 and `PRODUCTION_ENGINEERING.md`. This final audit becomes the eighth tracked
@@ -319,6 +319,15 @@ workflow entry. The older `install.sh` and `install.ps1` also advertised a
 nonexistent `.[md]` extra. `INSTALL.md` was rewritten to show explicit
 Windows/Linux environment creation and package installation commands.
 
+Exact file dispositions for this pass:
+
+| Path | Original role | Final role | Action and evidence |
+| --- | --- | --- | --- |
+| `scripts/install.sh` | Unix venv/pip setup wrapper | None; direct pip commands are documented | Delete. No CI/code caller; duplicated the package-manager workflow and advertised unsupported optional MD installation. |
+| `scripts/install.ps1` | Windows venv/pip setup wrapper | None; direct pip commands are documented | Delete. No CI/code caller; duplicated package-manager workflow and advertised unsupported optional MD installation. |
+| `scripts/install_fast.sh` | Unix setup wrapper with CPU/dev switches and check | None; direct package install plus retained `check_install.py` | Delete. No CI/code caller; specialized switches are reproducible with explicit PyTorch/pip commands and do not warrant a second supported installation interface. |
+| `scripts/install_fast.ps1` | Windows setup wrapper with CPU/dev switches and check | None; direct package install plus retained `check_install.py` | Delete. No CI/code caller; same supported package installation can be performed directly and the diagnostic remains available. |
+
 ### Tagged `components.py` symbol disposition
 
 The tagged file contains a cohesive collection of neural building blocks, not
@@ -345,6 +354,54 @@ does not consume edge features. Both are candidate API-cleanup items requiring
 an explicit deprecation/compatibility decision before changing signatures.
 The canonical geometric graph is consumed later by `MultiScaleNRPSDesigner`.
 
+### Full `chimera/` module dispositions
+
+All 38 tracked Python modules in `chimera/` have one primary disposition.
+`__init__.py` is classified as mixed because it intentionally re-exports
+canonical, production, optional, and downstream APIs; this is public API
+surface, not a model-computation module.
+
+| Module | Disposition | Why retained |
+| --- | --- | --- |
+| `__init__.py` | `MIXED` | Public package facade; API contract tests and installed imports consume it. |
+| `_version.py` | `PRODUCTION_INFRASTRUCTURE` | Authoritative version identity used by setup metadata, CLI, and checkpoints. |
+| `adapters.py` | `EXTERNAL_BACKEND` | Optional pinned upstream model adapters; not silently substituted into canonical computation. |
+| `architecture.py` | `CANONICAL_CORE` | Canonical composition root and forward/design implementation. |
+| `autoregressive_policy.py` | `CANONICAL_SUPPORT` | Canonical sequence policy used in design and sequence/preference training. |
+| `backends.py` | `EXTERNAL_BACKEND` | Optional backend discovery, process, and strict-load boundary. |
+| `bayesian.py` | `RESEARCH_OPTIONAL` | Readiness-gated uncertainty/acquisition support; not unconditional inference. |
+| `checkpoint.py` | `PRODUCTION_INFRASTRUCTURE` | Checkpoint schema, source/runtime provenance, identity, and compatibility. |
+| `chimera_v1.py` | `LEGACY_RESEARCH` | Historical composition uniquely owns the v1 closure; not canonical. |
+| `chimera_v2.py` | `LEGACY_COMPATIBILITY` | Direct compatibility imports, tests, and checkpoint/state migration coverage. |
+| `cli.py` | `PRODUCTION_INFRASTRUCTURE` | Installed user commands for version, model assets, and production gate. |
+| `codon_optimizer.py` | `DOWNSTREAM_SYSTEM` | Protein-to-codon/DNA optimization, separate from the protein structure generator. |
+| `components.py` | `CANONICAL_CORE` | Reusable neural components used by canonical model and explicit legacy compatibility. |
+| `conditioning.py` | `CANONICAL_SUPPORT` | Substrate/pocket conditioning used by canonical forward/training. |
+| `configuration.py` | `PRODUCTION_INFRASTRUCTURE` | Versioned serializable inference configuration contract; incomplete integration remains documented. |
+| `domain_schema.py` | `CANONICAL_SUPPORT` | Typed domain, constraint, and assembly structures shared by model stages. |
+| `dpo.py` | `CANONICAL_SUPPORT` | Canonical preference loss/trainer used by training regime. |
+| `errors.py` | `PRODUCTION_INFRASTRUCTURE` | Shared typed errors for configuration, artifact, runtime, and inference boundaries. |
+| `evaluators.py` | `CANONICAL_SUPPORT` | Candidate objectives/evaluation, including explicitly identified proxies. |
+| `evoformer.py` | `LEGACY_RESEARCH` | Distinct historical representation implementation, not the local canonical MSA approximation. |
+| `flow_matching.py` | `MIXED` | Canonical bridge flow model plus legacy flow APIs with separate callers. |
+| `geometry.py` | `CANONICAL_SUPPORT` | Backbone validation and geometry utilities used by canonical and compatibility paths. |
+| `icosahedral.py` | `CANONICAL_SUPPORT` | Deterministic assembly/interface geometry evaluator support. |
+| `lie.py` | `CANONICAL_SUPPORT` | SO(3)/SE(3) primitives used by bridge, flow, and geometry. |
+| `model_store.py` | `PRODUCTION_INFRASTRUCTURE` | External dependency cache, integrity, and native-status registry; not a CHIMERA artifact registry. |
+| `multi_objective.py` | `MIXED` | Active canonical designer/retriever/value object plus import-visible legacy optimization APIs. |
+| `objective_schema.py` | `CANONICAL_SUPPORT` | Versioned objective labels, validation, and schema identity. |
+| `pareto_pcgrad.py` | `CANONICAL_CORE` | Canonical typed objective features/head and true objective gradient projection. |
+| `pcgrad.py` | `LEGACY_COMPATIBILITY` | Separate public/tested generic PCGrad helpers; not the canonical head loss path. |
+| `production_gate.py` | `PRODUCTION_INFRASTRUCTURE` | Executes release/preflight checks; never generates a model. |
+| `protein_fitness.py` | `DOWNSTREAM_SYSTEM` | Optional ESM-backed protein/codon fitness support, not structural inference. |
+| `proteinmpnn.py` | `CANONICAL_CORE` | Local ProteinMPNN-inspired model and geometric graph construction. |
+| `readiness.py` | `LEGACY_COMPATIBILITY` | Exported/tested pre-production evidence-summary API distinct from release gate. |
+| `reproducibility.py` | `CANONICAL_SUPPORT` | Seed/generator/worker utilities used by training and inference. |
+| `schrodinger_bridge.py` | `CANONICAL_CORE` | Bridge objective, stochastic target/sampling support used by canonical flow. |
+| `se3_diffusion.py` | `LEGACY_RESEARCH` | Distinct historical denoising implementation used by v1, not canonical flow. |
+| `structure_utils.py` | `CANONICAL_SUPPORT` | User-supplied PDB/MSA parsing and structure helpers; not a complete preprocessing contract. |
+| `training.py` | `CANONICAL_SUPPORT` | Canonical staged training, validation, checkpointing, and preference-regime orchestration. |
+
 ### Installation, exact duplicates, and remaining candidates
 
 The exact-content scan found these duplicate byte pairs:
@@ -360,12 +417,20 @@ represent two accession records that happen to have identical sequence text.
 Removing either would require a deliberate data-manifest/provenance migration,
 which is outside a source-only cleanup and has no demonstrated benefit.
 
-`docs/PIP_SETUP_WINDOWS.md` remains an optional upstream-backend research note,
-not an installation authority. It documents optional OpenFold/RFdiffusion
-setup and makes explicit that those checkpoints do not load into CHIMERA's
-local approximations. Its hard-coded local paths are historical and are not
-used as package configuration. A general rewrite or deletion was deferred
-because the upstream-specific setup steps are unique research material.
+`docs/OPTIONAL_BACKENDS.md` now defines optional upstream integration without
+machine-specific paths or a competing installation workflow. It points to
+the package installation guide and model-store manifest, distinguishes native
+upstream models from local approximations, and records which adapters and
+runtimes are or are not available.
+
+External dependencies remain non-canonical: native ProteinMPNN is optional
+and CPU-smoke-verified through its pinned adapter; RFdiffusion is optional
+research infrastructure and native inference is unavailable on this CPU
+runtime; ESM-2 is optional for downstream codon fitness and CPU-verified;
+ESMFold is optional and missing, with no CHIMERA adapter; AlphaFold parameters
+are not a direct local EvoFormer checkpoint and no OpenFold inference
+integration is wired. No external asset was recast as CHIMERA's native
+representation or flow.
 
 No component layer, scientific primitive, dataset, legacy class, adapter,
 production mechanism, test, or model manifest was removed in this pass. The
