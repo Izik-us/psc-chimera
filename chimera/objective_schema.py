@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 import torch
@@ -10,6 +11,19 @@ from .checkpoint import config_hash
 
 
 OBJECTIVE_SCHEMA_VERSION = "objective-schema-v2"
+
+
+@dataclass
+class ParetoObjectives:
+    """Named objective predictions plus the channels available on a candidate."""
+
+    evolutionary_plausibility: torch.Tensor
+    structural_stability: torch.Tensor
+    expression_efficiency: torch.Tensor
+    substrate_selectivity: torch.Tensor
+    assembly_compatibility: torch.Tensor
+    available_objectives: tuple[str, ...] | None = None
+
 
 OBJECTIVE_SCHEMA: dict[str, dict[str, Any]] = {
     "evolutionary_plausibility": {

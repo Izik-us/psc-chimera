@@ -41,7 +41,8 @@ from .bayesian import BayesianUncertaintyEstimator
 from .reproducibility import seed_everything, seed_worker, make_generator
 from .checkpoint import CheckpointManifest, save_manifest, load_manifest, config_hash, state_schema_hash, validate_checkpoint_compatibility
 from .domain_schema import DomainType, DomainSpan, AssemblySchema
-from .multi_objective import StructuralRetriever, MultiScaleNRPSDesigner
+from .retrieval import StructuralRetriever
+from .sequence_design import MultiScaleNRPSDesigner
 from .conditioning import SubstratePocketConditioner
 from .components import MSARepresentationBackbone
 from .autoregressive_policy import AutoregressiveSequencePolicy

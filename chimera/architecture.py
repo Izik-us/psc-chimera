@@ -33,19 +33,21 @@ from .evaluators import BiologicalObjectiveEvaluator
 from .flow_matching import FlowMatchingBackbone
 from .geometry import validate_backbone
 from .lie import so3_log
-from .multi_objective import MultiScaleNRPSDesigner, ParetoObjectives, StructuralRetriever
 from .objective_schema import validate_objective_target
 from .pareto_pcgrad import (
     OBJECTIVE_FEATURE_PLAN,
     MergeReadyParetoMultiObjectiveHead,
     ObjectiveFeatureEncoder,
     ObjectiveFeatureSource,
+    ParetoObjectives,
 )
 from .pcgrad import PCGradOptimizer, pcgrad_step, project_conflicting_gradients
 from .proteinmpnn import get_protein_graph
 from .reproducibility import make_generator, seed_everything, seed_worker
 from .schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 from .autoregressive_policy import AutoregressiveSequencePolicy
+from .retrieval import StructuralRetriever
+from .sequence_design import MultiScaleNRPSDesigner
 
 
 SUBSTRATE_TOKENS = {

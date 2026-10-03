@@ -3,7 +3,7 @@ import torch
 from chimera import CHIMERAv2
 from chimera.bayesian import BayesianUncertaintyEstimator
 from chimera.flow_matching import FlowMatchingBackbone
-from chimera.multi_objective import MultiScaleNRPSDesigner
+from chimera.sequence_design import MultiScaleNRPSDesigner
 from chimera.pareto_pcgrad import MergeReadyParetoMultiObjectiveHead
 
 

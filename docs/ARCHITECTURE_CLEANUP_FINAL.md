@@ -53,7 +53,7 @@ chimera.CHIMERAv2
      -> frame-to-coordinate conversion and geometry.validate_backbone
      -> components.NodeProjectionConnector and ProteinMPNNBackbone
      -> proteinmpnn.get_protein_graph
-     -> multi_objective.MultiScaleNRPSDesigner
+     -> sequence_design.MultiScaleNRPSDesigner
      -> AutoregressiveSequencePolicy.generate
      -> pareto_pcgrad.ObjectiveFeatureEncoder and
         MergeReadyParetoMultiObjectiveHead
@@ -119,30 +119,29 @@ validated CHIMERA checkpoint and complete production inference/preprocessing/
 provenance contract. The prior production engineering audit records this as a
 release blocker; this cleanup did not weaken or re-run the gate.
 
-## `multi_objective.py` symbol audit
+## `multi_objective.py` symbol audit before second-order separation
 
-The module is mixed-purpose, not dead. Its top-level symbols, current roles,
-and disposition are:
+The first-pass audit found that this module was genuinely mixed. The
+second-order pass has since moved its canonical/optional pieces to owned
+modules and its historical implementations to `legacy_optimization.py`.
+The remaining `multi_objective.py` is now a compatibility shim. The original
+symbol consumers and their current ownership are:
 
 | Symbol | Active callers and evidence | Classification and disposition |
 | --- | --- | --- |
-| `StructuralRetriever` | Constructed by canonical `architecture.py`; index setup is exposed there; also used by legacy v2 and retrieval tests. Canonical forward currently reports retrieval unavailable. | Canonical optional/support API. Retain. |
-| `ProteusPreferencePair` | Used by `LegacyDPOTrainer`, imported by legacy v2, and instantiated in a compatibility test. | Legacy preference data contract. Retain its import path. |
-| `LegacyDPOTrainer` / alias `DPOTrainer` | Imported by legacy v2/tests; intentionally distinct from canonical `chimera.dpo.DPOTrainer`. | Legacy compatibility API. Retain; do not conflate the two implementations. |
-| `LegacyAutoregressiveSequencePolicy` / alias `AutoregressiveSequencePolicy` | Imported by legacy v2 and historical module-level tests. Test collection redirects selected model/policy names, so test spelling alone is not proof of runtime dispatch. | Legacy compatibility API. Retain pending explicit public API retirement. |
-| `ParetoObjectives` | Constructed by canonical `architecture.py`; consumed by `pareto_pcgrad.py`; also imported by legacy v2 and scientific-contract tests. | Shared canonical value object. Retain. |
-| `LegacyParetoMultiObjectiveHead` / alias `ParetoMultiObjectiveHead` | Used by legacy v2 and directly exercised through the old import in scientific-contract tests. Canonical training uses `MergeReadyParetoMultiObjectiveHead` instead. | Legacy compatibility implementation, not canonical PCGrad. Retain. |
-| `LegacyBayesianUncertaintyEstimator` / alias `BayesianUncertaintyEstimator` | Legacy v2 compatibility imports; distinct from `chimera.bayesian.BayesianUncertaintyEstimator`, which the canonical architecture uses. Explicit identity tests distinguish them. | Legacy compatibility API. Retain. |
-| `MultiScaleNRPSDesigner` | Instantiated and called by canonical inference and sequence training; also imported by legacy v2, package exports, and canonical/legacy tests. | Canonical sequence-generation component. Retain. |
+| `StructuralRetriever` | Constructed by canonical `architecture.py`; legacy v2 and retrieval tests also use it; canonical forward currently reports retrieval unavailable. | Implementation moved unchanged to `retrieval.py`; canonical composition now imports that explicit optional boundary. Old import remains an alias. |
+| `ProteusPreferencePair` | Used by `LegacyDPOTrainer`, imported by legacy v2, and instantiated in a compatibility test. | Implementation is in `legacy_optimization.py`; old import remains an alias. |
+| `LegacyDPOTrainer` / alias `DPOTrainer` | Imported by legacy v2/tests; distinct from canonical `chimera.dpo.DPOTrainer`. | Implementation is isolated in `legacy_optimization.py`; old import remains an alias. |
+| `LegacyAutoregressiveSequencePolicy` / alias `AutoregressiveSequencePolicy` | Imported by legacy v2 and historical module-level tests. | Implementation is isolated in `legacy_optimization.py`; canonical policy remains in `autoregressive_policy.py`. |
+| `ParetoObjectives` | Constructed by canonical `architecture.py`; consumed by canonical `pareto_pcgrad.py`; also imported by legacy v2 and scientific-contract tests. | Value object moved to `objective_schema.py`; old import remains an alias. Canonical objective code no longer depends on `multi_objective.py`. |
+| `LegacyParetoMultiObjectiveHead` / alias `ParetoMultiObjectiveHead` | Used by legacy v2 and old-import scientific-contract tests. Canonical training uses `MergeReadyParetoMultiObjectiveHead`. | Implementation is isolated in `legacy_optimization.py`; old import remains an alias. |
+| `LegacyBayesianUncertaintyEstimator` / alias `BayesianUncertaintyEstimator` | Legacy v2 compatibility imports; distinct from `chimera.bayesian.BayesianUncertaintyEstimator`. | Implementation is isolated in `legacy_optimization.py`; canonical uncertainty remains in `bayesian.py`. |
+| `MultiScaleNRPSDesigner` | Instantiated by canonical inference/training; imported by legacy v2, package exports, and tests. | Implementation moved unchanged to `sequence_design.py`; canonical composition imports its owner directly. Old import remains an alias. |
 
-No top-level symbol in this file was shown to be safe to purge as a whole.
-Splitting the active classes into another module could improve file boundaries,
-but the present legacy imports and alias identity tests create a real
-compatibility surface. Moving class definitions would also change their
-`__module__` identity, which can affect external imports and serialized Python
-objects. No compatibility/deprecation policy currently authorizes that
-change. Therefore the smallest safe decision is to keep the mixed module and
-document its boundaries, not to move symbols speculatively.
+The old `multi_objective.py` path now only re-exports these compatibility
+names. Serialized references to former `chimera.multi_objective` globals are
+explicitly tested to resolve through the shim. Canonical model composition
+does not import `multi_objective.py` or `legacy_optimization.py`.
 
 One unreachable block was removed from
 `LegacyDPOTrainer.compute_sequence_logprob()`: after returning from the
@@ -207,10 +206,10 @@ proof of redundancy:
 | --- | --- | --- |
 | Model composition | `architecture.CanonicalCHIMERAv2` | `chimera_v1.py` and `chimera_v2.py` are distinct historical compositions. V1 remains historical research; v2 remains import- and test-visible compatibility code. Retain both. |
 | Representation | `components.MSARepresentationBackbone` | `evoformer.EvoFormer` belongs to the historical v1/compatibility closure. Retain; do not substitute one for the other. |
-| Structural generation | `flow_matching.FlowMatchingBackbone` with `schrodinger_bridge.py` and `lie.py` | `se3_diffusion.py` and older flow APIs are separate historical implementations; flow APIs coexist in a mixed module. Retain pending a behavior/checkpoint-aware compatibility plan. |
-| Objective head and PCGrad | `pareto_pcgrad.MergeReadyParetoMultiObjectiveHead` | `multi_objective.LegacyParetoMultiObjectiveHead` is explicitly heuristic; generic `pcgrad.py` also has public tested helpers. Preserve distinctions and compatibility. |
-| DPO and sequence policy | `dpo.py`, `autoregressive_policy.py` | `multi_objective.py` exposes historical counterparts; old imports and identity/behavior tests exist. Retain. |
-| Bayesian optimization | `bayesian.py` | Legacy estimator alias in `multi_objective.py` is a separate compatibility type. Retain both. |
+| Structural generation | `flow_matching.FlowMatchingBackbone` with `schrodinger_bridge.py` and `lie.py` | `se3_diffusion.py` and older flow APIs are separate historical implementations; the flow module still has a justified mixed drift-network/flow-API boundary. |
+| Objective head and PCGrad | `pareto_pcgrad.MergeReadyParetoMultiObjectiveHead` | `legacy_optimization.LegacyParetoMultiObjectiveHead` is explicitly heuristic; generic `pcgrad.py` also has public tested helpers. The old multi-objective import is a shim. |
+| DPO and sequence policy | `dpo.py`, `autoregressive_policy.py` | `legacy_optimization.py` contains historical counterparts; `multi_objective.py` preserves old import names only. |
+| Bayesian optimization | `bayesian.py` | Legacy estimator in `legacy_optimization.py` is distinct; old import remains an alias. |
 | Readiness and release | `architecture.inference_readiness()` and `production_gate.py` | `readiness.py` is the exported evidence-summary compatibility surface. Retain and do not treat it as the release gate. |
 | ProteinMPNN | Local ProteinMPNN-inspired canonical component | Native upstream integration is isolated behind optional adapter code. They are not interchangeable implementations. Retain both boundaries. |
 | SO(3)/SE(3), geometry, data, checkpoints | Shared Lie/geometry helpers and explicit checkpoint/model-store contracts | Similar-purpose helpers have distinct callers, invariants, and artifact semantics. No behavior-equivalence evidence justified consolidation. Retain. |
@@ -356,7 +355,7 @@ The canonical geometric graph is consumed later by `MultiScaleNRPSDesigner`.
 
 ### Full `chimera/` module dispositions
 
-All 38 tracked Python modules in `chimera/` have one primary disposition.
+All 41 tracked Python modules in `chimera/` have one primary disposition.
 `__init__.py` is classified as mixed because it intentionally re-exports
 canonical, production, optional, and downstream APIs; this is public API
 surface, not a model-computation module.
@@ -387,18 +386,21 @@ surface, not a model-computation module.
 | `geometry.py` | `CANONICAL_SUPPORT` | Backbone validation and geometry utilities used by canonical and compatibility paths. |
 | `icosahedral.py` | `CANONICAL_SUPPORT` | Deterministic assembly/interface geometry evaluator support. |
 | `lie.py` | `CANONICAL_SUPPORT` | SO(3)/SE(3) primitives used by bridge, flow, and geometry. |
+| `legacy_optimization.py` | `LEGACY_COMPATIBILITY` | Historical DPO, sequence policy, Pareto head, and Bayesian implementations isolated from the canonical composition. |
 | `model_store.py` | `PRODUCTION_INFRASTRUCTURE` | External dependency cache, integrity, and native-status registry; not a CHIMERA artifact registry. |
-| `multi_objective.py` | `MIXED` | Active canonical designer/retriever/value object plus import-visible legacy optimization APIs. |
-| `objective_schema.py` | `CANONICAL_SUPPORT` | Versioned objective labels, validation, and schema identity. |
-| `pareto_pcgrad.py` | `CANONICAL_CORE` | Canonical typed objective features/head and true objective gradient projection. |
+| `multi_objective.py` | `LEGACY_COMPATIBILITY` | Thin import shim preserving established symbol names; no implementation remains here. |
+| `objective_schema.py` | `CANONICAL_SUPPORT` | Versioned objective labels, validation, schema identity, and `ParetoObjectives`. |
+| `pareto_pcgrad.py` | `CANONICAL_CORE` | Canonical typed objective features/head and true gradient projection; depends on `objective_schema.py`, not the legacy shim. |
 | `pcgrad.py` | `LEGACY_COMPATIBILITY` | Separate public/tested generic PCGrad helpers; not the canonical head loss path. |
 | `production_gate.py` | `PRODUCTION_INFRASTRUCTURE` | Executes release/preflight checks; never generates a model. |
 | `protein_fitness.py` | `DOWNSTREAM_SYSTEM` | Optional ESM-backed protein/codon fitness support, not structural inference. |
 | `proteinmpnn.py` | `CANONICAL_CORE` | Local ProteinMPNN-inspired model and geometric graph construction. |
 | `readiness.py` | `LEGACY_COMPATIBILITY` | Exported/tested pre-production evidence-summary API distinct from release gate. |
 | `reproducibility.py` | `CANONICAL_SUPPORT` | Seed/generator/worker utilities used by training and inference. |
+| `retrieval.py` | `RESEARCH_OPTIONAL` | Optional structural retrieval with an explicit embedding-alignment precondition. |
 | `schrodinger_bridge.py` | `CANONICAL_CORE` | Bridge objective, stochastic target/sampling support used by canonical flow. |
 | `se3_diffusion.py` | `LEGACY_RESEARCH` | Distinct historical denoising implementation used by v1, not canonical flow. |
+| `sequence_design.py` | `CANONICAL_CORE` | Hierarchical residue/domain/module/assembly sequence designer used in canonical inference and training. |
 | `structure_utils.py` | `CANONICAL_SUPPORT` | User-supplied PDB/MSA parsing and structure helpers; not a complete preprocessing contract. |
 | `training.py` | `CANONICAL_SUPPORT` | Canonical staged training, validation, checkpointing, and preference-regime orchestration. |
 
@@ -432,6 +434,135 @@ are not a direct local EvoFormer checkpoint and no OpenFold inference
 integration is wired. No external asset was recast as CHIMERA's native
 representation or flow.
 
-No component layer, scientific primitive, dataset, legacy class, adapter,
-production mechanism, test, or model manifest was removed in this pass. The
-previously documented release blocker remains unchanged.
+The preceding installation-consolidation pass removed no component layer,
+scientific primitive, dataset, legacy class, adapter, production mechanism,
+test, or model manifest. Its release blocker remains unchanged.
+
+## Second-order canonical separation (2026-10-03)
+
+### Baseline and verification environment
+
+This pass started from clean `chimera-repair` HEAD
+`0fb84c695000c0cdbce21907d1bceb84cf8b9d76`, eight commits ahead of
+`origin/chimera-repair` at `d82e46114674c77407f20379a1b9a76cb5d6204c`.
+The baseline was Python 3.12.10, PyTorch 2.13.0+cpu, CUDA unavailable;
+compileall and the repository contract passed and pytest reported 212 passed,
+41 warnings. The branch was not reset and its history was not rewritten.
+
+Final verification on the separated implementation passed compileall and
+`scripts/validate_repo_contract.py`; `pytest -q` reported **213 passed, 41
+warnings** in 177.47 seconds, and `git diff --check` passed. The added test
+covers canonical module ownership and old serialized-global resolution. No
+skips or failures were reported.
+
+### Canonical dependency graph after separation
+
+```text
+chimera public API
+  -> architecture.CanonicalCHIMERAv2
+     -> components.MSARepresentationBackbone and feature connectors
+     -> conditioning + domain_schema
+     -> flow_matching.FlowMatchingBackbone
+        -> local SE3FlowMatching velocity network
+        -> schrodinger_bridge + lie
+     -> geometry + proteinmpnn
+     -> sequence_design.MultiScaleNRPSDesigner
+     -> autoregressive_policy.AutoregressiveSequencePolicy
+     -> objective_schema.ParetoObjectives
+     -> pareto_pcgrad.ObjectiveFeatureEncoder/learned objective head
+     -> evaluators + deterministic icosahedral geometry proxy
+  -> training.CanonicalTrainer and training.validate
+  -> production configuration/checkpoint/model-store/release mechanisms
+```
+
+`architecture.py` imports canonical sequence generation from
+`sequence_design.py`, the objective value type from the objective schema via
+`pareto_pcgrad.py`, and the optional retrieval component directly from
+`retrieval.py`. It no longer imports `multi_objective.py` or
+`legacy_optimization.py`. `pareto_pcgrad.py` depends on `objective_schema.py`
+directly and no longer imports a value type from the legacy optimization
+module. The legacy `chimera_v2.py` remains a separate compatibility closure.
+
+Training and validation remain as previously traced: representation uses
+masked reconstruction; flow/constraint regimes optimize the bridge drift;
+sequence regime optimizes the local geometric designer and autoregressive
+policy; objective regime trains typed surrogate channels with true projected
+gradients; preference regime uses canonical `dpo.DPOTrainer`. Held-out neural
+validation, candidate geometry/objective evaluation, and the production gate
+retain distinct owners.
+
+### Extracted code and compatibility
+
+| Former owner | Symbol(s) | Current owner | Reason |
+| --- | --- | --- | --- |
+| `multi_objective.py` | `MultiScaleNRPSDesigner` | `sequence_design.py` | Canonical hierarchical sequence generation no longer resides in an optimization/legacy module. Extracted class source was compared byte-for-byte at the AST node level with the frozen pre-change source. |
+| `multi_objective.py` | `StructuralRetriever` | `retrieval.py` | Optional retrieval has a distinct owner and explicit embedding-space alignment requirement. Extracted implementation was verified source-identical. |
+| `multi_objective.py` | `ParetoObjectives` | `objective_schema.py` | Canonical predictions now share ownership with the semantic objective contract; this removes the canonical objective module's reverse dependency on mixed historical code. |
+| `multi_objective.py` | Legacy DPO, sequence policy, Pareto head, and Bayesian estimator implementations | `legacy_optimization.py` | Their implementations are explicitly isolated from the canonical composition. |
+| Former multi-objective public imports | Established historical class names | `multi_objective.py` | Thin import shim retained for legacy callers and Python pickle global resolution. Tests resolve old serialized-global references through the shim. |
+
+No functionality, objective definition, model equation, tensor parameter, or
+training semantic was deleted. Moving class definitions changes their new
+`__module__` identity; the old module attributes remain bound to the same
+class objects, and serialized-global resolution is tested. State-dict keys
+are unchanged because component names and parameter hierarchies did not
+change. Existing strict component-transfer/migration tests remain in the
+focused verification set.
+
+### Legacy and mixed-module decisions
+
+* `legacy_optimization.py` contains the historical DPO/pair, autoregressive
+  policy, Pareto heuristic, and Bayesian implementation surfaces. They are
+  consumed by legacy `chimera_v2.py`, old import paths, and compatibility
+  tests; they are not imported by the canonical composition. Their retirement
+  is not planned until the external compatibility policy is decided.
+* `multi_objective.py` contains only aliases/re-exports and exists for old
+  source/pickle paths. New code should use the owning modules.
+* `chimera_v1.py`, `chimera_v2.py`, `evoformer.py`, `se3_diffusion.py`,
+  `pcgrad.py`, and `readiness.py` remain for distinct research,
+  compatibility, generic-utility, and evidence-summary consumers. In
+  particular, `readiness.py` summarizes caller-supplied evidence; it does not
+  compete with the executable `production_gate.py`.
+* `flow_matching.py` remains mixed because the canonical bridge wrapper uses
+  its SE(3) velocity network and invariant-point-attention implementation;
+  the legacy deterministic interpolation/RK4 APIs share that file and still
+  have callers. A larger move would affect class serialization/import paths
+  and checkpoint/migration tests. No math was duplicated or changed here.
+* Tagged `components.py` remains a coherent group of neural building blocks
+  on the canonical path. Its MSA alias is consumed by legacy imports/tests;
+  the inert `n_blocks`/edge compatibility constructor arguments were not
+  removed because that would be an API decision, not architectural separation.
+
+### Retained capabilities and boundaries
+
+* **Optional research:** Bayesian uncertainty/acquisition, retrieval, legacy
+  sequence/objective optimizers, and generic PCGrad helpers remain distinct
+  from unconditional canonical inference/training.
+* **External backends:** native ProteinMPNN is optional and separately
+  adapter-verified; RFdiffusion is optional and unavailable in the verified
+  CPU/Python runtime; ESMFold has no adapter and its asset is missing;
+  OpenFold/AlphaFold assets are not compatible with the local representation;
+  ESM-2 is optional downstream codon support, not the structural model.
+* **Downstream codon system:** `codon_optimizer.py` and
+  `protein_fitness.py` remain separate. No codon datasets were changed.
+* **Data and scripts:** no data or scripts were deleted, merged, regenerated,
+  or re-labeled. Existing dataset manifests/provenance and documented
+  downstream training uses were not changed.
+* **Public API:** `chimera.CHIMERAv2` remains the canonical model alias.
+  `MultiScaleNRPSDesigner` and `StructuralRetriever` are imported from their
+  named owners by package exports; the historical `multi_objective` path is
+  compatibility-only. Canonical DPO and Pareto APIs remain under `dpo` and
+  `pareto_pcgrad`.
+
+### Remaining architectural debt
+
+The canonical model still constructs an unavailable structural retriever
+member and reports `RAG_UNAVAILABLE`; removing it from model state and the
+component-transfer contract would require a deliberate checkpoint/API
+migration. `flow_matching.py` remains mixed as described above. Legacy
+`chimera_v2.py` is retained because tests exercise compatibility and
+checkpoint migration, and external consumers cannot be enumerated locally.
+`InferenceConfig` is not wired end-to-end into design, and there is no
+validated trained production checkpoint, stable preprocessing/request/result
+contract, or complete inference telemetry/determinism evidence. The
+production gate remains blocked rather than overstating readiness.

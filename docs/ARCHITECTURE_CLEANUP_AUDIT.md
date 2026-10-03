@@ -344,3 +344,21 @@ had a consumer.
 Architecture moves/splits require their own import-compatibility plan and
 focused tests. No scientific architecture, objective semantics, or model
 mathematics were changed.
+
+## Second-order separation update (2026-10-03)
+
+The later second-order pass implemented the previously deferred safe module
+separation. `MultiScaleNRPSDesigner` now lives in `chimera/sequence_design.py`,
+`StructuralRetriever` in `chimera/retrieval.py`, and `ParetoObjectives` in
+`chimera/objective_schema.py`. The old `chimera/multi_objective.py` import path
+is a compatibility shim; the historical DPO, autoregressive, Pareto, and
+Bayesian implementations live in `chimera/legacy_optimization.py`.
+
+The canonical `architecture.py` and `pareto_pcgrad.py` now import from those
+owning modules directly and do not import the compatibility shim or
+`legacy_optimization.py`. Tests verify both the owned class modules and
+resolution of serialized globals through the old multi-objective path. This
+supersedes this audit's earlier recommendation to retain the entire mixed
+module in place. `flow_matching.py` and `components.py` remain unchanged:
+source/test consumers demonstrate shared canonical building blocks in both,
+and no state/checkpoint-safe extraction was justified in this pass.
