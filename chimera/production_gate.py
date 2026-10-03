@@ -420,10 +420,30 @@ def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any
         )
         row = {
             "artifact_id": asset["artifact_id"],
+            "declared": True,
+            "acquired": verification["state"] == "INTEGRITY_VERIFIED",
+            "integrity_verified": verification["integrity"] == "VALID",
             "required": metadata["required"],
             "state": verification["state"],
             "integrity": verification["integrity"],
             "compatibility": verification["compatibility"],
+            "native_status": verification.get(
+                "native_status", "NATIVE_UNVERIFIED"
+            ),
+            "native_validation": verification.get("native_validation"),
+            "architecture_verified": verification["compatibility"] == "VALID",
+            "runtime_verified": verification.get("native_status")
+            == "NATIVE_VERIFIED",
+            "native_smoke_verified": (
+                verification.get("native_status") == "NATIVE_VERIFIED"
+                and isinstance(verification.get("native_validation"), dict)
+                and verification["native_validation"].get("status")
+                == "NATIVE_VERIFIED"
+                and verification["native_validation"].get("evidence", {}).get(
+                    "result"
+                )
+                == "PASS"
+            ),
             "sha256": verification.get("sha256"),
             "manifest_sha256": verification.get("manifest_sha256"),
         }
@@ -432,6 +452,8 @@ def _manifest_check(model_cache: Path | None) -> tuple[Check, list[dict[str, Any
             blockers.append(asset["artifact_id"])
         if metadata["required"] and verification.get("compatibility") != "VALID":
             blockers.append(f"{asset['artifact_id']} adapter compatibility")
+        if metadata["required"] and not row["native_smoke_verified"]:
+            blockers.append(f"{asset['artifact_id']} native smoke")
     workspace_names = {
         "esm2_t30_150M_UR50D.pt",
         "esm2_t30_150M_UR50D-contact-regression.pt",

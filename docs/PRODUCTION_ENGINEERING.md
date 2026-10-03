@@ -68,16 +68,29 @@ installation do not fetch weights.
 
 Cache manifests record upstream project/revision/release, source URL, variant,
 architecture, license, file size, local SHA-256, checksum source, timestamps,
-compatibility state, and a hash over manifest contents. Fetches stage and
-verify before atomic directory publication; an existing artifact identity is
-never overwritten. `models verify --offline` only reads local files.
+compatibility/native status, recorded smoke evidence, and a hash over manifest
+contents. Fetches stage and verify before atomic directory publication; an
+existing artifact identity is never overwritten. `models verify --offline`
+only reads local files.
 
 No published upstream SHA-256 was found for the listed checkpoint URLs. In
 that case, local SHA-256 verifies byte integrity against the local manifest,
 not upstream origin. Compatibility remains `UNKNOWN` until a canonical
-upstream loader and adapter smoke establish it. Local files in the repository's
+upstream loader and adapter smoke establish it; successful cached native smoke
+tests persist local evidence for the gate to inspect. Local files in the repository's
 legacy `Models/` and `weights/` folders are unmanifested; their measured hashes
 and status are in [`pretrained_models.md`](./pretrained_models.md).
+
+The actual upstream acquisition pass confirmed native CPU integration for
+ESM-2 through the CodonOptimizer encoder and ProteinMPNN through the pinned
+native adapter. Both use locally recorded hashes because upstream SHA-256
+values are unpublished. RFdiffusion's checkpoint is acquired and structurally
+inspected, but native execution is `UNAVAILABLE` with this host's CPU-only
+PyTorch and incompatible pinned CUDA/DGL environment. ESMFold remains `MISSING`
+because its 2.77 GB checkpoint could not be staged on the available disk. The
+AlphaFold parameter archive is not an EvoFormer checkpoint. Exact hashes,
+runtime evidence, and these distinctions are maintained in
+[`pretrained_models.md`](./pretrained_models.md).
 
 The model store is a local filesystem registry for those upstream dependencies,
 not yet a registry for CHIMERA model artifacts. CHIMERA artifact lifecycle
@@ -91,6 +104,7 @@ retrieval-index compatibility are not implemented.
 chimera --version
 chimera models list
 chimera models fetch esm2_t30_150m
+chimera models fetch esm2_t30_150m_contact_regression
 chimera models verify --offline
 chimera production-gate --root C:\path\to\psc-chimera --output C:\path\to\evidence.json
 ```

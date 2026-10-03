@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import pickle
+from pathlib import Path
 from typing import Sequence
 
 import torch
@@ -33,17 +34,25 @@ class ESMProteinFitnessScorer:
             ) from exc
 
         self.device = torch.device(device)
-        try:
-            self.model, self.alphabet = esm.pretrained.load_model_and_alphabet_local(
-                model_path
-            )
-        except (pickle.UnpicklingError, RuntimeError) as exc:
-            if "Weights only load failed" not in str(exc):
-                raise
-            torch.serialization.add_safe_globals([argparse.Namespace])
-            self.model, self.alphabet = esm.pretrained.load_model_and_alphabet_local(
-                model_path
-            )
+        from .model_store import asset_path, load_esm2
+
+        if (
+            Path(model_path).expanduser().resolve()
+            == asset_path("esm2_t30_150m").resolve()
+        ):
+            self.model, self.alphabet, _ = load_esm2(checkpoint=model_path)
+        else:
+            try:
+                self.model, self.alphabet = esm.pretrained.load_model_and_alphabet_local(
+                    model_path
+                )
+            except (pickle.UnpicklingError, RuntimeError) as exc:
+                if "Weights only load failed" not in str(exc):
+                    raise
+                torch.serialization.add_safe_globals([argparse.Namespace])
+                self.model, self.alphabet = esm.pretrained.load_model_and_alphabet_local(
+                    model_path
+                )
         self.model.to(self.device).eval()
         for parameter in self.model.parameters():
             parameter.requires_grad = False

@@ -1026,37 +1026,49 @@ class CodonOptimizer(nn.Module):
 
         if esm_model_path is not None:
 
-            try:
-                import esm
-            except ImportError as exc:
-                raise RuntimeError(
-                    "esm_model_path was provided, but fair-esm "
-                    "is not installed."
-                ) from exc
+            from pathlib import Path
 
-            try:
-                (
-                    self.esm_model,
-                    self.esm_alphabet,
-                ) = esm.pretrained.load_model_and_alphabet_local(
-                    esm_model_path
+            from .model_store import asset_path, load_esm2
+
+            if (
+                Path(esm_model_path).expanduser().resolve()
+                == asset_path("esm2_t30_150m").resolve()
+            ):
+                self.esm_model, self.esm_alphabet, _ = load_esm2(
+                    checkpoint=esm_model_path
                 )
+            else:
+                try:
+                    import esm
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "esm_model_path was provided, but fair-esm "
+                        "is not installed."
+                    ) from exc
 
-            except (pickle.UnpicklingError, RuntimeError) as exc:
+                try:
+                    (
+                        self.esm_model,
+                        self.esm_alphabet,
+                    ) = esm.pretrained.load_model_and_alphabet_local(
+                        esm_model_path
+                    )
 
-                if "Weights only load failed" not in str(exc):
-                    raise
+                except (pickle.UnpicklingError, RuntimeError) as exc:
 
-                torch.serialization.add_safe_globals(
-                    [argparse.Namespace]
-                )
+                    if "Weights only load failed" not in str(exc):
+                        raise
 
-                (
-                    self.esm_model,
-                    self.esm_alphabet,
-                ) = esm.pretrained.load_model_and_alphabet_local(
-                    esm_model_path
-                )
+                    torch.serialization.add_safe_globals(
+                        [argparse.Namespace]
+                    )
+
+                    (
+                        self.esm_model,
+                        self.esm_alphabet,
+                    ) = esm.pretrained.load_model_and_alphabet_local(
+                        esm_model_path
+                    )
 
             self.esm_batch_converter = (
                 self.esm_alphabet.get_batch_converter()
