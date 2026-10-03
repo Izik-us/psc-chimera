@@ -282,3 +282,91 @@ The following are intentionally retained and not claimed to be unnecessary:
   request/result, telemetry, and determinism contract. This remains an
   explicit production blocker, not a reason to change model architecture or
   weaken the gate.
+
+## Follow-up canonicalization pass (2026-10-03)
+
+### Frozen starting state
+
+The follow-up pass began from clean HEAD `6929c719d2b6191394597d6a3472ef9daa93e6a7`
+on `chimera-repair`; `origin/chimera-repair` was
+`d82e46114674c77407f20379a1b9a76cb5d6204c`. No user changes were present.
+The runtime was Python 3.12.10, PyTorch 2.13.0+cpu, Windows 11 x64, with CUDA
+unavailable. The baseline passed `compileall`, `scripts/validate_repo_contract.py`,
+`git diff --check`, and pytest (**212 passed, 41 warnings**).
+
+The earlier report above reflects the previous cleanup pass's inventory and
+must not be read as the after-count for this pass. This pass started with 679
+tracked files: 92 Python files, 34 test files, 19 scripts, 564 data files,
+8 documentation files, and 8 root files. The 4 installer scripts and their
+references are the only repository files removed in this pass:
+
+| Inventory measure | Before this pass | After this pass |
+| --- | ---: | ---: |
+| Tracked files | 679 | 675 |
+| Python files | 92 | 92 |
+| Test files | 34 | 34 |
+| Script files | 19 | 15 |
+| Data files | 564 | 564 |
+| Documentation files | 8 | 8 |
+| Root-level files | 8 | 8 |
+
+The Python total is unchanged because the removed wrappers were shell and
+PowerShell files. The installation contract is now the package's direct
+`pip install .` / `pip install -e .` path, which is tested from an isolated
+environment; `scripts/check_install.py` remains a non-mutating diagnostic.
+The four wrappers had no CI or code callers; `INSTALL.md` was their only user
+workflow entry. The older `install.sh` and `install.ps1` also advertised a
+nonexistent `.[md]` extra. `INSTALL.md` was rewritten to show explicit
+Windows/Linux environment creation and package installation commands.
+
+### Tagged `components.py` symbol disposition
+
+The tagged file contains a cohesive collection of neural building blocks, not
+an alternative composition root. Exact source references and callers were
+checked; none of the model layers was safe to delete.
+
+| Symbol | Role | Disposition |
+| --- | --- | --- |
+| `TriangularPairUpdateConnector` | Canonical and legacy pair representation update; owns triangular attention/multiplicative modules and optional retrieved-context path. | Keep; instantiated in both architecture compositions and used in inference/training. |
+| `TriangularAttention` | Outgoing/incoming pair attention used by the connector. | Keep; instantiated by canonical and legacy connector constructors. |
+| `TriangularMultiplicativeUpdate` | Outgoing/incoming triangle-indexed pair update used by the connector. | Keep; instantiated by canonical and legacy connector constructors. |
+| `EvolCrossAttentionConnector` | Flow-time-conditioned evolutionary cross-attention in the structural flow. | Keep; canonical/legacy composition and flow training use it. |
+| `NodeProjectionConnector` | Projects MSA single representation for local sequence recovery. | Keep; canonical inference and sequence training use it; legacy composition also constructs it. |
+| `NRPSConstraintEncoder` | Encodes domain, PPant and Stachelhaus annotations into conditioning features. | Keep; canonical constraint/flow conditioning and legacy composition use it. |
+| `MSARepresentationBackbone` | Local row/column attention representation and masked reconstruction. | Keep; canonical inference and representation training use it. |
+| `EvoFormerBackbone` | Historical alias for `MSARepresentationBackbone`. | Keep as compatibility: `chimera_v2.py` and masking tests import it, with an explicit identity contract. |
+| `ProteinMPNNBackbone` | Local residue-feature trunk, distinct from native ProteinMPNN. | Keep; canonical and legacy compositions use it. Its ignored legacy `backbone_coords`/constructor `edge_features` parameters are documented compatibility surface, not claims of geometric input use. |
+
+Two constructor/configuration details are intentionally retained, not
+misrepresented as active settings: `MSARepresentationBackbone.n_blocks` is
+accepted but the current implementation fixes the row encoder at eight
+layers; `ProteinMPNNBackbone.edge_features` is accepted but the local trunk
+does not consume edge features. Both are candidate API-cleanup items requiring
+an explicit deprecation/compatibility decision before changing signatures.
+The canonical geometric graph is consumed later by `MultiScaleNRPSDesigner`.
+
+### Installation, exact duplicates, and remaining candidates
+
+The exact-content scan found these duplicate byte pairs:
+
+* `data/fath2011_codon_training.jsonl` and
+  `data/fath2011_codon_training_measured.jsonl`
+* `data/external/ensembl_cds_cache/ENST00000394805.txt` and
+  `data/external/ensembl_cds_cache/ENST00000618441.txt`
+
+No duplicate was deleted. The first pair has distinct manifest identities and
+dataset/provenance labels even though its bytes match; the cache pair may
+represent two accession records that happen to have identical sequence text.
+Removing either would require a deliberate data-manifest/provenance migration,
+which is outside a source-only cleanup and has no demonstrated benefit.
+
+`docs/PIP_SETUP_WINDOWS.md` remains an optional upstream-backend research note,
+not an installation authority. It documents optional OpenFold/RFdiffusion
+setup and makes explicit that those checkpoints do not load into CHIMERA's
+local approximations. Its hard-coded local paths are historical and are not
+used as package configuration. A general rewrite or deletion was deferred
+because the upstream-specific setup steps are unique research material.
+
+No component layer, scientific primitive, dataset, legacy class, adapter,
+production mechanism, test, or model manifest was removed in this pass. The
+previously documented release blocker remains unchanged.

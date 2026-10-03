@@ -258,8 +258,6 @@ without a demonstrated consumer.
 | `scripts/test_codon_optimizer.py` | `codon tooling` | Standalone codon optimizer checks. |
 | `scripts/test_codon_optimizer_integrity.py` | `codon tooling` | Dataset/optimizer integrity checks. |
 | `scripts/train_codon_optimizer.py` | `codon tooling` | Downstream codon optimizer training; uses clustered splitting. |
-| `scripts/install.sh`, `scripts/install.ps1` | `development tooling` | Installation helpers; not model entrypoints. |
-| `scripts/install_fast.sh`, `scripts/install_fast.ps1` | `development tooling` | Accelerated/development installation helpers; verify dependency parity before treating as canonical install. |
 | `scripts/__init__.py` | `development tooling` | Package marker only. |
 
 ## Test inventory
@@ -310,6 +308,11 @@ contract protected; many files also cover regressions or multiple layers.
   distinguishes production engineering from biological validation. This
   report does not find evidence to replace that architecture with external
   models.
+- Four shell/PowerShell installation wrappers duplicated virtual-environment
+  creation and `pip install`; the older pair also advertised an undeclared
+  `.[md]` extra. They were removed in the later canonicalization pass.
+  `INSTALL.md` now documents the package install commands directly; the
+  independent `scripts/check_install.py` diagnostic remains.
 - `chimera/evoformer.py`, `chimera/se3_diffusion.py`, and
   `data/training_data.py` contained historical descriptions in active-looking
   paths. Their module headers now label that material historical without
