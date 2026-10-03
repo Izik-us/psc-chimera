@@ -279,29 +279,6 @@ class LegacyDPOTrainer(nn.Module):
             return model.sequence_logprob(sequence_tokens, msa_tokens, pair_features, source_R, source_t)
         raise TypeError("DPO requires a model.sequence_logprob autoregressive policy interface")
 
-        outputs = model(
-            msa_tokens=msa_tokens,
-            initial_pair_features=pair_features,
-            source_R=source_R,
-            source_t=source_t,
-        )
-        seq_logits = outputs["sequences"]  # (B, n_seqs, L, 20) or (B, L, 20)
-
-        # Handle both per-candidate scores (B, n_seqs, L, 20) and batch scores (B, L, 20)
-        if seq_logits.ndim == 4:
-            # Per-candidate: take mean over candidates for final log-prob
-            seq_logits = seq_logits.mean(dim=1)  # (B, L, 20)
-
-        # Sum log-probs over sequence length (log-likelihood)
-        log_probs = F.log_softmax(seq_logits, dim=-1)
-        target_logprobs = log_probs.gather(
-            dim=-1, index=sequence_tokens.unsqueeze(-1)
-        ).squeeze(
-            -1
-        )  # (B, L)
-
-        return target_logprobs.sum(dim=-1)  # (B,) total log-likelihood
-
     def dpo_loss(
         self,
         policy_model,  # current CHIMERA (being trained)

@@ -7,7 +7,6 @@ CHIMERA: Compositional Hierarchical Inference Model for
          Evolutionary Representation and Architecture
 """
 
-__version__ = "2.0.0"
 from ._version import __version__
 from .configuration import InferenceConfig, CONFIGURATION_SCHEMA_VERSION
 from .errors import (
