@@ -1,4 +1,8 @@
-"""Reusable CHIMERA model components shared by canonical and legacy compositions."""
+"""Local model components used by canonical and legacy CHIMERA compositions.
+
+These modules are trainable local approximations, not drop-in implementations
+of EvoFormer, OpenFold, RFdiffusion, or native ProteinMPNN.
+"""
 
 from __future__ import annotations
 
@@ -10,23 +14,12 @@ import torch.nn.functional as F
 from .domain_schema import NRPSConstraints
 
 class TriangularPairUpdateConnector(nn.Module):
-    """
-    Upgraded pair connector for CHIMERAv2.
+    """Project and update pair features with learned triangle-indexed mixing.
 
-    v1: Simple linear projection 128→256 + one cross-attention
-    v2: Triangular updates (from AF2 EvoFormer) + linear projection + cross-attention
-
-    Triangular updates are the key innovation in AlphaFold2's pair representation:
-    they enforce the triangle inequality constraint that if residue i contacts j,
-    and j contacts k, then i likely contacts k. This is a structural prior.
-
-    For NRPS design, this matters because:
-        A-domain substrate binding is a closed-shell interaction —
-        if residue 235 is close to the substrate AND residue 301 is close
-        to the substrate, then 235 and 301 are close to each other.
-        The triangular update encodes this constraint, ensuring the
-        generated A-domain binding pocket has geometrically consistent
-        substrate contacts.
+    The pair updates aggregate across an intermediate residue index; they do
+    not enforce triangle inequalities or guarantee geometrically consistent
+    residue contacts. Optional retrieved context is only meaningful when its
+    embedding space is aligned with the current pair representation.
     """
 
     def __init__(
@@ -40,12 +33,10 @@ class TriangularPairUpdateConnector(nn.Module):
         self.input_proj = nn.Linear(evo_pair_dim, out_dim)
         self.input_norm = nn.LayerNorm(out_dim)
 
-        # Triangular attention: outgoing edges (i,j) updated by (i,k) and (k,j)
+        # Aggregate pair information over an intermediate residue index.
         self.tri_attn_out = TriangularAttention(out_dim, n_heads, mode="outgoing")
-        # Triangular attention: incoming edges
         self.tri_attn_in = TriangularAttention(out_dim, n_heads, mode="incoming")
 
-        # Triangular multiplicative update (cheaper, no attention)
         self.tri_mult_out = TriangularMultiplicativeUpdate(out_dim, mode="outgoing")
         self.tri_mult_in = TriangularMultiplicativeUpdate(out_dim, mode="incoming")
 
@@ -57,7 +48,7 @@ class TriangularPairUpdateConnector(nn.Module):
             nn.Linear(out_dim * 4, out_dim),
         )
 
-        # Cross-attention with retrieved structures
+        # Optional context attention; callers must establish embedding alignment.
         self.retrieval_cross = nn.MultiheadAttention(
             embed_dim=out_dim,
             num_heads=n_heads,
@@ -68,7 +59,7 @@ class TriangularPairUpdateConnector(nn.Module):
         self._init_to_identity()
 
     def _init_to_identity(self):
-        """Initialize so untrained connector passes pair_repr through unchanged."""
+        """Initialize the overlapping input-projection dimensions to identity."""
         nn.init.zeros_(self.input_proj.bias)
         nn.init.eye_(
             self.input_proj.weight[:128, :128]
@@ -84,14 +75,14 @@ class TriangularPairUpdateConnector(nn.Module):
 
         z = self.input_norm(self.input_proj(pair_repr))  # (B, L, L, 256)
 
-        # Triangular updates — enforce geometric consistency in pair repr
+        # Learned pair-feature updates; these are not geometric constraints.
         z = z + self.tri_mult_out(z)  # cheaper: no attention
         z = z + self.tri_mult_in(z)
         z = z + self.tri_attn_out(z)  # richer: with attention
         z = z + self.tri_attn_in(z)
         z = z + self.transition(z)
 
-        # Cross-attend to retrieved structural analogs (if available)
+        # Add optional retrieved context when supplied by the caller.
         if retrieved_context is not None:
             B, L, _, d = z.shape
             z_flat = z.reshape(B, L * L, d)
@@ -202,9 +193,11 @@ class TriangularMultiplicativeUpdate(nn.Module):
         return self.out(self.norm_o(p) * g)
 
 class EvolCrossAttentionConnector(nn.Module):
-    """
-    v2 upgrade: Noise-adaptive evolutionary cross-attention with
-    dual-pathway gating (structural path + evolutionary path).
+    """Combine structural-node and evolutionary features through attention.
+
+    The learned gate conditions one attention path on the supplied flow time.
+    Its values are learned and are not constrained to represent a specific
+    noise schedule or to monotonically vary with flow time.
     """
 
     def __init__(self, d_se3: int = 256, d_evo: int = 256, n_heads: int = 8):
@@ -219,9 +212,7 @@ class EvolCrossAttentionConnector(nn.Module):
         )
         self.norm1 = nn.LayerNorm(d_se3)
 
-        # Noise-adaptive gate: higher evolutionary guidance at high noise
-        # (early diffusion steps: coarse structure from evo)
-        # (late diffusion steps: fine detail from geometry)
+        # Learned flow-time-conditioned gate for the first attention path.
         self.noise_gate = nn.Sequential(
             nn.Linear(1, 64),
             nn.SiLU(),
@@ -229,7 +220,7 @@ class EvolCrossAttentionConnector(nn.Module):
             nn.Sigmoid(),
         )
 
-        # Second attention: SE3 node to EvoFormer single_repr direct
+        # A second attention path over the evolutionary representation.
         self.direct_attn = nn.MultiheadAttention(
             embed_dim=d_se3,
             num_heads=n_heads,
@@ -239,7 +230,7 @@ class EvolCrossAttentionConnector(nn.Module):
         )
         self.norm2 = nn.LayerNorm(d_se3)
 
-        # Combine both attention pathways
+        # Combine the two learned feature paths.
         self.combine = nn.Sequential(
             nn.Linear(d_se3 * 2, d_se3),
             nn.LayerNorm(d_se3),
@@ -251,8 +242,6 @@ class EvolCrossAttentionConnector(nn.Module):
         evo_single: torch.Tensor,  # (B, L, d_evo)
         noise_level: torch.Tensor,  # (B,) flow time t ∈ [0,1]
     ) -> torch.Tensor:
-        # Gate strength: at t=1 (pure noise), gate=1 (full evo guidance)
-        #                at t=0 (clean data), gate~0 (geometry dominates)
         gate = self.noise_gate(noise_level.unsqueeze(-1))  # (B, d_se3)
         gate = gate.unsqueeze(1)  # (B, 1, d_se3)
 
@@ -260,16 +249,17 @@ class EvolCrossAttentionConnector(nn.Module):
         path1, _ = self.cross_attn(se3_node, evo_single, evo_single)
         path1 = self.norm1(se3_node + gate * path1)
 
-        # Pathway 2: direct position-matched injection
+        # A second attention path over the same evolutionary memory.
         path2, _ = self.direct_attn(se3_node, evo_single, evo_single)
         path2 = self.norm2(se3_node + path2)
 
         return self.combine(torch.cat([path1, path2], dim=-1))
 
 class NodeProjectionConnector(nn.Module):
-    """
-    v2 upgrade: multi-layer projection with residue-type-aware scaling
-    and a substrate pocket attentional bias.
+    """Project evolutionary residue features into the local sequence-model width.
+
+    An optional pocket mask adds a learned feature bias at marked positions;
+    it does not encode residue identity or perform attention.
     """
 
     def __init__(self, evo_dim: int = 256, mpnn_dim: int = 128):
@@ -283,7 +273,7 @@ class NodeProjectionConnector(nn.Module):
             nn.Linear(mpnn_dim * 2, mpnn_dim),
             nn.LayerNorm(mpnn_dim),
         )
-        # Substrate pocket attention bias
+        # Learned additive bias for caller-marked pocket positions.
         self.pocket_scale = nn.Linear(mpnn_dim, mpnn_dim)
 
     def forward(
@@ -298,9 +288,10 @@ class NodeProjectionConnector(nn.Module):
         return projected
 
 class NRPSConstraintEncoder(nn.Module):
-    """
-    Encodes NRPS-specific constraints into conditioning tensors.
-    Used by the flow matching velocity field to enforce NRPS geometry.
+    """Encode NRPS annotations as conditioning features for the flow model.
+
+    The encoding exposes constraints to the learned model; it does not itself
+    impose hard geometric constraints on generated structures.
     """
 
     def __init__(self, d: int = 256, max_len: int = 2000):
@@ -393,6 +384,8 @@ class MSARepresentationBackbone(nn.Module):
             nn.GELU(),
             nn.Linear(d_single * 8, d_single),
         )
+        # Historical parameter name retained for checkpoint compatibility.
+        # Canonical training freezes this module only in the representation regime.
         print("[MSARepresentationBackbone] Local approximation; native OpenFold is not configured.")
 
     def encode_msa(
@@ -502,15 +495,20 @@ class MSARepresentationBackbone(nn.Module):
 EvoFormerBackbone = MSARepresentationBackbone
 
 class ProteinMPNNBackbone(nn.Module):
-    """
-    Wraps dauparas/ProteinMPNN for base residue-level sequence design.
-    Augmented by multi-scale designer in CHIMERAv2.
+    """Local residue-feature trunk used before multiscale sequence design.
+
+    This small trainable module does not wrap or load native
+    ``dauparas/ProteinMPNN``. Native integration is isolated in the optional
+    ``ProteinMPNNAdapter``. ``backbone_coords`` and ``edge_features`` remain
+    in the local module's compatibility surface; this trunk uses node features
+    only. The canonical multiscale designer consumes geometric graph features
+    separately.
     """
 
     def __init__(self, node_features: int = 128, edge_features: int = 128):
         super().__init__()
-        # Stub; production: from protein_mpnn_utils import ProteinMPNN
         self.node_features = node_features
+        # Historical parameter name retained for checkpoint compatibility.
         self.frozen_residue_adapter = nn.Sequential(
             nn.Linear(node_features, node_features * 8),
             nn.GELU(),
@@ -523,9 +521,11 @@ class ProteinMPNNBackbone(nn.Module):
             nn.GELU(),
             nn.Linear(node_features * 2, node_features),
         )
-        print("[ProteinMPNNBackbone] Stub loaded. Replace with dauparas/ProteinMPNN.")
+        print(
+            "[ProteinMPNNBackbone] Local residue-feature trunk; native ProteinMPNN "
+            "is provided by the optional adapter."
+        )
 
     def forward(self, backbone_coords, node_features):
         adapter = self.frozen_residue_adapter(node_features)
         return self.mpnn_trunk(adapter)  # (B, L, node_features)
-
