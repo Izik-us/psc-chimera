@@ -30,7 +30,7 @@ from .components import (
 from .dpo import DPOBatch, DPOTrainer
 from .domain_schema import AssemblySchema, DomainSpan, DomainType, NRPSConstraints
 from .evaluators import BiologicalObjectiveEvaluator
-from .flow_matching import FlowMatchingBackbone
+from .se3_flow import FlowMatchingBackbone
 from .geometry import validate_backbone
 from .lie import so3_log
 from .objective_schema import validate_objective_target

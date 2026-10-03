@@ -67,13 +67,15 @@ DPO update of the actual autoregressive sequence policy
 
 Implementation ownership follows that path: `chimera/architecture.py`
 composes the model; `components.py` contains local representation/connectors;
-`flow_matching.py` supplies the velocity network and `schrodinger_bridge.py`
-the bridge objective and sampler; `sequence_design.py` owns hierarchical
-sequence design; and `objective_schema.py` / `pareto_pcgrad.py` own objective
-contracts and prediction. Optional retrieval is isolated in `retrieval.py`.
-`multi_objective.py` is only a compatibility import shim; its historical
-implementations are isolated in `legacy_optimization.py` and are not imported
-by canonical architecture code.
+`se3_flow.py` owns the canonical velocity network and bridge-backed structural
+sampler, while `schrodinger_bridge.py` owns bridge coupling, training targets,
+and stochastic integration. `flow_matching.py` preserves historical imports
+and delegates its old deterministic OT utilities to `legacy_flow.py`.
+`sequence_design.py` owns hierarchical sequence design; `objective_schema.py`
+and `pareto_pcgrad.py` own objective contracts and prediction. Optional
+retrieval is isolated in `retrieval.py`. `multi_objective.py` is only a
+compatibility import shim; its historical implementations are isolated in
+`legacy_optimization.py` and are not imported by canonical architecture code.
 
 ### Scientific status of the transport model
 

@@ -2,7 +2,7 @@ import torch
 from torch import nn
 
 from chimera.schrodinger_bridge import SE3SchrodingerBridge
-from chimera.flow_matching import so3_exp
+from chimera.lie import so3_exp
 
 
 class ZeroDrift(nn.Module):

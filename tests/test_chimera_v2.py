@@ -1,5 +1,9 @@
 """
-CHIMERA v2 shape and integration tests.
+Historical import compatibility and canonical v2 integration tests.
+
+The test collection hook redirects the public ``CHIMERAv2`` test binding to
+the canonical composition. Historical OT-flow and compatibility import APIs
+remain tested explicitly below.
 Run with: pytest tests/test_chimera_v2.py -v
 
 These tests run on CPU with stub weights — no GPU or pretrained

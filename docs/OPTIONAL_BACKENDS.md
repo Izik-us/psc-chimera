@@ -48,8 +48,9 @@ dependency.
 
 ## RFdiffusion
 
-`chimera.flow_matching` and `chimera.schrodinger_bridge` implement CHIMERA's
-own SE(3) flow/bridge; they are not RFdiffusion. The optional
+`chimera.se3_flow` and `chimera.schrodinger_bridge` implement CHIMERA's own
+canonical SE(3) flow/bridge; they are not RFdiffusion. The old
+`chimera.flow_matching` path is compatibility-only. The optional
 `RFdiffusionCLIAdapter` invokes the upstream inference script in its native
 environment. Its checkpoint is declared and safely inspected, but native
 inference is unavailable in the verified CPU-only Python 3.12 environment:

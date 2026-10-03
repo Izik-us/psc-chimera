@@ -2,7 +2,7 @@
 
 This is not the canonical structural generator and is not an RFdiffusion
 implementation or compatibility layer. The canonical composition uses
-``flow_matching.FlowMatchingBackbone`` with
+``se3_flow.FlowMatchingBackbone`` with
 ``schrodinger_bridge.SE3SchrodingerBridge``. This module remains available for
 the legacy implementation; its presence does not establish validated
 biological behavior or pretrained checkpoint compatibility.

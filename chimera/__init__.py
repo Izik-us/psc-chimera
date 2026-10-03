@@ -31,7 +31,7 @@ from .architecture import CHIMERAv2, CanonicalCHIMERAv2
 from .domain_schema import NRPSConstraints
 from .codon_optimizer import CodonOptimizer, optimize_nrps_for_mammalian_expression
 from .protein_fitness import ESMProteinFitnessScorer
-from .flow_matching import SE3FlowMatching, FlowMatchingBackbone, InvariantPointAttention
+from .se3_flow import FlowMatchingBackbone, InvariantPointAttention
 from .schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 from .geometry import GeometryReport, validate_backbone
 from .evaluators import BiologicalObjectiveEvaluator, ObjectiveOutput
@@ -65,6 +65,7 @@ from .objective_schema import (
     objective_schema_hash,
     validate_objective_target,
 )
+# Caller-supplied evidence summary; distinct from the executed release gate.
 from .readiness import PreProductionGateEvidence, preproduction_readiness_report
 from .adapters import (
     BackboneEncoder,
@@ -79,6 +80,17 @@ from .adapters import (
 
 # Public name retained for callers using the historical package API.
 ParetoMultiObjectiveHead = MergeReadyParetoMultiObjectiveHead
+
+
+# Historical package API, intentionally loaded only when requested.
+def __getattr__(name: str):
+    if name == "SE3FlowMatching":
+        from .legacy_flow import SE3FlowMatching
+
+        globals()[name] = SE3FlowMatching
+        return SE3FlowMatching
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "CHIMERAv2", "CanonicalCHIMERAv2", "NRPSConstraints",

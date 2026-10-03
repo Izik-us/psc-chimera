@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import List, Tuple
 import torch
-from .flow_matching import so3_exp
+from .lie import so3_exp
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
 AA_TO_TOKEN = {aa: i for i, aa in enumerate(AA)}

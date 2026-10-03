@@ -19,7 +19,7 @@ def test_public_chimera_is_independent_canonical_composition():
     import chimera.components as components
     import chimera.domain_schema as domain_schema
     import chimera.chimera_v2 as legacy_module
-    from chimera.flow_matching import FlowMatchingBackbone, InvariantPointAttention
+    from chimera.se3_flow import FlowMatchingBackbone, InvariantPointAttention
     from chimera.sequence_design import MultiScaleNRPSDesigner
 
     assert CHIMERAv2 is architecture.CanonicalCHIMERAv2
@@ -989,7 +989,7 @@ def test_legacy_pareto_component_transfer_uses_explicit_strict_migration(tmp_pat
 
 
 def test_flow_checkpoint_migration_fills_bridge_alias(tmp_path):
-    from chimera.flow_matching import FlowMatchingBackbone
+    from chimera.se3_flow import FlowMatchingBackbone
 
     model = FlowMatchingBackbone(d_single=32, d_pair=16, n_blocks=1)
     target = model.state_dict()
@@ -1020,7 +1020,7 @@ def test_flow_checkpoint_migration_fills_bridge_alias(tmp_path):
 
 
 def test_flow_migration_maps_truncated_12_head_ipa(tmp_path):
-    from chimera.flow_matching import FlowMatchingBackbone
+    from chimera.se3_flow import FlowMatchingBackbone
 
     backbone = FlowMatchingBackbone(d_single=64, d_pair=16, n_blocks=1)
     target = backbone.state_dict()
