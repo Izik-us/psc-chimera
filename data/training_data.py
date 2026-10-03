@@ -1,10 +1,11 @@
-"""
-CHIMERA + CodonOptimizer — Training Data Specification
-=======================================================
-Complete guide to what data to use, where to get it, how to format it,
-and how to build the datasets for both models in the PSC pipeline.
+"""Historical, unvalidated proposal for CHIMERA and codon training data.
 
-Author: PSC Engineering Pipeline
+This file is retained as research history, not as the current training
+contract. Its proposed PoET, pretrained-backbone, data-volume, loss, and
+training workflows are not evidence of current executable integrations.
+Canonical model training is defined by ``chimera.training`` and requires
+caller-provided, provenance-bearing ``CanonicalTrainingBatch`` values. The
+codon workflow is downstream and separate.
 """
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -10,10 +10,10 @@ Stage 1 computational design prototype for the theoretical Pharmacosynthetic Con
 
 ## Architecture contract
 
-The public `chimera.CHIMERAv2` entry point is assembled explicitly by the canonical architecture composition root. Importing the package performs no runtime monkey-patching. The intended pipeline is:
+The public `chimera.CHIMERAv2` entry point is assembled explicitly by the canonical architecture composition root. Importing the package performs no runtime monkey-patching. The diagram below is the authoritative current architecture overview. The model consumes caller-prepared MSA tokens, pair features, source frames, and required conditioning inputs; it does not provide an end-to-end preprocessing pipeline.
 
 ```text
-Animal / target-family MSA
+Caller-prepared MSA tokens and pair features
         │
         ▼
 Evolutionary representation
@@ -52,7 +52,8 @@ Five explicitly sourced objective channels
 Calibrated surrogate Pareto filtering, or explicitly named deterministic proxies
         │
         ▼
-Bayesian uncertainty + Gaussian Expected Improvement
+Optional Bayesian uncertainty + Gaussian Expected Improvement
+(only when objective readiness and explicit utility conditions permit)
         │
         ▼
 Candidate batch for external experimental evaluation
@@ -103,14 +104,19 @@ This is intentionally documented as a local Lie-algebra approximation. It is not
 
 ### PCGrad
 
-`chimera.pcgrad` implements canonical Projected Conflicting Gradients:
+The canonical objective regime calls `MergeReadyParetoMultiObjectiveHead.pcgrad_loss`
+in `chimera.pareto_pcgrad`; it computes per-objective gradients and projects
+conflicts. The separately public `chimera.pcgrad` module provides reusable
+PCGrad helpers and remains covered by its own API/tests. The two paths should
+not be conflated:
 
 1. compute one gradient per objective;
 2. randomly permute the other objectives for each task;
 3. when `g_i · g_j < 0`, project the conflicting component out;
 4. sum the projected gradients and write them to `.grad`.
 
-The repository no longer treats loss-magnitude differences as a substitute for gradient conflict detection.
+The canonical trainer does not use loss-magnitude weighting as a substitute
+for gradient conflict detection.
 
 ### DPO
 

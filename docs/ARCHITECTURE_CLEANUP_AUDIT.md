@@ -260,7 +260,7 @@ without a demonstrated consumer.
 | `scripts/train_codon_optimizer.py` | `codon tooling` | Downstream codon optimizer training; uses clustered splitting. |
 | `scripts/install.sh`, `scripts/install.ps1` | `development tooling` | Installation helpers; not model entrypoints. |
 | `scripts/install_fast.sh`, `scripts/install_fast.ps1` | `development tooling` | Accelerated/development installation helpers; verify dependency parity before treating as canonical install. |
-| `scripts/push_to_github.sh` | `legacy tooling` | Repository push helper contains stale architecture instructions and force-push behavior. It was not executed. Treat as unsafe legacy tooling; it should not be used as a release workflow. |
+| `push_to_github.sh` | `legacy tooling` | Retired root-level bootstrap helper; it now exits without modifying repository or remote state. Its predecessor contained stale architecture instructions and force-push behavior. |
 | `scripts/__init__.py` | `development tooling` | Package marker only. |
 
 ## Test inventory
@@ -312,12 +312,12 @@ contract protected; many files also cover regressions or multiple layers.
   report does not find evidence to replace that architecture with external
   models.
 - `chimera/evoformer.py`, `chimera/se3_diffusion.py`, and
-  `data/training_data.py` contain historical descriptions in active-looking
-  paths. They should be explicitly labeled historical in the documentation
-  normalization phase; no source was altered in this audit.
-- `scripts/push_to_github.sh` contains stale architecture prose and
-  force-pushing commands. It was inspected, not executed. Its use is unsafe;
-  decide whether to retire or rewrite it as a distinct tooling change.
+  `data/training_data.py` contained historical descriptions in active-looking
+  paths. Their module headers now label that material historical without
+  changing model/data behavior.
+- The predecessor of root-level `push_to_github.sh` contained stale
+  architecture prose and force-pushing commands. It was inspected, not
+  executed; the path now contains a retirement stub that refuses to run.
 - A complete production input-preprocessing/request/result/telemetry path is
   not established. `InferenceConfig` is not yet wired end-to-end into
   `CanonicalCHIMERAv2.design()`.
@@ -332,8 +332,10 @@ contract protected; many files also cover regressions or multiple layers.
 
 ## Cleanup decision
 
-Stage A is complete. Keep the architecture and all legacy/data/test/script
-files in place. Stage B may safely normalize misleading historical prose and
-audit the unsafe push-helper separately; stage C/D moves or splits require
-their own import-compatibility plan and focused tests. No scientific
-architecture, objective semantics, or model mathematics were changed.
+Stage A is complete. The follow-up low-risk cleanup labels misleading
+historical module/data descriptions, clarifies the README's canonical
+representation and PCGrad boundaries, labels the prior dependency inventory
+as historical, and retires the unsafe push helper without deleting it.
+Architecture moves/splits require their own import-compatibility plan and
+focused tests. No scientific architecture, objective semantics, or model
+mathematics were changed.
