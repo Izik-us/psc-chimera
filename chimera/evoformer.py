@@ -1,21 +1,10 @@
-"""
-CHIMERA — EvoFormer Module
-==========================
-Faithful implementation of the AlphaFold2 EvoFormer block.
-Processes a Multiple Sequence Alignment (MSA) and produces:
-  - single_repr: (L, c_s=256)  per-residue evolutionary embeddings
-  - pair_repr:   (L, L, c_z=128)  pairwise co-evolutionary embeddings
+"""Historical MSA/pair-representation implementation.
 
-These are the two tensors that feed into the RFdiffusion and ProteinMPNN
-connector modules in CHIMERA.
-
-In production: replace forward() with weight-loaded AlphaFold2/3 checkpoint.
-This implementation matches AF2 channel dimensions exactly for drop-in
-compatibility with pretrained weights via OpenFold.
-
-References:
-  Jumper et al. 2021 (AlphaFold2) — Nature 596:583–589
-  OpenFold: https://github.com/aqlaboratory/openfold
+This module belongs to the legacy ``chimera_v1`` implementation and is not
+the representation used by the canonical composition. Similar tensor names
+and operation labels do not establish AlphaFold/OpenFold parity, pretrained
+checkpoint compatibility, or integration with RFdiffusion. The canonical
+local representation is composed in ``chimera.components``.
 """
 
 import torch

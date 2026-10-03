@@ -1,23 +1,11 @@
-"""
-CHIMERA — SE(3) Diffusion Module
-=================================
-RFdiffusion-equivalent backbone generation operating in SE(3) space
-(Special Euclidean group: rotations × translations for each residue frame).
+"""Historical SE(3) denoising implementation used by ``chimera_v1``.
 
-Key innovation vs standard RFdiffusion:
-  The denoising network receives EvoFormer pair_repr as conditioning via
-  cross-attention layers — making generated backbones evolutionary-context-aware.
-  Backbone geometries now reflect which residue pairs co-evolve in the animal
-  NRPS family, directly addressing module-module interface incompatibility.
-
-Outputs per residue:
-  R_i ∈ SO(3): local coordinate frame (3x3 rotation matrix)
-  t_i ∈ R³:    Cα position
-
-References:
-  Watson et al. 2023 (RFdiffusion) — Nature 620:1089–1100
-  Yim et al. 2023 (FrameDiff) — ICML 2023
-  de Bortoli et al. 2022 (Riemannian diffusion)
+This is not the canonical structural generator and is not an RFdiffusion
+implementation or compatibility layer. The canonical composition uses
+``flow_matching.FlowMatchingBackbone`` with
+``schrodinger_bridge.SE3SchrodingerBridge``. This module remains available for
+the legacy implementation; its presence does not establish validated
+biological behavior or pretrained checkpoint compatibility.
 """
 
 import torch

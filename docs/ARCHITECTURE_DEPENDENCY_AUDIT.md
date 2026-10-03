@@ -1,5 +1,12 @@
 # PSC-CHIMERA architecture dependency audit
 
+> **Historical inventory snapshot:** this report describes repository state at
+> `faf721c5b9eda0eddf98a4c9b3c421621769349e`. It is not the current
+> architecture specification. The authoritative current architecture overview
+> is the diagram in the root README's “Architecture contract” section; the
+> current source-level classification and traced paths are in
+> [`ARCHITECTURE_CLEANUP_AUDIT.md`](./ARCHITECTURE_CLEANUP_AUDIT.md).
+
 ## Scope and source identity
 
 This inventory was grounded in the clean `chimera-repair` baseline
