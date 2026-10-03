@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from chimera.bayesian import BayesianUncertaintyEstimator
 from chimera.dpo import DPOBatch, DPOTrainer
-from chimera.flow_matching import so3_exp, so3_log
+from chimera.lie import so3_exp, so3_log
 from chimera.lie import relative_rotation, so3_exp as canonical_so3_exp, so3_log as canonical_so3_log
 from chimera.icosahedral import icosahedral_face_normals, icosahedron_vertices_and_faces
 from chimera.pcgrad import project_conflicting_gradients

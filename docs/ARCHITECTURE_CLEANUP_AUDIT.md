@@ -32,13 +32,13 @@ important call-path owners found in the package, scripts, and tests.
 | `__init__.py` | `PRODUCTION_SUPPORT` | Imports version, configuration, errors, production gate, architecture, core APIs, codon APIs, adapters, training and schemas. | Public import surface. Eagerly exposes several distinct subsystems; not itself a computational path. Preserve. |
 | `_version.py` | `PRODUCTION_SUPPORT` | Imported by `__init__.py`, `checkpoint.py`, `cli.py`, and `production_gate.py`. | Single software-version identity used by package, CLI and provenance. Preserve. |
 | `adapters.py` | `OPTIONAL_RESEARCH` | Imports `backends.py` and `model_store.py`; used by package exports and adapter tests. | Isolates native/external model integration. Does not substitute external weights for canonical local models. Preserve as optional. |
-| `architecture.py` | `CORE` | Imports conditioning, components, DPO, schemas, evaluators, flow, geometry, Lie, mixed objectives, Pareto, PCGrad API, ProteinMPNN, reproducibility, bridge and sequence policy. Imported by `__init__.py` and canonical architecture tests. | Canonical composition, forward/design and component-transfer path. Preference-trainer construction lazily calls `training.py`. Preserve. |
+| `architecture.py` | `CORE` | Imports conditioning, components, DPO, schemas, evaluators, `se3_flow`, geometry, Pareto, PCGrad API, ProteinMPNN, reproducibility, bridge, retrieval, and sequence policy. Imported by `__init__.py` and canonical architecture tests. | Canonical composition, forward/design and component-transfer path. Preference-trainer construction lazily calls `training.py`. Preserve. |
 | `autoregressive_policy.py` | `CORE` | Imported by `architecture.py`, package exports and policy/architecture tests. | Canonical sequence policy used by design and sequence/preference training. Preserve. |
 | `backends.py` | `OPTIONAL_RESEARCH` | Imported by `adapters.py`; exercised by backend tests. | Backend availability/process helpers, not part of the local canonical model. Preserve as optional infrastructure. |
 | `bayesian.py` | `CORE_SUPPORT` | Imported by `architecture.py`, package exports and probabilistic-optimization tests. | Uncertainty/acquisition support invoked only when readiness and explicit utility conditions allow it; not an unconditional inference stage. Preserve. |
 | `checkpoint.py` | `PRODUCTION_SUPPORT` | Imports `_version.py`; used by `training.py`, `objective_schema.py`, package exports and checkpoint/provenance tests. | Checkpoint identity, schemas, hashes and compatibility contracts. Preserve. |
 | `chimera_v1.py` | `LEGACY_RESEARCH` | Imports `evoformer.py`, `se3_diffusion.py` and local `proteinmpnn.py`; no active canonical importer found. | Historical generation with a distinct implementation. No evidence found that canonical training, inference or current checkpoint migration instantiates it. Retain pending an explicit retirement/public-API decision. |
-| `chimera_v2.py` | `LEGACY_COMPATIBILITY` | Imports legacy flow APIs, components, schemas, evaluators and mixed-objective symbols; explicitly exercised by legacy/checkpoint tests. | Historical implementation remains reachable through its import path and is involved in state-compatibility comparisons. Keep path and symbols; do not replace test references with assumptions based on the package alias. |
+| `chimera_v2.py` | `LEGACY_COMPATIBILITY` | Imports historical flow APIs, components, schemas, evaluators and optimization symbols. | Historical executable implementation remains reachable through its import path. `tests/test_chimera_v2.py` imports it, but the collection hook redirects the `CHIMERAv2` binding to the canonical class; old model behavior is not thereby proven supported. Retain pending external API/serialization policy. |
 | `cli.py` | `PRODUCTION_SUPPORT` | Imports `_version.py`, errors and `model_store.py`; exposed by package entry point and CLI tests. | Installed command surface for identity/model/gate operations. It does not construct a complete production serving API. Preserve. |
 | `codon_optimizer.py` | `DOWNSTREAM_CODON` | Imported by `evaluators.py`, `protein_fitness.py`, package exports and codon scripts/tests. | Protein-to-codon optimization and translation utilities. Downstream to protein design, despite limited proxy use in objective evaluation. Preserve separately. |
 | `components.py` | `CORE` | Imports `domain_schema.py`; instantiated by `architecture.py` and legacy v2; used by canonical training and architecture tests. | Local MSA/representation, feature connectors, and residue trunk. Pair-feature mixing is not a geometric guarantee; constraint encoding is conditioning, not hard enforcement; the ProteinMPNN-like trunk uses node features while the multiscale designer consumes graph geometry. Historical parameter names are retained for checkpoint compatibility. Preserve APIs and computation. |
@@ -49,14 +49,16 @@ important call-path owners found in the package, scripts, and tests.
 | `errors.py` | `PRODUCTION_SUPPORT` | Imported by configuration, CLI, model store and package exports. | Shared explicit error types. Preserve. |
 | `evaluators.py` | `CORE_SUPPORT` | Imports codon utilities, geometry and icosahedral proxy; used by architecture and legacy v2; objective tests. | Candidate/objective evaluation. Includes proxies; results are not experimental measurements. Preserve. |
 | `evoformer.py` | `LEGACY_COMPATIBILITY` | Imported by `chimera_v1.py`; directly referenced by historical/scientific tests and docs. | Older `EvoFormer` implementation; the active canonical model instead constructs its local representation through `components.py`. Retain due historical/test/API surface; label as legacy. |
-| `flow_matching.py` | `MIXED_REQUIRES_REFACTOR` | Imports Lie and Schrödinger-bridge modules; imported by architecture, legacy v2, structure utilities, package exports and tests. | Canonical bridge velocity/backbone path and legacy deterministic OT/RK4-style flow APIs coexist. Both are referenced; do not move/delete in this audit. Separate only with a future compatibility plan and tests. |
+| `flow_matching.py` | `COMPATIBILITY_SHIM` | Imported by legacy v2 and historical flow tests; package-level historical `SE3FlowMatching` access is lazy. | Re-exports canonical flow classes and isolated historical APIs; owns neither implementation. |
+| `legacy_flow.py` | `LEGACY_COMPATIBILITY` | Imported by the `flow_matching.py` compatibility shim. | Owns historical deterministic OT interpolation and RK4 flow methods; depends on canonical velocity/Lie primitives but is not imported by canonical modules. |
+| `se3_flow.py` | `CORE` | Imported directly by `architecture.py`, package API, and canonical tests. | Owns the canonical velocity-field network and bridge-backed structural sampler. |
 | `geometry.py` | `CORE_SUPPORT` | Used by architecture, legacy v2, package exports and geometry/invariance tests. | Validates generated/provided backbone geometry on canonical and compatibility paths. Preserve. |
 | `icosahedral.py` | `CORE_SUPPORT` | Imported by evaluators and scientific tests. | Deterministic assembly/interface proxy used during candidate evaluation, not a learned objective head. Preserve. |
 | `lie.py` | `CORE` | Imported by flow, Schrödinger bridge and geometry/scientific tests. | SO(3)/Lie operations used by canonical SE(3) transport. Preserve; no mathematical changes in this phase. |
 | `model_store.py` | `PRODUCTION_SUPPORT` | Imports errors; used by adapters, CLI, production gate, pretrained-manager script and tests. | Identity-addressed external dependency cache and integrity operations. Not a CHIMERA artifact registry or required model dependency. Preserve. |
-| `multi_objective.py` | `MIXED_REQUIRES_REFACTOR` | Imported by architecture, `pareto_pcgrad.py`, legacy v2 and package exports; broad objective/legacy tests. | Contains live `MultiScaleNRPSDesigner`, `StructuralRetriever`, `ParetoObjectives` alongside legacy DPO, sequence-policy, Pareto-head and Bayesian symbols/aliases. Preserve all until symbol-level migration is separately approved and compatibility tests are updated. |
+| `multi_objective.py` | `LEGACY_COMPATIBILITY` | Imported by legacy v2 and compatibility tests. | Thin import shim for established names; canonical sequence, retrieval, and objective types live in their owning modules, while historical optimizers live in `legacy_optimization.py`. |
 | `objective_schema.py` | `CORE_SUPPORT` | Imports checkpoint hashing; used by architecture, Pareto and training modules, exports and schema tests. | Typed labels/source kinds, validation and schema identity for objective training/evaluation. Preserve. |
-| `pareto_pcgrad.py` | `CORE` | Imports active `ParetoObjectives` from `multi_objective.py` and objective schemas; used by architecture, training, exports and objective tests. | Canonical objective feature/head and gradient-conflict training path. Do not confuse with generic `pcgrad.py`. Preserve. |
+| `pareto_pcgrad.py` | `CORE` | Imports `ParetoObjectives` from `objective_schema.py`; used by architecture, training, exports and objective tests. | Canonical objective feature/head and gradient-conflict training path. Do not confuse with generic `pcgrad.py`. Preserve. |
 | `pcgrad.py` | `LEGACY_COMPATIBILITY` | Imported/re-exported by architecture and package API; directly covered by tests and referenced by legacy objective code. | Generic PCGrad helper remains public and tested. Canonical objective regime uses `pareto_pcgrad.py`'s head/loss path; this file is not dead and is not evidence that both algorithms run in every training step. Preserve. |
 | `production_gate.py` | `PRODUCTION_SUPPORT` | Imports version/model store; used by CLI, package API and gate/dependency tests. | Release/readiness validation only. It is not the neural model and does not establish scientific/biological validation. Preserve. |
 | `protein_fitness.py` | `DOWNSTREAM_CODON` | Imports codon vocabulary; exported and exercised by codon/fitness paths. | Optional ESM-backed protein fitness utility for the codon subsystem; not required by canonical structural generation. Preserve separately. |
@@ -65,27 +67,27 @@ important call-path owners found in the package, scripts, and tests.
 | `reproducibility.py` | `CORE_SUPPORT` | Used by architecture, training, exports and design scripts/tests. | Seeds and deterministic runtime controls; preserve, while avoiding a claim of whole-path bitwise reproducibility. |
 | `schrodinger_bridge.py` | `CORE` | Imports Lie operations; used by architecture, flow and bridge tests. | Canonical stochastic bridge construction/sampling used by flow training/inference. Preserve. |
 | `se3_diffusion.py` | `LEGACY_RESEARCH` | Imported by `chimera_v1.py`; historical tests/docs refer to it; no canonical architecture importer found. | Separate older denoising implementation, not the active canonical structural generator. Keep for the v1 historical closure; mark as non-canonical. |
-| `structure_utils.py` | `CORE_SUPPORT` | Imports flow rotation helper; used by design/adapter scripts and structure tests. | User-input PDB/MSA loading and utility path, not a complete canonical preprocessing API. Preserve. |
+| `structure_utils.py` | `CORE_SUPPORT` | Imports `so3_exp` from `lie.py`; used by design/adapter scripts and structure tests. | User-input PDB/MSA loading and utility path, not a complete canonical preprocessing API. Preserve. |
 | `training.py` | `CORE_SUPPORT` | Imports checkpoint, DPO, ProteinMPNN, Pareto feature and objective-schema APIs; exported and used by architecture's preference path and training tests. | Canonical staged `CanonicalTrainer`, regime/loss selection, validation and resumable checkpoints. Preserve. |
 
 ### Symbol-level high-risk findings
 
 - `MultiScaleNRPSDesigner`, `StructuralRetriever` and `ParetoObjectives` are
-  live canonical dependencies. `pareto_pcgrad.py` imports
-  `ParetoObjectives`; architecture composes the designer/retriever and legacy
-  v2 also imports these names.
+  now owned by `sequence_design.py`, `retrieval.py`, and
+  `objective_schema.py`. The historical `multi_objective.py` module only
+  re-exports these names and retains the old import path.
 - `LegacyDPOTrainer`, `LegacyAutoregressiveSequencePolicy`,
   `LegacyParetoMultiObjectiveHead` and
   `LegacyBayesianUncertaintyEstimator` (including compatibility aliases) are
-  retained in `multi_objective.py`. They are not the canonical trainer/head/
+  retained in `legacy_optimization.py` and re-exported by `multi_objective.py`.
+  They are not the canonical trainer/head/
   policy/acquisition implementations, but legacy v2 and package/test surfaces
   make broad deletion unsafe.
 - Canonical training uses `pareto_pcgrad.py` objective components. Generic
   `pcgrad.py` is independently public/tested and is used by compatibility
   code; its existence does not establish it as the current trainer's loss.
-- `flow_matching.py` is not cleanly classifiable as one generation: the
-  canonical `FlowMatchingBackbone` uses the Schrödinger bridge, while older
-  flow APIs remain in the same module and have legacy callers.
+- `se3_flow.py` owns canonical `FlowMatchingBackbone`; `flow_matching.py`
+  re-exports that API and historical `legacy_flow.py` symbols for compatibility.
 
 ## Canonical dependency and runtime graphs
 
@@ -99,12 +101,12 @@ chimera.CHIMERAv2
   -> chimera.architecture.CanonicalCHIMERAv2
      -> components.MSARepresentationBackbone / pair and node connectors
      -> conditioning.SubstratePocketConditioner / constraint features
-     -> flow_matching.FlowMatchingBackbone
+     -> se3_flow.FlowMatchingBackbone
         -> schrodinger_bridge.SE3SchrodingerBridge
         -> lie.py
      -> geometry.validate_backbone
      -> proteinmpnn.get_protein_graph / local sequence-recovery trunk
-     -> multi_objective.MultiScaleNRPSDesigner
+     -> sequence_design.MultiScaleNRPSDesigner
      -> autoregressive_policy.AutoregressiveSequencePolicy
      -> evaluators.BiologicalObjectiveEvaluator
         -> deterministic geometry/icosahedral proxies
@@ -359,6 +361,24 @@ owning modules directly and do not import the compatibility shim or
 `legacy_optimization.py`. Tests verify both the owned class modules and
 resolution of serialized globals through the old multi-objective path. This
 supersedes this audit's earlier recommendation to retain the entire mixed
-module in place. `flow_matching.py` and `components.py` remain unchanged:
-source/test consumers demonstrate shared canonical building blocks in both,
-and no state/checkpoint-safe extraction was justified in this pass.
+module in place.
+
+### Final flow-boundary separation (2026-10-03)
+
+The subsequent final separation pass extracted the canonical
+`FlowMatchingBackbone`, `VelocityField`, IPA implementation, and their support
+classes to `chimera/se3_flow.py`. `chimera.architecture` imports that module
+directly. The historical deterministic interpolation/RK4 implementation is
+isolated in `chimera/legacy_flow.py`; `chimera.flow_matching.py` is now a
+compatibility re-export boundary. `chimera.__init__` resolves its historical
+top-level `SE3FlowMatching` export lazily, so ordinary package import does not
+load either compatibility module.
+
+The extraction preserved the canonical state-dict path
+`flow_model.flow_model.velocity_field.*`; the focused checkpoint migration,
+equivariance, and bridge regressions pass. The earlier flow-module inventory
+and execution graph above are historical snapshots and are superseded for
+flow ownership by this section. The canonical local representation remains
+`components.MSARepresentationBackbone`; `evoformer.EvoFormer` remains a
+historical implementation used only by `chimera_v1` and explicit legacy
+tests.

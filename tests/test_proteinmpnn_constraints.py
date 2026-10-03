@@ -30,7 +30,7 @@ def test_protein_graph_is_rigid_transform_invariant():
     torch.manual_seed(0)
     coords = torch.randn(1, 8, 3)
     omega = torch.tensor([[0.3, -0.2, 0.1]])
-    from chimera.flow_matching import so3_exp
+    from chimera.lie import so3_exp
     Q = so3_exp(omega)[0]
     R = Q.unsqueeze(0).expand(1, 8, 3, 3).clone()
     idx1, edge1, mask1 = get_protein_graph(coords, R, k_neighbors=3)

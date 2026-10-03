@@ -1,8 +1,9 @@
 import torch
 import pytest
 
-from chimera.flow_matching import FlowMatchingBackbone, InvariantPointAttention, se3_interp, so3_exp, so3_geodesic_interp
-from chimera.lie import relative_rotation, so3_log
+from chimera.flow_matching import se3_interp, so3_geodesic_interp
+from chimera.lie import relative_rotation, so3_exp, so3_log
+from chimera.se3_flow import FlowMatchingBackbone, InvariantPointAttention
 from chimera.schrodinger_bridge import SE3SchrodingerBridge
 
 

@@ -47,7 +47,7 @@ chimera.CHIMERAv2
      -> conditioning.SubstratePocketConditioner (when requested)
      -> components.NRPSConstraintEncoder (when constraints are supplied)
      -> components.EvolCrossAttentionConnector
-     -> flow_matching.FlowMatchingBackbone.sample
+     -> se3_flow.FlowMatchingBackbone.sample
         -> schrodinger_bridge bridge/sampling implementation
         -> lie.py SO(3)/SE(3) helpers
      -> frame-to-coordinate conversion and geometry.validate_backbone
@@ -206,7 +206,7 @@ proof of redundancy:
 | --- | --- | --- |
 | Model composition | `architecture.CanonicalCHIMERAv2` | `chimera_v1.py` and `chimera_v2.py` are distinct historical compositions. V1 remains historical research; v2 remains import- and test-visible compatibility code. Retain both. |
 | Representation | `components.MSARepresentationBackbone` | `evoformer.EvoFormer` belongs to the historical v1/compatibility closure. Retain; do not substitute one for the other. |
-| Structural generation | `flow_matching.FlowMatchingBackbone` with `schrodinger_bridge.py` and `lie.py` | `se3_diffusion.py` and older flow APIs are separate historical implementations; the flow module still has a justified mixed drift-network/flow-API boundary. |
+| Structural generation | `se3_flow.FlowMatchingBackbone` with `schrodinger_bridge.py` and `lie.py` | `se3_diffusion.py` and deterministic OT/RK4 APIs are separate historical implementations; `flow_matching.py` is now a compatibility shim. |
 | Objective head and PCGrad | `pareto_pcgrad.MergeReadyParetoMultiObjectiveHead` | `legacy_optimization.LegacyParetoMultiObjectiveHead` is explicitly heuristic; generic `pcgrad.py` also has public tested helpers. The old multi-objective import is a shim. |
 | DPO and sequence policy | `dpo.py`, `autoregressive_policy.py` | `legacy_optimization.py` contains historical counterparts; `multi_objective.py` preserves old import names only. |
 | Bayesian optimization | `bayesian.py` | Legacy estimator in `legacy_optimization.py` is distinct; old import remains an alias. |
@@ -355,7 +355,9 @@ The canonical geometric graph is consumed later by `MultiScaleNRPSDesigner`.
 
 ### Full `chimera/` module dispositions
 
-All 41 tracked Python modules in `chimera/` have one primary disposition.
+At the second-order pass, all 41 then-tracked Python modules in `chimera/`
+had one primary disposition. The final flow extraction added the two modules
+listed below.
 `__init__.py` is classified as mixed because it intentionally re-exports
 canonical, production, optional, and downstream APIs; this is public API
 surface, not a model-computation module.
@@ -382,11 +384,12 @@ surface, not a model-computation module.
 | `errors.py` | `PRODUCTION_INFRASTRUCTURE` | Shared typed errors for configuration, artifact, runtime, and inference boundaries. |
 | `evaluators.py` | `CANONICAL_SUPPORT` | Candidate objectives/evaluation, including explicitly identified proxies. |
 | `evoformer.py` | `LEGACY_RESEARCH` | Distinct historical representation implementation, not the local canonical MSA approximation. |
-| `flow_matching.py` | `MIXED` | Canonical bridge flow model plus legacy flow APIs with separate callers. |
+| `flow_matching.py` | `COMPATIBILITY_SHIM` | Re-exports canonical flow classes and historical flow APIs without owning either implementation. |
 | `geometry.py` | `CANONICAL_SUPPORT` | Backbone validation and geometry utilities used by canonical and compatibility paths. |
 | `icosahedral.py` | `CANONICAL_SUPPORT` | Deterministic assembly/interface geometry evaluator support. |
 | `lie.py` | `CANONICAL_SUPPORT` | SO(3)/SE(3) primitives used by bridge, flow, and geometry. |
 | `legacy_optimization.py` | `LEGACY_COMPATIBILITY` | Historical DPO, sequence policy, Pareto head, and Bayesian implementations isolated from the canonical composition. |
+| `legacy_flow.py` | `LEGACY_COMPATIBILITY` | Historical deterministic OT interpolation/RK4 API; depends on canonical Lie/network primitives but is not imported by canonical code. |
 | `model_store.py` | `PRODUCTION_INFRASTRUCTURE` | External dependency cache, integrity, and native-status registry; not a CHIMERA artifact registry. |
 | `multi_objective.py` | `LEGACY_COMPATIBILITY` | Thin import shim preserving established symbol names; no implementation remains here. |
 | `objective_schema.py` | `CANONICAL_SUPPORT` | Versioned objective labels, validation, schema identity, and `ParetoObjectives`. |
@@ -399,6 +402,7 @@ surface, not a model-computation module.
 | `reproducibility.py` | `CANONICAL_SUPPORT` | Seed/generator/worker utilities used by training and inference. |
 | `retrieval.py` | `RESEARCH_OPTIONAL` | Optional structural retrieval with an explicit embedding-alignment precondition. |
 | `schrodinger_bridge.py` | `CANONICAL_CORE` | Bridge objective, stochastic target/sampling support used by canonical flow. |
+| `se3_flow.py` | `CANONICAL_CORE` | Canonical velocity network and Schrödinger-bridge structural composition, imported directly by architecture. |
 | `se3_diffusion.py` | `LEGACY_RESEARCH` | Distinct historical denoising implementation used by v1, not canonical flow. |
 | `sequence_design.py` | `CANONICAL_CORE` | Hierarchical residue/domain/module/assembly sequence designer used in canonical inference and training. |
 | `structure_utils.py` | `CANONICAL_SUPPORT` | User-supplied PDB/MSA parsing and structure helpers; not a complete preprocessing contract. |
@@ -462,8 +466,8 @@ chimera public API
   -> architecture.CanonicalCHIMERAv2
      -> components.MSARepresentationBackbone and feature connectors
      -> conditioning + domain_schema
-     -> flow_matching.FlowMatchingBackbone
-        -> local SE3FlowMatching velocity network
+     -> se3_flow.FlowMatchingBackbone
+        -> local VelocityField / invariant-point-attention stack
         -> schrodinger_bridge + lie
      -> geometry + proteinmpnn
      -> sequence_design.MultiScaleNRPSDesigner
@@ -523,11 +527,11 @@ focused verification set.
   compatibility, generic-utility, and evidence-summary consumers. In
   particular, `readiness.py` summarizes caller-supplied evidence; it does not
   compete with the executable `production_gate.py`.
-* `flow_matching.py` remains mixed because the canonical bridge wrapper uses
-  its SE(3) velocity network and invariant-point-attention implementation;
-  the legacy deterministic interpolation/RK4 APIs share that file and still
-  have callers. A larger move would affect class serialization/import paths
-  and checkpoint/migration tests. No math was duplicated or changed here.
+* `flow_matching.py` is now a compatibility shim. Canonical flow classes live
+  in `se3_flow.py`; historical deterministic interpolation/RK4 and
+  `SE3FlowMatching` remain in `legacy_flow.py`. Old imports remain available
+  through the shim, and the canonical wrapper preserves the
+  `flow_model.velocity_field` state-dict hierarchy.
 * Tagged `components.py` remains a coherent group of neural building blocks
   on the canonical path. Its MSA alias is consumed by legacy imports/tests;
   the inert `n_blocks`/edge compatibility constructor arguments were not
@@ -559,10 +563,100 @@ focused verification set.
 The canonical model still constructs an unavailable structural retriever
 member and reports `RAG_UNAVAILABLE`; removing it from model state and the
 component-transfer contract would require a deliberate checkpoint/API
-migration. `flow_matching.py` remains mixed as described above. Legacy
-`chimera_v2.py` is retained because tests exercise compatibility and
-checkpoint migration, and external consumers cannot be enumerated locally.
-`InferenceConfig` is not wired end-to-end into design, and there is no
+migration. Legacy `chimera_v2.py` is retained as an explicit historical
+implementation; external consumers and serialized-object use cannot be
+enumerated locally. `InferenceConfig` is not wired end-to-end into design, and there is no
 validated trained production checkpoint, stable preprocessing/request/result
 contract, or complete inference telemetry/determinism evidence. The
 production gate remains blocked rather than overstating readiness.
+
+## Final architectural separation pass (2026-10-03)
+
+### Starting state
+
+This pass started from clean `chimera-repair` HEAD
+`5bed3302ccb6c8c4b01cfa9ba71ebad480e130b6`, equal to
+`origin/chimera-repair`, with 678 tracked files, 41 `chimera/*.py` modules,
+and 213 collected tests. The environment was Python 3.12.10, PyTorch
+2.13.0+cpu, and CUDA unavailable. No baseline source changes were present.
+
+### Flow ownership and compatibility
+
+The canonical structural network and backbone composition now live in
+`chimera/se3_flow.py`; `chimera/architecture.py` imports
+`FlowMatchingBackbone` from that canonical module directly. The underlying
+velocity field is constructed in `se3_flow.py`, not through historical
+`SE3FlowMatching`. Its registered `velocity_field` path remains
+`flow_model.flow_model.velocity_field.*`, preserving existing state-dict
+layout. Bridge coupling, conditional training targets, and stochastic
+integration remain owned by `schrodinger_bridge.py`, which uses shared
+Lie-group primitives in `lie.py`.
+
+The deterministic OT interpolation, historical `SE3FlowMatching` training
+loss, and RK4 sampler are retained unchanged in `chimera/legacy_flow.py`.
+`chimera/flow_matching.py` is a compatibility shim that re-exports those old
+names together with aliases to canonical network classes. Ordinary
+`import chimera` does not load either compatibility module; the historical
+top-level `SE3FlowMatching` export is lazy. Canonical architecture, training,
+and flow modules have AST import-contract coverage preventing imports from
+legacy implementations and compatibility shims.
+
+### Audited retained boundaries
+
+* `evoformer.py` remains historical. `chimera_v1.py` and the compatibility
+  test import it; the canonical model and training regimes instantiate
+  `components.MSARepresentationBackbone`. These are distinct implementations,
+  not a native EvoFormer/OpenFold pairing.
+* `chimera_v1.py` and `chimera_v2.py` remain historical executable APIs.
+  Repository-local callers do not prove whether external users or serialized
+  Python objects depend on them; neither is imported by the canonical graph.
+* `legacy_optimization.py` retains the historical DPO, autoregressive-policy,
+  Pareto, and Bayesian classes used by `chimera_v2.py` and old import paths.
+  Canonical DPO, sequence policy, Pareto objectives, and Bayesian utility are
+  separately owned by `dpo.py`, `autoregressive_policy.py`,
+  `pareto_pcgrad.py`, and `bayesian.py`.
+* `pcgrad.py` remains a reusable utility that writes projected parameter
+  gradients. `pareto_pcgrad.py` computes per-task gradients over both the
+  representation and head parameters and returns a differentiable scalar
+  whose backward pass reproduces its projected sum. They share the PCGrad
+  conflict-projection concept but intentionally retain distinct integration
+  contracts; the canonical trainer uses the Pareto-head path.
+* `readiness.py` remains a caller-evidence compatibility summary;
+  `architecture.inference_readiness()` reports trained model/runtime state;
+  `production_gate.py` alone executes the release checks. These are distinct
+  scopes and no release claim is inferred from readiness evidence.
+
+### Public API boundary
+
+The existing explicit `__all__` remains the package contract. It contains
+canonical model/training/science APIs, production support, downstream codon
+APIs, optional research/adapters, and explicitly retained aliases. The one
+flow compatibility export (`SE3FlowMatching`) is lazy; the canonical flow
+exports (`FlowMatchingBackbone`, `InvariantPointAttention`) resolve directly
+from `se3_flow.py`. No optional native model package or checkpoint is loaded
+by package import.
+
+### Verification
+
+The canonical attention, velocity-field, and bridge-backbone implementations
+were extracted without changing their tensor equations. The wrapper now
+constructs the velocity field directly rather than instantiating historical
+`SE3FlowMatching`; the registered `velocity_field` state-dict key path is
+unchanged. Existing flow checkpoint migration, equivariance, and bridge
+regressions passed.
+
+* `python -m compileall -q chimera data scripts tests`: passed.
+* `python scripts/validate_repo_contract.py`: passed
+  (`CHIMERA architecture contract: OK`).
+* Focused architecture/equivariance/bridge/checkpoint/compatibility tests:
+  **76 passed**, 36 warnings.
+* Full pytest: **217 passed**, 42 warnings; no skips or failures.
+* Package import smoke: `chimera.legacy_flow`, `chimera.flow_matching`,
+  `esm`, and `openfold` were not loaded by ordinary `import chimera`.
+* Script import search for the historical and compatibility modules: no
+  matches.
+* `git diff --check`: passed. No module or data file was deleted.
+
+The branch remains at starting HEAD `5bed3302ccb6c8c4b01cfa9ba71ebad480e130b6`;
+the final worktree contains only this pass's implementation, tests, and
+documentation changes and has not been committed.
