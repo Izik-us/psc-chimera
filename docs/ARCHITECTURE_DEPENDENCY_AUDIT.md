@@ -104,13 +104,15 @@ are recorded in the manifest; this does not infer upstream origin from a name.
 - The five objective semantics are in `objective-schema-v2`; the assembly
   objective is deterministic and not a learned fifth neural head.
 - `data/` includes dataset manifests and training/splitting code. The inventory
-  records SHA-256 and size for 18 local training/reference files and a
-  deterministic aggregate hash for the 504-file Ensembl CDS cache. The gate
-  verifies those identities when the files are available. These assets remain
-  training-only: no production checkpoint references a dataset manifest/hash,
-  training run, held-out validation, or calibration set. Upstream licensing
-  and provenance are explicitly partial where the repository does not record
-  them.
+  records SHA-256 and size for 17 tracked training/reference files and a
+  deterministic aggregate hash for the 504-file Ensembl CDS cache. Text assets
+  are hashed and sized after CRLF/CR-to-LF normalization so Windows and Linux
+  checkouts share the same identity; the source archive is hashed as raw bytes.
+  The ignored, local-only `data/1AMU.pdb` is not represented as a checked-in
+  asset. These assets remain training-only: no production checkpoint
+  references a dataset manifest/hash, training run, held-out validation, or
+  calibration set. Upstream licensing and provenance are explicitly partial
+  where the repository does not record them.
 - Token vocabularies and geometry conventions are implemented in source. A
   selected production preprocessing/tokenizer identity and serialized request
   schema do not exist.
@@ -128,11 +130,12 @@ are recorded in the manifest; this does not infer upstream origin from a name.
 ## Gate result and remaining blockers
 
 The gate now consumes the machine-readable architecture inventory and verifies
-that its graph references resolve and all 19 hashed training/reference assets
-match their recorded identities. The CLI exposes the declared candidate and
-its closure using `chimera production-dependencies`. The gate blocks unless a production
-composition and artifact are selected and closure is marked ready. The current
-inventory intentionally fails that release check. Its exact blockers are:
+that its graph references resolve and all 18 hashed training/reference assets
+(17 files plus the Ensembl CDS directory) match their recorded identities.
+The CLI exposes the declared candidate and its closure using `chimera
+production-dependencies`. The gate blocks unless a production composition and
+artifact are selected and closure is marked ready. The current inventory
+intentionally fails that release check. Its exact blockers are:
 
 1. No selected trained and validated CHIMERA checkpoint.
 2. No production composition/artifact or independently resolvable artifact registry.

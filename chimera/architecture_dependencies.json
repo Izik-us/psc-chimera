@@ -955,32 +955,24 @@
       "source_revision": null,
       "license": "per dataset manifest",
       "source_of_status": "data/ manifests; no selected training checkpoint references them",
+      "line_ending_policy": "normalize CRLF and CR to LF before hashing and sizing text assets; hash source archives as raw bytes",
       "files": [
         {
           "id": "dataset_fath2011_expression_csv",
           "path": "data/Fath2011_Table1_expression.csv",
           "kind": "source_dataset",
           "status": "TRAINING_ONLY",
-          "size_bytes": 1849,
-          "sha256": "9e387b58d85abd3dba245f288b0f75dcbdb8a7abb6ce137e1d87c0000d74ba97",
+          "size_bytes": 1798,
+          "sha256": "71311949e8d47f22a4eb17cb144a97110fdac178dd8afaa677dd5325adff0504",
           "provenance_status": "PARTIAL; complete upstream citation/license not recorded in the repository"
-        },
-        {
-          "id": "dataset_reference_structure_1amu",
-          "path": "data/1AMU.pdb",
-          "kind": "reference_structure",
-          "status": "TRAINING_ONLY",
-          "size_bytes": 759699,
-          "sha256": "f9728ee7678419a7e4c9beb9fb057cf601a4922e13f56238cc4de5b990d1fed0",
-          "provenance_status": "PARTIAL; repository does not record a selected production preprocessing dependency"
         },
         {
           "id": "dataset_codon_training",
           "path": "data/codon_training.jsonl",
           "kind": "processed_training_data",
           "status": "TRAINING_ONLY",
-          "size_bytes": 188,
-          "sha256": "9021b7dc64406e8d0834a048750a7366df0427295b6c3fe0ed02f79184d744e6",
+          "size_bytes": 186,
+          "sha256": "454211ef4dcbe13b6b5c2e30f786673c1a1fccec3550b5defd68dfb9e6b6048f",
           "provenance_status": "PARTIAL; no selected checkpoint links this dataset"
         },
         {
@@ -1024,8 +1016,8 @@
           "path": "data/human_expression_cds_proxy.jsonl",
           "kind": "processed_proxy_training_data",
           "status": "TRAINING_ONLY",
-          "size_bytes": 1139064,
-          "sha256": "a53b483b5060fefb8d4c9b3e16f6e45b5537fe6b52800bc91fcd3ba009f09f48",
+          "size_bytes": 1138564,
+          "sha256": "7121ec7d54a4bb44b81d953e6499973b46486187c60b4191c4d5e04a0cea6410",
           "provenance_status": "PARTIAL; human germline-expression proxy scope is documented in data/external/README.md"
         },
         {
@@ -1033,8 +1025,8 @@
           "path": "data/merged/manifest.json",
           "kind": "dataset_manifest",
           "status": "TRAINING_ONLY",
-          "size_bytes": 233,
-          "sha256": "28a583314cb690ece1e91af3afb64fa5ebede3a1f1040613b63e7392f7ef723f",
+          "size_bytes": 220,
+          "sha256": "d38cfdfbd961021da44c994efe8bd81e1e7931422801ab40ce2e79ea8b5857ed",
           "provenance_status": "PARTIAL; not linked to a selected checkpoint"
         },
         {
@@ -1060,8 +1052,8 @@
           "path": "data/merged_codon/manifest.json",
           "kind": "dataset_manifest",
           "status": "TRAINING_ONLY",
-          "size_bytes": 221,
-          "sha256": "9d7a41b743910ddf236418d288eca505ee060e6c718ebeca56117d7a6495336f",
+          "size_bytes": 208,
+          "sha256": "bf5dbde5e24d8b620814b5d8e69a4e6c31baf0961c758ac5db38032f8292298b",
           "provenance_status": "PARTIAL; not linked to a selected checkpoint"
         },
         {
@@ -1087,8 +1079,8 @@
           "path": "data/merged_codon_v2/manifest.json",
           "kind": "dataset_manifest",
           "status": "TRAINING_ONLY",
-          "size_bytes": 216,
-          "sha256": "1f10f7e04d64c4e9cfdf99144fd138d13a71665a6b323fec6a101a850e5a6859",
+          "size_bytes": 203,
+          "sha256": "9d32a9c03dae6df11824e8328c34ad84552a9cb3cea5ea599b35e8f9fadb38da",
           "provenance_status": "PARTIAL; not linked to a selected checkpoint"
         },
         {
@@ -1123,10 +1115,10 @@
           "path": "data/external/ensembl_cds_cache",
           "kind": "source_data_directory",
           "status": "TRAINING_ONLY",
-          "size_bytes": 638271,
+          "size_bytes": 637767,
           "file_count": 504,
-          "sha256": "f695585447fbe50963ef11075db0d187e90691f292c4acd14a7a8e7f28a5dbbb",
-          "hash_algorithm": "sha256(sorted(filename + ':' + file_sha256 joined by LF; no trailing LF))",
+          "sha256": "7b96fc775c65c194da2b59d39b0c591710130bb9c9c118f5d88c5aab1b2311f3",
+          "hash_algorithm": "sha256(sorted(filename + ':' + LF-normalized-file-sha256 joined by LF; no trailing LF))",
           "provenance_status": "PARTIAL; Ensembl release 83 source IDs and cache process described in data/external/README.md"
         }
       ]
