@@ -46,6 +46,10 @@ def _canonical_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _normalize_data_line_endings(content: bytes) -> bytes:
+    return content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def _git_check(root: Path) -> tuple[Check, dict[str, Any]]:
     try:
         commit = subprocess.check_output(
@@ -497,15 +501,9 @@ def _manifest_check(
             candidate = directory / filename
             if not candidate.is_file():
                 continue
-            digest = hashlib.sha256()
-            with candidate.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
             unregistered_files.append(
                 {
                     "path": str(candidate),
-                    "size_bytes": candidate.stat().st_size,
-                    "local_sha256": digest.hexdigest(),
                     "status": "UNREGISTERED_LOCAL_FILE",
                     "upstream_origin": "UNVERIFIED",
                 }
@@ -603,6 +601,8 @@ def _architecture_manifest_check(
         or not isinstance(data_assets, list)
         or not isinstance(candidate, dict)
         or not isinstance(closure, dict)
+        or data_manifest_record.get("line_ending_policy")
+        != "normalize CRLF and CR to LF before hashing and sizing text assets; hash source archives as raw bytes"
     ):
         return (
             Check(
@@ -776,20 +776,25 @@ def _architecture_manifest_check(
             continue
         try:
             if resolved_path.is_file():
-                digest = hashlib.sha256()
-                with resolved_path.open("rb") as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                        digest.update(chunk)
-                actual_hash = digest.hexdigest()
-                actual_size = resolved_path.stat().st_size
+                if data_asset.get("kind") == "source_archive":
+                    digest = hashlib.sha256()
+                    with resolved_path.open("rb") as stream:
+                        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    actual_hash = digest.hexdigest()
+                    actual_size = resolved_path.stat().st_size
+                else:
+                    content = _normalize_data_line_endings(resolved_path.read_bytes())
+                    actual_hash = hashlib.sha256(content).hexdigest()
+                    actual_size = len(content)
                 if data_asset.get("file_count") is not None:
                     data_asset_discrepancies.append(
                         f"{asset_id}: expected a directory asset, found a file"
                     )
             elif resolved_path.is_dir():
                 expected_algorithm = (
-                    "sha256(sorted(filename + ':' + file_sha256 joined by LF; "
-                    "no trailing LF))"
+                    "sha256(sorted(filename + ':' + LF-normalized-file-sha256 "
+                    "joined by LF; no trailing LF))"
                 )
                 if data_asset.get("hash_algorithm") != expected_algorithm:
                     blockers.append(f"{asset_id}: unsupported directory hash algorithm")
@@ -800,14 +805,11 @@ def _architecture_manifest_check(
                 digest_lines = []
                 actual_size = 0
                 for child in files:
-                    child_digest = hashlib.sha256()
-                    with child.open("rb") as stream:
-                        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                            child_digest.update(chunk)
+                    content = _normalize_data_line_endings(child.read_bytes())
                     digest_lines.append(
-                        f"{child.relative_to(resolved_path).as_posix()}:{child_digest.hexdigest()}"
+                        f"{child.relative_to(resolved_path).as_posix()}:{hashlib.sha256(content).hexdigest()}"
                     )
-                    actual_size += child.stat().st_size
+                    actual_size += len(content)
                 actual_hash = hashlib.sha256(
                     "\n".join(digest_lines).encode("utf-8")
                 ).hexdigest()

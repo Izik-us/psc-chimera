@@ -3,12 +3,17 @@ from pathlib import Path
 
 from chimera.production_gate import (
     _architecture_manifest_check,
+    _normalize_data_line_endings,
     production_dependency_inventory,
 )
 from chimera.cli import main
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPOSITORY_ROOT / "chimera" / "architecture_dependencies.json"
+
+
+def test_data_hash_normalization_is_independent_of_checkout_line_endings():
+    assert _normalize_data_line_endings(b"one\r\ntwo\rthree\n") == b"one\ntwo\nthree\n"
 
 
 def _matching_dependency_rows(document):
@@ -68,9 +73,7 @@ def test_production_dependency_command_reports_blocked_candidate_without_claimin
         "canonical-chimerav2-research-candidate"
     )
     assert len(result["candidate_composition"]["required_components"]) == 20
-    assert len(
-        result["candidate_composition"]["required_runtime_dependencies"]
-    ) == 4
+    assert len(result["candidate_composition"]["required_runtime_dependencies"]) == 4
     assert "No selected trained and validated CHIMERA checkpoint." in result["blockers"]
 
 
