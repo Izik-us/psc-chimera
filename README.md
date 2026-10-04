@@ -230,6 +230,16 @@ constraints = NRPSConstraints(
 
 A real design run requires compatible MSA, pair features, source backbone frames, and any substrate geometry required by the selected conditioning path. Canonical modules begin uninitialized; the CLI refuses production inference unless readiness is verified. `--experimental` (or synthetic `--demo`) permits explicit proxy-ranked exploratory output and records readiness, objective provenance, and retrieval status.
 
+For callers that already provide model-ready tensors, `chimera.run_inference`
+accepts an `InferenceRequest` with a versioned `InferenceConfig` and returns
+candidate coordinates/sequences, geometry sanity checks, and a provenance-rich
+`InferenceResult`. The result can be written once as JSON with `write_json()`.
+This API uses an isolated seeded sampler, does not activate unavailable
+retrieval or external backends, and does not imply production or biological
+validation. See [Production Engineering](docs/PRODUCTION_ENGINEERING.md) for
+the configuration-to-runtime mapping, checkpoint rules, and remaining gate
+blockers.
+
 ---
 
 ## Training

@@ -424,6 +424,23 @@ class CanonicalCHIMERAv2(nn.Module):
             reasons.append("one or more model components lack held-out validation")
         return {"state": state, "components": statuses, "reasons": reasons}
 
+    def model_configuration(self) -> dict[str, int]:
+        """Return the canonical architecture identity used by checkpoint manifests."""
+        return {
+            "d_evo_single": self.d_evo_single,
+            "d_evo_pair": self.d_evo_pair,
+            "d_se3": self.d_se3,
+            "d_pair_out": self.d_pair_out,
+            "d_mpnn": self.d_mpnn,
+            "n_flow_blocks": self.n_flow_blocks,
+            "n_flow_steps": self.n_flow_steps,
+            "n_retrieve": self.structural_retriever.n_retrieve,
+            "n_mpnn_seqs": self.n_mpnn_seqs,
+            "n_mc_dropout": self.uncertainty_estimator.n_samples,
+            "n_domains": self.n_domains,
+            "n_modules": self.n_modules,
+        }
+
     def objective_provenance(self) -> dict[str, dict]:
         provenance = {
             name: {
@@ -667,6 +684,7 @@ class CanonicalCHIMERAv2(nn.Module):
         use_rag: bool = False,
         temperature: float = 1.0,
         generator: Optional[torch.Generator] = None,
+        validate_geometry: bool = True,
     ) -> Dict[str, torch.Tensor]:
         if msa_tokens.ndim != 3:
             raise ValueError("msa_tokens must have shape (B,N,L)")
@@ -774,7 +792,11 @@ class CanonicalCHIMERAv2(nn.Module):
             edge_mask = F.pad(edge_mask, (0, pad), value=False)
         edge_features = edge_features * edge_mask.unsqueeze(-1).to(edge_features.dtype)
 
-        geometry = validate_backbone(backbone_coords, R_final)
+        geometry = (
+            validate_backbone(backbone_coords, R_final)
+            if validate_geometry
+            else None
+        )
         logits_per_draw = []
         for _ in range(n_draws_requested):
             logits_per_draw.append(self.multi_scale_designer(
@@ -896,8 +918,11 @@ class CanonicalCHIMERAv2(nn.Module):
             "pareto_objectives": objectives,
             "pair_cond": pair_cond,
             "single_repr": single_repr,
-            "geometry_valid": torch.tensor(geometry.candidate_valid, dtype=torch.bool, device=device),
-            "geometry_report": geometry.as_dict(),
+            "geometry_valid": (
+                torch.tensor(geometry.candidate_valid, dtype=torch.bool, device=device)
+                if geometry is not None else None
+            ),
+            "geometry_report": geometry.as_dict() if geometry is not None else None,
             "objective_provenance": self.objective_provenance(),
             "objective_proxy_outputs": proxy_outputs,
             "objective_proxy_scores": proxy_scores,

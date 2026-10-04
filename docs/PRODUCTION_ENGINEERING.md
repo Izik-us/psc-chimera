@@ -46,17 +46,65 @@ length policy, objective set, retrieval identity, seed/determinism, CPU threads,
 workers, memory limit, and timeout. Unsupported Python objects and non-finite
 numbers are rejected.
 
-**Current limitation:** the legacy `CHIMERAv2.design(...)` entry point does not
-consume `InferenceConfig` and does not yet expose a stable structured inference
-result. Existing CLI inputs are validated in its design flow, but no complete
-production request/result contract, inference telemetry, or independently
-executable model-serving path is established. Consequently the production gate
-reports configuration, inference, and determinism checks as `UNAVAILABLE`.
+Canonical tensor inference is exposed by `chimera.run_inference(model,
+InferenceRequest(...))`. The request requires caller-prepared MSA tokens, pair
+features and source backbone frames, carries optional structural/NRPS and
+substrate conditioning, and uses exactly one validated `InferenceConfig`.
+`InferenceResult` returns generated sequences and coordinates, per-candidate
+geometry sanity checks, selected deterministic proxy outputs, stable candidate
+digests, checkpoint/configuration identities, and a provenance mapping.
+`InferenceResult.as_evidence()` provides a structured summary for future gate
+consumption; it is not a release approval and the current production gate does
+not treat a research inference result as production evidence.
 
-The existing deterministic helper seeds Python, NumPy, PyTorch, and CUDA and
-sets PyTorch deterministic flags when requested. Same-seed reproducibility for
-the complete production inference path has not been demonstrated; no
-cross-environment or bitwise reproducibility claim is made.
+Configuration controls the executed path: `device` places model and inputs;
+`dtype` is currently restricted to verified `float32` (reduced precision is
+rejected because the canonical transformer/geometry path has not been verified
+under autocast); `inference_steps` configures the SE(3)
+Euler–Maruyama sampler; `sequence_temperature` configures autoregressive
+sampling; `batch_size`/`microbatch_size` bound candidate microbatches;
+`max_sequence_length` validates the input; `objective_set` selects reported
+proxy channels; `random_seed` seeds an inference-local PyTorch generator;
+`deterministic` governs PyTorch deterministic-algorithm, cuDNN, TF32 and
+benchmark flags for the duration of the call; and `cpu_threads` sets/restores
+the process thread count. `timeout_seconds` is checked between microbatches,
+so it cannot interrupt a long-running kernel. Nonzero `worker_count` and a
+requested `memory_limit_bytes` fail explicitly because the current synchronous
+runtime cannot enforce them. Only `longest_in_batch` padding and the declared
+stochastic Euler–Maruyama sampler are accepted. Caller preprocessing remains
+identified, not performed, by `preprocessing_id`.
+
+The inference-local generator is passed to both the canonical flow sampler
+and sequence sampler; Python, NumPy and global PyTorch RNG streams are not
+seeded or consumed by this path. Deterministic runtime flags and CPU thread
+count are process-global while applied, protected against concurrent
+`run_inference` calls, and restored afterward. The provenance records requested
+and effective seed, runtime versions/flags, device and compute dtype, package
+version, Git commit/worktree/source identity when available, config hash,
+input hash (without retaining raw inputs), objective schema, checkpoint
+fingerprint/compatibility, component/backend classification and result digest.
+
+When given a canonical training checkpoint, inference performs a safe
+weights-only load, validates its manifest and complete provenance, checks
+model-configuration/state-schema/objective-schema compatibility, then restores
+weights with `strict=True`. Component-transfer checkpoints are also loaded
+strictly through the existing component loader, but are explicitly marked as
+unverified training provenance and cannot imply a production-ready model.
+Missing checkpoints remain unresolved references, not fabricated identities.
+
+Retrieval remains unavailable unless aligned query/index evidence exists;
+requesting a retrieval identity records the unavailable status and warning but
+does not activate retrieval or fail otherwise valid canonical inference.
+Native RFdiffusion, OpenFold, ESMFold and ProteinMPNN are not invoked. Local
+MSA and ProteinMPNN-inspired components and deterministic objective proxies
+are explicitly identified as approximate. Geometry checks are sanity checks,
+not experimental/biological validation.
+
+Same-seed deterministic output has a focused CPU regression test. This is not
+a cross-platform or cross-device bitwise guarantee. No validated trained
+CHIMERA checkpoint or independent biological validation exists, so inference
+remains exploratory and the production gate continues to block configuration,
+checkpoint, provenance, inference-smoke and determinism-smoke release claims.
 
 ## External model store and integrity
 

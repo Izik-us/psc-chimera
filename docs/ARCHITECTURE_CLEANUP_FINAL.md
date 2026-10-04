@@ -660,3 +660,32 @@ regressions passed.
 The branch remains at starting HEAD `5bed3302ccb6c8c4b01cfa9ba71ebad480e130b6`;
 the final worktree contains only this pass's implementation, tests, and
 documentation changes and has not been committed.
+
+## Canonical inference contract follow-up (2026-10-04)
+
+`chimera.run_inference(model, InferenceRequest(...))` now consumes the
+versioned `InferenceConfig` on the canonical forward/generation path. The
+request binds caller-prepared tensor inputs, conditioning, candidate count,
+validation options, and an optional checkpoint path. The result includes
+candidate sequence/coordinates, geometry sanity results, configured proxy
+outputs, a stable result digest, checkpoint/configuration/runtime/input
+identities, component/backend status, warnings, and an immutable JSON writer.
+
+Inference uses the existing strict checkpoint loaders and manifest contracts.
+Canonical training checkpoints must have complete provenance and exact model,
+state-schema, objective-schema, and software-version compatibility. Component
+transfer checkpoints still load through strict per-module loading but remain
+explicitly unverified as trained artifacts. Missing/unavailable retrieval is
+recorded and never activated. A seeded local generator is passed to both
+stochastic generation stages; deterministic process-global backend flags and
+thread count are temporarily applied and restored.
+
+The verified inference dtype is currently float32 only. A CPU bfloat16 smoke
+test exposed a mixed-dtype failure in the current transformer path; reduced
+precision is rejected rather than represented as a working option. Memory
+limits and workers are likewise rejected as unsupported. Timeouts are
+cooperative between microbatches and cannot interrupt an active kernel.
+Geometry/evaluator outputs remain proxies, and this layer does not create
+production or biological validation evidence. The release gate remains
+blocked without a genuine validated trained checkpoint and the required
+independent validation/provenance evidence.
