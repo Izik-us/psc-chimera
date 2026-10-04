@@ -1,0 +1,86 @@
+{
+  "dataset_version": "CHIMERA-DATASET-v0.1",
+  "specification_status": "FROZEN_INTERFACE_CONTROLLED_SEED",
+  "verification_date": "2026-10-04",
+  "dataset_version_manifest": {
+    "name": "CHIMERA-DATASET-v0.1",
+    "processing_version": "dataset-pipeline-v0.2",
+    "schema_version": "dataset-schema-v0.2",
+    "qc_version": "structural-qc-v0.1",
+    "geometry_version": "geometry-v0.1",
+    "msa_generation_version": "uniref90-projection-v0.1",
+    "split_version": "multi-dimension-union-split-v0.1",
+    "split_algorithm": "multi-dimension-union-split-v0.1",
+    "feature_generation_version": "geometry-v0.1",
+    "source_versions": {
+      "RCSB PDB": "1AMU revision 2024-02-07; retrieved 2026-10-04",
+      "wwPDB CCD": "entry-embedded component definitions; 1AMU revision 2024-02-07",
+      "UniProtKB": "2026_03 released 2026-09-02",
+      "UniRef90_P0C061": "updated 2026-06-10",
+      "InterPro": "110.0 released 2026-09-03",
+      "Pfam": "38.2 released 2026-03-26 (member signatures via InterPro)"
+    },
+    "annotation_versions": {
+      "UniProtKB": "2026_03",
+      "InterPro": "110.0",
+      "MIBiG": "4.0 (verified, not used in seed)",
+      "antiSMASH": "8.0 documentation (verified, no seed result imported)"
+    },
+    "qc_config": {
+      "minimum_chain_length": 10,
+      "maximum_missing_sequence_fraction": 0.2,
+      "maximum_missing_backbone_fraction": 0.05,
+      "maximum_missing_sidechain_fraction": 0.25,
+      "peptide_break_distance_angstrom": 2.0
+    },
+    "manifest_checksums": {
+      "source_inventory": "d71d83e68d978c26db3578a0031271cc3a2dcc458c771bdcf2806109b297ea04",
+      "rcsb_1AMU_entry_cif": "985941e1f7f17750ac4f7f447eb6ce1904cdf919aeb224f2507b3ccdc6029432",
+      "rcsb_1AMU_assembly1_cif": "985941e1f7f17750ac4f7f447eb6ce1904cdf919aeb224f2507b3ccdc6029432",
+      "rcsb_entry_acquisition_manifest": "bf0a63f49b54838a30c4af86d4707830b1afbe0b1fc3f3aa3e6768805088186f",
+      "rcsb_assembly_acquisition_manifest": "ddd0a229acfc5533c9e07cc27c08b47af90c0c42f22e3e4d6e99ccf922c8e780",
+      "uniprot_P0C062": "6d68705290bdfe9a8176e035e9d2f727e878590d7704f2e5a88a8a4217b0f25e",
+      "uniprot_P14687": "a85ddb5ca56f79afa734ade1a9f051ac5200fa6d5bf2cbde19db57854649e235",
+      "uniref90_P0C061": "0751b3693494a7990daddf69ed89382caf4e6fac4ea291e8b53473cbbd293715",
+      "uniref90_alignment": "bcb070e0fd30089e708f10067438035abf19d533a19d606d44370d7d72ef164b",
+      "interpro_P0C062": "3a9f5905ca90033d821440b318355383789d454b2945927cc01cf34776e33ff5",
+      "seed_split_manifest": "0cadaa9daa34f6bdca1d2640f79cc2228b100a4cfcad536231381736d7f2d51d"
+    },
+    "content_hash": "f381c7273fc54693fa35b69a1de934253bb04aceb34d62245ed9bec17e4f90c7"
+  },
+  "controlled_seed": {
+    "structure_ids": ["1AMU"],
+    "entry_count": 1,
+    "entry_accepted": 1,
+    "entry_rejected": 0,
+    "entry_quarantined": 0,
+    "canonical_chain_count": 2,
+    "assembly_ids_acquired": ["1"],
+    "sample_count": 1,
+    "sequence_linkage_count": 1,
+    "msa_family_count": 1,
+    "msa_raw_rows": 4,
+    "msa_model_ready_rows": 1,
+    "msa_neff": 1.0,
+    "nrps_annotation_records": 1,
+    "mibig_records": 0,
+    "antismash_records": 0,
+    "chain_a_ligand_context_count": 4,
+    "qc_chain_status_counts": {"accepted": 2, "quarantined": 0, "rejected": 0},
+    "split_assignment_counts": {"TRAIN": 1, "VALIDATION": 0, "TEST": 0, "OOD": 0},
+    "coordinate_integrity": {
+      "sha256_computed": true,
+      "checksum_verified": false,
+      "checksum_status": "UNVERIFIED",
+      "reason": "No authoritative expected checksum was supplied by the individual-file endpoint."
+    }
+  },
+  "known_limitations": [
+    "The controlled seed is one structure and one sample; it is not a training corpus and has no independent validation, test or OOD records.",
+    "UniRef90_P0C061 contains three source sequence records plus the target, but 90% redundancy filtering leaves one model-ready row and Neff 1.0.",
+    "No MIBiG accession or antiSMASH result is linked to this seed; their imports are supported and tested separately.",
+    "PDB ligand coordinates and contacts are experimental, but biochemical role remains UNASSIGNED and PubChem/ChEBI crosswalks are not included.",
+    "Structural-similarity grouping requires supplied structural clusters; this seed does not contain enough independent proteins to populate all split classes.",
+    "Per-file SHA-256 is a local computation, not source verification."
+  ]
+}

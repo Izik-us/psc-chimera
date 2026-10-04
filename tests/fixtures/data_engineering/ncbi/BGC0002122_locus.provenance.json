@@ -1,0 +1,13 @@
+{
+  "bytes": 120127,
+  "record_id": "LGUG01000004.1",
+  "requested_end": 3341639,
+  "requested_start": 3284920,
+  "response_content_type": "text/plain",
+  "retrieved_as": "GenBank flat file",
+  "retrieved_at": "2026-10-04T23:09:16.564943+00:00",
+  "sha256": "62db826495c065db33372ad24432cff635127d877a5146dc7cb91c76ff55fce4",
+  "source": "NCBI E-utilities",
+  "source_accession": "LGUG01000004.1",
+  "translated_cds_count": 33
+}

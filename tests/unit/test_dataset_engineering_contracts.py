@@ -63,6 +63,8 @@ def test_dataset_version_and_split_are_deterministic_and_serializable():
     )
 
     assert version.name == "CHIMERA-DATASET-v0.1"
+    assert version.schema_version == "dataset-schema-v0.2"
+    assert version.content_hash == version.content_hash
     assert split.to_dict()["name"] == "train"
     assert json.dumps(version.to_dict(), sort_keys=True)
 
