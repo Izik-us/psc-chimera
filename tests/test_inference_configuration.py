@@ -33,14 +33,16 @@ def test_semantically_different_inference_options_change_identity():
     baseline = _config()
     different_batch = _config(batch_size=2)
     different_seed = _config(random_seed=17)
+    different_temperature = _config(sequence_temperature=0.75)
     assert baseline.config_id != different_batch.config_id
     assert baseline.config_id != different_seed.config_id
+    assert baseline.config_id != different_temperature.config_id
 
 
 def test_configuration_records_resource_and_randomness_settings():
     config = _config(
         device="cuda:0",
-        dtype="bfloat16",
+        dtype="float32",
         batch_size=8,
         microbatch_size=2,
         random_seed=9,
@@ -48,7 +50,7 @@ def test_configuration_records_resource_and_randomness_settings():
     )
     decoded = json.loads(config.to_json())
     assert decoded["device"] == "cuda:0"
-    assert decoded["dtype"] == "bfloat16"
+    assert decoded["dtype"] == "float32"
     assert decoded["microbatch_size"] == 2
     assert decoded["random_seed"] == 9
     assert decoded["memory_limit_bytes"] == 4_000_000_000
@@ -60,8 +62,13 @@ def test_configuration_records_resource_and_randomness_settings():
         {"schema_version": 2},
         {"device": "cudaish"},
         {"dtype": "float16"},
+        {"dtype": "bfloat16"},
         {"deterministic": True, "random_seed": None},
         {"batch_size": 0},
+        {"inference_steps": 1},
+        {"inference_steps": 2.5},
+        {"sequence_temperature": float("inf")},
+        {"sequence_temperature": 0},
         {"batch_size": 2, "microbatch_size": 3},
         {"objective_set": ("same", "same")},
     ],
@@ -76,3 +83,13 @@ def test_canonical_json_rejects_python_objects_and_non_finite_numbers():
         canonical_config_json({"device": object()})
     with pytest.raises(ConfigurationError, match="NaN or infinity"):
         canonical_config_json({"threshold": float("nan")})
+
+
+def test_unknown_configuration_field_fails_explicitly():
+    with pytest.raises(ConfigurationError, match="invalid inference configuration fields"):
+        InferenceConfig.from_dict(
+            {
+                **_config().to_dict(),
+                "unrecognized_option": True,
+            }
+        )

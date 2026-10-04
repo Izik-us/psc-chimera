@@ -43,7 +43,7 @@ important call-path owners found in the package, scripts, and tests.
 | `codon_optimizer.py` | `DOWNSTREAM_CODON` | Imported by `evaluators.py`, `protein_fitness.py`, package exports and codon scripts/tests. | Protein-to-codon optimization and translation utilities. Downstream to protein design, despite limited proxy use in objective evaluation. Preserve separately. |
 | `components.py` | `CORE` | Imports `domain_schema.py`; instantiated by `architecture.py` and legacy v2; used by canonical training and architecture tests. | Local MSA/representation, feature connectors, and residue trunk. Pair-feature mixing is not a geometric guarantee; constraint encoding is conditioning, not hard enforcement; the ProteinMPNN-like trunk uses node features while the multiscale designer consumes graph geometry. Historical parameter names are retained for checkpoint compatibility. Preserve APIs and computation. |
 | `conditioning.py` | `CORE` | Imported by `architecture.py` and legacy v2; exercised by canonical/constraint tests. | Canonical substrate/pocket conditioning. Preserve. |
-| `configuration.py` | `PRODUCTION_SUPPORT` | Imports errors; exported through `__init__.py`; exercised by inference-configuration tests. | Versioned serializable inference configuration. The current legacy `design()` flow does not consume it end-to-end; preserve the contract without claiming integration. |
+| `configuration.py` | `PRODUCTION_SUPPORT` | Imported by package exports and canonical `inference.py`; exercised by inference configuration/contract tests. | Versioned serializable configuration consumed by `run_inference`; the separate legacy `design()` signature remains unchanged. |
 | `domain_schema.py` | `CORE_SUPPORT` | Imported by components, architecture and legacy v2; package exports and schema tests. | Typed NRPS/domain/assembly constraints shared across model components. Preserve. |
 | `dpo.py` | `CORE_SUPPORT` | Imported by architecture, training and package exports; tested with preference training. | DPO batch/loss/trainer utilities; canonical preference regime uses this path under readiness preconditions. Preserve. |
 | `errors.py` | `PRODUCTION_SUPPORT` | Imported by configuration, CLI, model store and package exports. | Shared explicit error types. Preserve. |
@@ -152,6 +152,14 @@ canonical checkpoint save/resume
      -> objective_schema.py -> checkpoint config hashing
      -> reproducibility.py
 
+canonical tensor inference
+  -> inference.py -> InferenceRequest / InferenceConfig
+     -> strict checkpoint validation/loading
+     -> architecture.CanonicalCHIMERAv2.forward
+        -> se3_flow -> schrodinger_bridge -> lie
+     -> geometry validation + deterministic proxy outputs
+     -> InferenceResult / provenance artifact
+
 chimera production-gate / model commands
   -> cli.py -> production_gate.py -> model_store.py -> errors.py
   -> configuration.py / errors.py (public configuration contract)
@@ -161,11 +169,11 @@ chimera production-gate / model commands
 `production_gate.py` evaluates packaging/dependency/artifact/readiness
 contracts. It is not called as the model's forward pass. `model_store.py`
 stores external model dependencies, not trained CHIMERA artifacts.
-`configuration.py` is versioned and serializable, but the current
-`CanonicalCHIMERAv2.design()` path does not yet accept and fully honor an
-`InferenceConfig`; the production documentation already marks that integration
-unavailable. Packaging and version identity are defined by project metadata
-and `chimera/_version.py`.
+`inference.py` consumes `InferenceConfig` for canonical tensor inference;
+the historical `CanonicalCHIMERAv2.design()` interface remains unchanged.
+Inference evidence does not override production gate requirements.
+Packaging and version identity are defined by project metadata and
+`chimera/_version.py`.
 
 ## Optional backend graph
 

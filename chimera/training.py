@@ -824,20 +824,7 @@ class CanonicalTrainer:
         return history
 
     def _manifest(self) -> CheckpointManifest:
-        config = {
-            "d_evo_single": self.model.d_evo_single,
-            "d_evo_pair": self.model.d_evo_pair,
-            "d_se3": self.model.d_se3,
-            "d_pair_out": self.model.d_pair_out,
-            "d_mpnn": self.model.d_mpnn,
-            "n_flow_blocks": self.model.n_flow_blocks,
-            "n_flow_steps": self.model.n_flow_steps,
-            "n_retrieve": self.model.structural_retriever.n_retrieve,
-            "n_mpnn_seqs": self.model.n_mpnn_seqs,
-            "n_mc_dropout": self.model.uncertainty_estimator.n_samples,
-            "n_domains": self.model.n_domains,
-            "n_modules": self.model.n_modules,
-        }
+        config = self.model.model_configuration()
         git = git_provenance(Path(__file__).resolve().parents[1])
         runtime = runtime_provenance()
         return CheckpointManifest(

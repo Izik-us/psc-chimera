@@ -61,12 +61,7 @@ def canonical_config_json(value: Mapping[str, Any]) -> str:
 
 @dataclass(frozen=True)
 class InferenceConfig:
-    """Explicit, serializable configuration identity for a future inference run.
-
-    The current legacy ``CHIMERAv2.design`` API does not consume this object yet;
-    the production gate therefore does not treat its existence as inference
-    readiness evidence.
-    """
+    """Explicit, serializable configuration for canonical inference."""
 
     model_id: str
     artifact_id: str
@@ -77,6 +72,7 @@ class InferenceConfig:
     dtype: str = "float32"
     sampler: str = "stochastic_euler_maruyama"
     inference_steps: int = 20
+    sequence_temperature: float = 1.0
     batch_size: int = 1
     microbatch_size: int | None = None
     max_sequence_length: int = 1024
@@ -107,22 +103,30 @@ class InferenceConfig:
             self.device == "cpu" or re.fullmatch(r"cuda(?::\d+)?", self.device)
         ):
             raise ConfigurationError("device must be 'cpu' or an explicit 'cuda[:index]' value")
-        if not isinstance(self.dtype, str) or self.dtype not in {
-            "float32",
-            "float16",
-            "bfloat16",
-        }:
-            raise ConfigurationError("dtype must be float32, float16, or bfloat16")
-        if self.device == "cpu" and self.dtype == "float16":
-            raise ConfigurationError("float16 inference is not declared supported on CPU")
+        if self.dtype != "float32":
+            raise ConfigurationError(
+                "dtype must be 'float32'; reduced-precision canonical inference is not verified"
+            )
         if self.sampler != "stochastic_euler_maruyama":
             raise ConfigurationError("unsupported inference sampler")
+        if (
+            isinstance(self.sequence_temperature, bool)
+            or not isinstance(self.sequence_temperature, (int, float))
+            or not math.isfinite(self.sequence_temperature)
+            or self.sequence_temperature <= 0
+        ):
+            raise ConfigurationError("sequence_temperature must be a finite positive number")
         if not isinstance(self.deterministic, bool):
             raise ConfigurationError("deterministic must be a boolean")
         if self.deterministic and self.random_seed is None:
             raise ConfigurationError("deterministic inference requires an explicit random_seed")
+        if (
+            isinstance(self.inference_steps, bool)
+            or not isinstance(self.inference_steps, int)
+            or self.inference_steps < 2
+        ):
+            raise ConfigurationError("inference_steps must be at least 2")
         for name in (
-            "inference_steps",
             "batch_size",
             "max_sequence_length",
             "cpu_threads",
@@ -159,8 +163,10 @@ class InferenceConfig:
             or self.memory_limit_bytes < 1
         ):
             raise ConfigurationError("memory_limit_bytes must be a positive integer or None")
-        if not isinstance(self.padding_policy, str) or not self.padding_policy.strip():
-            raise ConfigurationError("padding_policy must not be empty")
+        if self.padding_policy != "longest_in_batch":
+            raise ConfigurationError(
+                "padding_policy must be 'longest_in_batch'; other policies are unsupported"
+            )
         if not isinstance(self.objective_set, (tuple, list)):
             raise ConfigurationError("objective_set must contain objective names")
         if any(not isinstance(name, str) or not name.strip() for name in self.objective_set):
