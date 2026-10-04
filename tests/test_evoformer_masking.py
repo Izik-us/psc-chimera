@@ -5,7 +5,7 @@ from chimera.components import EvoFormerBackbone
 
 def test_msa_padding_values_do_not_affect_valid_representations():
     torch.manual_seed(9)
-    encoder = EvoFormerBackbone(d_single=32, d_pair=16).eval()
+    encoder = EvoFormerBackbone(d_single=32, d_pair=16, n_blocks=2).eval()
     tokens_a = torch.tensor(
         [[[1, 2, 3, 4], [1, 5, 6, 22]], [[2, 3, 4, 22], [2, 3, 22, 22]]]
     )
@@ -27,7 +27,7 @@ def test_msa_padding_values_do_not_affect_valid_representations():
 
 
 def test_msa_mask_semantics_are_true_means_padding():
-    encoder = EvoFormerBackbone(d_single=32, d_pair=16).eval()
+    encoder = EvoFormerBackbone(d_single=32, d_pair=16, n_blocks=2).eval()
     tokens = torch.tensor([[[1, 2, 3], [4, 5, 6]]])
     mask = torch.tensor([[[False, False, True], [False, True, True]]])
     pair_features = torch.zeros(1, 3, 3, 16)
@@ -39,7 +39,7 @@ def test_msa_mask_semantics_are_true_means_padding():
 
 def test_msa_representation_exchanges_information_across_sequences():
     torch.manual_seed(31)
-    encoder = EvoFormerBackbone(d_single=32, d_pair=16).eval()
+    encoder = EvoFormerBackbone(d_single=32, d_pair=16, n_blocks=2).eval()
     tokens_a = torch.tensor([[[1, 2, 3, 4], [5, 6, 7, 8]]])
     tokens_b = tokens_a.clone()
     tokens_b[0, 0, 1] = 9
@@ -52,7 +52,7 @@ def test_msa_representation_exchanges_information_across_sequences():
 
 def test_masked_msa_reconstruction_trains_encoder_and_head():
     torch.manual_seed(32)
-    encoder = EvoFormerBackbone(d_single=32, d_pair=16)
+    encoder = EvoFormerBackbone(d_single=32, d_pair=16, n_blocks=2)
     tokens = torch.tensor([[[1, 2, 3, 4], [5, 6, 7, 8]]])
     loss = encoder.masked_reconstruction_loss(
         tokens,
@@ -62,5 +62,5 @@ def test_masked_msa_reconstruction_trains_encoder_and_head():
     loss.backward()
 
     assert torch.isfinite(loss)
-    assert encoder.msa_column_encoder.layers[0].self_attn.in_proj_weight.grad is not None
+    assert encoder.blocks[0].msa_column_attention.q.weight.grad is not None
     assert encoder.reconstruction_head.weight.grad is not None

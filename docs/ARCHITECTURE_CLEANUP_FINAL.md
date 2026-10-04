@@ -689,3 +689,27 @@ Geometry/evaluator outputs remain proxies, and this layer does not create
 production or biological validation evidence. The release gate remains
 blocked without a genuine validated trained checkpoint and the required
 independent validation/provenance evidence.
+
+## Canonical EvoFormer representation follow-up (2026-10-04)
+
+The former local MSA row/column approximation described in the earlier
+component audit has been replaced on the canonical path by
+`chimera.evoformer_stack.EvoFormerStack`, wired through
+`components.MSARepresentationBackbone`. It instantiates the configured number
+of coupled MSA/pair blocks (48 by default), including pair-biased MSA row
+attention, MSA column attention, MSA transition, masked Outer Product Mean,
+both triangle multiplicative orientations, both triangle attention
+orientations, and pair transition. The single representation comes from the
+query/first MSA row. Pair inputs remain additive to a learned signed
+relative-position representation.
+
+Representation-stage training now combines masked-token reconstruction with
+pairwise mutual-information supervision derived from the aligned MSA. The
+separate flow-training regime provides the downstream structural bridge loss
+and retains gradient flow through the EvoFormer. This is an AlphaFold-2-style
+architectural implementation only: it has no AlphaFold/OpenFold pretrained
+weight compatibility, Extra-MSA stack, template stack, or recycling loop.
+Detailed current behavior and engineering deviations are documented in
+[`EVOFORMER_REPRESENTATION.md`](./EVOFORMER_REPRESENTATION.md); this follow-up
+supersedes earlier statements in this historical cleanup report that call the
+canonical representation an approximation or describe its old loss path.

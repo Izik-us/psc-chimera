@@ -1,7 +1,8 @@
 """Canonical CHIMERA v2 composition root.
 
-The local MSA and ProteinMPNN-inspired backbones remain explicitly documented
-approximations/stubs. Legacy ``CHIMERAv2`` remains isolated in
+The canonical MSA backbone is a native PyTorch, AlphaFold-2-style EvoFormer
+stack, while the ProteinMPNN-inspired backbone retains its documented
+approximation boundary. Legacy ``CHIMERAv2`` remains isolated in
 ``chimera.chimera_v2`` for compatibility and is not instantiated here.
 """
 
@@ -82,6 +83,13 @@ class CanonicalCHIMERAv2(nn.Module):
         n_mc_dropout: int = 30,
         n_domains: int = 5,
         n_modules: int = 5,
+        evoformer_n_blocks: int = 48,
+        evoformer_gradient_checkpointing: bool = False,
+        evoformer_attention_chunk_size: int = 32,
+        evoformer_opm_chunk_size: int = 16,
+        evoformer_dropout_msa_row: float = 0.15,
+        evoformer_dropout_msa_column: float = 0.0,
+        evoformer_dropout_triangle: float = 0.25,
         **legacy_aliases,
     ) -> None:
         super().__init__()
@@ -90,13 +98,18 @@ class CanonicalCHIMERAv2(nn.Module):
             raise TypeError(f"Unexpected model configuration keys: {sorted(unsupported)}")
         if legacy_aliases.get("flow_blocks") is not None:
             n_flow_blocks = int(legacy_aliases["flow_blocks"])
+        if legacy_aliases.get("evoformer_layers") is not None:
+            evoformer_n_blocks = int(legacy_aliases["evoformer_layers"])
         if min(d_evo_single, d_evo_pair, d_se3, d_pair_out, d_mpnn) <= 0:
             raise ValueError("model dimensions must be positive")
         if d_evo_single != d_se3:
             raise ValueError("d_evo_single must equal d_se3 for the configured velocity conditioning")
         if d_se3 % 8 or d_pair_out % 4 or d_mpnn % 4:
             raise ValueError("d_se3, d_pair_out and d_mpnn must be divisible by their attention head counts")
-        if min(n_flow_blocks, n_flow_steps, n_mpnn_seqs, n_domains, n_modules) <= 0:
+        if min(
+            n_flow_blocks, n_flow_steps, n_mpnn_seqs, n_domains, n_modules,
+            evoformer_n_blocks,
+        ) <= 0:
             raise ValueError("model depths, sample counts and hierarchy sizes must be positive")
 
         self.d_evo_single = d_evo_single
@@ -106,6 +119,7 @@ class CanonicalCHIMERAv2(nn.Module):
         self.d_mpnn = d_mpnn
         self.n_flow_blocks = n_flow_blocks
         self.n_flow_steps = n_flow_steps
+        self.evoformer_n_blocks = evoformer_n_blocks
         self.n_mpnn_seqs = n_mpnn_seqs
         self.n_domains = n_domains
         self.n_modules = n_modules
@@ -113,7 +127,17 @@ class CanonicalCHIMERAv2(nn.Module):
         self._is_canonical_composition = True
         self._reference_policy: Optional[AutoregressiveSequencePolicy] = None
 
-        self.evoformer = MSARepresentationBackbone(d_evo_single, d_evo_pair)
+        self.evoformer = MSARepresentationBackbone(
+            d_evo_single,
+            d_evo_pair,
+            n_blocks=evoformer_n_blocks,
+            gradient_checkpointing=evoformer_gradient_checkpointing,
+            attention_chunk_size=evoformer_attention_chunk_size,
+            opm_chunk_size=evoformer_opm_chunk_size,
+            dropout_msa_row=evoformer_dropout_msa_row,
+            dropout_msa_column=evoformer_dropout_msa_column,
+            dropout_triangle=evoformer_dropout_triangle,
+        )
         self.flow_model = FlowMatchingBackbone(d_se3, d_pair_out, n_flow_blocks)
         self.base_mpnn = ProteinMPNNBackbone(d_mpnn)
         self.pair_connector = TriangularPairUpdateConnector(d_evo_pair, d_pair_out)
@@ -197,7 +221,12 @@ class CanonicalCHIMERAv2(nn.Module):
     ) -> "CanonicalCHIMERAv2":
         model = cls(**kwargs)
         modules = (
-            ("evoformer", model.evoformer, evoformer_ckpt, "CHIMERA MSA approximation"),
+            (
+                "evoformer",
+                model.evoformer,
+                evoformer_ckpt,
+                "CHIMERA EvoFormer representation",
+            ),
             ("flow_model", model.flow_model, flow_ckpt, "canonical SB flow backbone"),
             ("base_mpnn", model.base_mpnn, mpnn_ckpt, "ProteinMPNN-inspired local module"),
         )
@@ -424,7 +453,7 @@ class CanonicalCHIMERAv2(nn.Module):
             reasons.append("one or more model components lack held-out validation")
         return {"state": state, "components": statuses, "reasons": reasons}
 
-    def model_configuration(self) -> dict[str, int]:
+    def model_configuration(self) -> dict[str, Any]:
         """Return the canonical architecture identity used by checkpoint manifests."""
         return {
             "d_evo_single": self.d_evo_single,
@@ -434,6 +463,7 @@ class CanonicalCHIMERAv2(nn.Module):
             "d_mpnn": self.d_mpnn,
             "n_flow_blocks": self.n_flow_blocks,
             "n_flow_steps": self.n_flow_steps,
+            "evoformer": dict(self.evoformer.configuration),
             "n_retrieve": self.structural_retriever.n_retrieve,
             "n_mpnn_seqs": self.n_mpnn_seqs,
             "n_mc_dropout": self.uncertainty_estimator.n_samples,
@@ -685,6 +715,8 @@ class CanonicalCHIMERAv2(nn.Module):
         temperature: float = 1.0,
         generator: Optional[torch.Generator] = None,
         validate_geometry: bool = True,
+        residue_index: Optional[torch.Tensor] = None,
+        residue_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         if msa_tokens.ndim != 3:
             raise ValueError("msa_tokens must have shape (B,N,L)")
@@ -717,6 +749,8 @@ class CanonicalCHIMERAv2(nn.Module):
                 msa_tokens,
                 initial_pair_features,
                 msa_padding_mask=msa_padding_mask,
+                residue_mask=residue_mask,
+                residue_index=residue_index,
             )
 
         retrieved_context = None
@@ -1021,6 +1055,8 @@ class CanonicalCHIMERAv2(nn.Module):
         use_rag: bool = False,
         objective_weights: Optional[torch.Tensor] = None,
         experimental: bool = False,
+        residue_index: Optional[torch.Tensor] = None,
+        residue_mask: Optional[torch.Tensor] = None,
     ) -> Dict:
         readiness = self.require_inference_ready(allow_experimental=experimental)
         if n_designs < 1 or n_pareto_samples < 1 or n_pareto_samples > n_designs:
@@ -1031,6 +1067,16 @@ class CanonicalCHIMERAv2(nn.Module):
         B = nrps_msa.shape[0]
         if B != 1:
             raise ValueError("design currently expects one conditioning example per call")
+        if residue_index is not None:
+            if residue_index.ndim == 1:
+                residue_index = residue_index.unsqueeze(0)
+            if residue_index.ndim != 2 or residue_index.shape[0] != 1:
+                raise ValueError("design residue_index must have shape (L,) or (1,L)")
+            residue_index = residue_index.to(device_obj)
+        if residue_mask is not None:
+            if residue_mask.shape != (1, nrps_msa.shape[-1]) or residue_mask.dtype != torch.bool:
+                raise ValueError("design residue_mask must be bool with shape (1,L)")
+            residue_mask = residue_mask.to(device_obj)
         if constraints is not None:
             for name in ("fixed_mask", "domain_boundaries", "module_boundaries", "icosahedral_face", "fixed_sequence", "domain_types"):
                 value = getattr(constraints, name)
@@ -1054,6 +1100,14 @@ class CanonicalCHIMERAv2(nn.Module):
                 n_flow_steps=flow_steps,
                 n_mpnn_seqs=1,
                 use_rag=use_rag,
+                residue_index=(
+                    residue_index.expand(current, -1)
+                    if residue_index is not None else None
+                ),
+                residue_mask=(
+                    residue_mask.expand(current, -1)
+                    if residue_mask is not None else None
+                ),
             )
             sequences.append(outputs["sequence_tokens"][:, 0].detach().cpu())
             rag_statuses.append(outputs["rag_status"])

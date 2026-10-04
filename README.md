@@ -4,7 +4,7 @@
 
 Stage 1 computational design prototype for the theoretical Pharmacosynthetic Constructor (PSC) engineering pipeline.
 
-> **Research-status notice:** CHIMERA is an untrained research prototype by default. Its local MSA row/column attention model is an approximation, not native EvoFormer/OpenFold; its structural generator is a custom local SE(3) Schrödinger-bridge model, not RFdiffusion; and its sequence-recovery module is ProteinMPNN-inspired, not native ProteinMPNN. Random modules remain trainable and production inference fails closed until required components are trained, validated, and objective predictors calibrated. Proxy values are not biological measurements.
+> **Research-status notice:** CHIMERA is an untrained research prototype by default. Its canonical evolutionary representation is a native PyTorch, AlphaFold-2-style coupled EvoFormer stack; it is not the AlphaFold system, is not pretrained, and is not checkpoint-compatible with AlphaFold/OpenFold. The structural generator is a custom local SE(3) Schrödinger-bridge model, not RFdiffusion; and the sequence-recovery module is ProteinMPNN-inspired, not native ProteinMPNN. Random modules remain trainable and production inference fails closed until required components are trained, validated, and objective predictors calibrated. Proxy values are not biological measurements.
 
 ---
 
@@ -17,7 +17,10 @@ Caller-prepared MSA tokens and pair features
         │
         ▼
 Evolutionary representation
-(local MSA row/column-attention approximation; not native EvoFormer/OpenFold)
+(48 coupled EvoFormer blocks by default; native CHIMERA weights, not pretrained AlphaFold)
+        ├─ MSA stream: pair-biased row attention → column attention → transition
+        ├─ MSA-to-pair: masked Outer Product Mean
+        └─ pair stream: triangle multiplication/attention → pair transition
         │
         ├──────────────► pair representation
         │
@@ -66,7 +69,8 @@ DPO update of the actual autoregressive sequence policy
 ```
 
 Implementation ownership follows that path: `chimera/architecture.py`
-composes the model; `components.py` contains local representation/connectors;
+composes the model; `evoformer_stack.py` owns the canonical evolutionary
+representation and `components.py` owns its CHIMERA integration/connectors;
 `se3_flow.py` owns the canonical velocity network and bridge-backed structural
 sampler, while `schrodinger_bridge.py` owns bridge coupling, training targets,
 and stochastic integration. `flow_matching.py` preserves historical imports
@@ -76,6 +80,9 @@ and `pareto_pcgrad.py` own objective contracts and prediction. Optional
 retrieval is isolated in `retrieval.py`. `multi_objective.py` is only a
 compatibility import shim; its historical implementations are isolated in
 `legacy_optimization.py` and are not imported by canonical architecture code.
+
+The EvoFormer computation, masks, configuration, and training objective are
+documented in [docs/EVOFORMER_REPRESENTATION.md](./docs/EVOFORMER_REPRESENTATION.md).
 
 ### Scientific status of the transport model
 
@@ -248,7 +255,7 @@ blockers.
 
 | Regime | Supervision | Trainable components | Active loss |
 |---|---|---|---|
-| `representation` | MSA tokens | MSA row/column encoder and masked-token head | Masked-token cross entropy |
+| `representation` | MSA tokens and pair features | Coupled EvoFormer stack | Masked-MSA recovery + pairwise MSA mutual-information supervision |
 | `flow` | Source/target SE(3) frames | MSA encoder, pair connector, flow backbone, evolutionary cross-attention; supplied substrate/constraint encoders | Brownian Schrödinger-bridge drift regression |
 | `sequence` | Ground-truth structure and amino-acid sequence | MSA encoder, node connector, local sequence-recovery trunk, multiscale designer, projection, autoregressive policy | Teacher-forced causal token cross entropy |
 | `constraint` | Source/target frames plus explicit NRPS constraints | Flow-regime modules and constraint encoder | Constrained bridge drift regression |
@@ -314,7 +321,7 @@ contracts and explicit gaps, and
 [`docs/ARCHITECTURE_DEPENDENCY_AUDIT.md`](docs/ARCHITECTURE_DEPENDENCY_AUDIT.md)
 for the component-level dependency inventory and release blockers.
 
-The local MSA/EvoFormer-like module, ProteinMPNN-inspired model, and custom
+The AlphaFold-2-style CHIMERA EvoFormer (without pretrained weights), ProteinMPNN-inspired model, and custom
 SE(3) bridge remain distinct from upstream ESM/OpenFold, ProteinMPNN, and
 RFdiffusion. Model acquisition alone does not establish adapter compatibility,
 scientific validation, or biological validation.

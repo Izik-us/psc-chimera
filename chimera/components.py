@@ -1,7 +1,7 @@
 """Local model components used by canonical and legacy CHIMERA compositions.
 
-These modules are trainable local approximations, not drop-in implementations
-of EvoFormer, OpenFold, RFdiffusion, or native ProteinMPNN.
+The canonical MSA backbone is an AlphaFold-2-style EvoFormer stack; the
+structural connector and ProteinMPNN-inspired trunk remain CHIMERA-local.
 """
 
 from __future__ import annotations
@@ -12,14 +12,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .domain_schema import NRPSConstraints
+from .evoformer_stack import EvoFormerStack
 
 class TriangularPairUpdateConnector(nn.Module):
-    """Project and update pair features with learned triangle-indexed mixing.
+    """Adapt EvoFormer pairs to the structural-conditioning channel width.
 
-    The pair updates aggregate across an intermediate residue index; they do
-    not enforce triangle inequalities or guarantee geometrically consistent
-    residue contacts. Optional retrieved context is only meaningful when its
-    embedding space is aligned with the current pair representation.
+    The canonical EvoFormer performs evolutionary pair reasoning at its native
+    pair width. This downstream connector projects that representation into
+    the flow model's conditioning width, applies task-specific refinements, and
+    can fuse explicitly aligned retrieved context. Its updates do not enforce
+    triangle inequalities or feed back into the EvoFormer stream.
     """
 
     def __init__(
@@ -341,94 +343,23 @@ class NRPSConstraintEncoder(nn.Module):
 
         return c_map
 
-class MSARepresentationBackbone(nn.Module):
-    """Local MSA approximation with residue-row and cross-sequence attention.
+class MSARepresentationBackbone(EvoFormerStack):
+    """Canonical two-stream MSA/pair EvoFormer; ``True`` mask values are padding."""
 
-    This is not a native OpenFold/EvoFormer implementation. Row attention
-    models residue context within each sequence; column attention exchanges
-    information across aligned sequences at each residue. ``True`` in the
-    optional padding mask means that the MSA token is padding.
-    """
-
-    def __init__(self, d_single: int = 256, d_pair: int = 128, n_blocks: int = 48):
-        super().__init__()
-        self.d_single = d_single
-        self.d_pair = d_pair
-        if d_single % 8:
-            raise ValueError("d_single must be divisible by 8 attention heads")
-        self.padding_token = 22
-        self.mask_token = 23
-        self.token_embed = nn.Embedding(24, d_single, padding_idx=self.padding_token)
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_single,
-            nhead=8,
-            dim_feedforward=1024,
-            batch_first=True,
-            dropout=0.0,
-        )
-        self.msa_encoder = nn.TransformerEncoder(encoder_layer, num_layers=8)
-        column_layer = nn.TransformerEncoderLayer(
-            d_model=d_single,
-            nhead=8,
-            dim_feedforward=1024,
-            batch_first=True,
-            dropout=0.0,
-        )
-        self.msa_column_encoder = nn.TransformerEncoder(column_layer, num_layers=1)
-        self.reconstruction_head = nn.Linear(d_single, 22)
-        self.pair_init = nn.Linear(d_single * 2, d_pair)
-        self.frozen_feature_expander = nn.Sequential(
-            nn.Linear(d_single, d_single * 8),
-            nn.GELU(),
-            nn.Linear(d_single * 8, d_single * 8),
-            nn.GELU(),
-            nn.Linear(d_single * 8, d_single),
-        )
-        # Historical parameter name retained for checkpoint compatibility.
-        # Canonical training freezes this module only in the representation regime.
-        print("[MSARepresentationBackbone] Local approximation; native OpenFold is not configured.")
-
-    def encode_msa(
+    def __init__(
         self,
-        msa_tokens: torch.Tensor,
-        msa_padding_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """Encode to ``(B,N,L,D)`` while exchanging information across MSA rows."""
-        if msa_tokens.ndim != 3:
-            raise ValueError("msa_tokens must have shape (B,N_seq,L)")
-        B, N, L = msa_tokens.shape
-        if N < 1 or L < 1:
-            raise ValueError("MSA sequence and residue dimensions must be non-empty")
-        if msa_tokens.min() < 0 or msa_tokens.max() >= self.token_embed.num_embeddings:
-            raise ValueError("msa_tokens contains values outside the 0..23 vocabulary")
-        if msa_padding_mask is None:
-            msa_padding_mask = msa_tokens.eq(self.padding_token)
-        elif msa_padding_mask.shape != msa_tokens.shape or msa_padding_mask.dtype != torch.bool:
-            raise ValueError("msa_padding_mask must be bool with shape (B,N_seq,L); True means padding")
-        elif msa_padding_mask.device != msa_tokens.device:
-            raise ValueError("msa_padding_mask and msa_tokens must be on the same device")
-
-        msa_emb = self.token_embed(msa_tokens).reshape(B * N, L, self.d_single)
-        row_padding = msa_padding_mask.reshape(B * N, L).clone()
-        all_padding_rows = row_padding.all(dim=1)
-        if all_padding_rows.any():
-            row_padding[all_padding_rows, 0] = False
-        encoded = self.msa_encoder(msa_emb, src_key_padding_mask=row_padding)
-        encoded = encoded.reshape(B, N, L, self.d_single)
-        encoded = encoded.masked_fill(msa_padding_mask.unsqueeze(-1), 0.0)
-
-        column_input = encoded.permute(0, 2, 1, 3).reshape(B * L, N, self.d_single)
-        column_padding = msa_padding_mask.permute(0, 2, 1).reshape(B * L, N).clone()
-        all_padding_columns = column_padding.all(dim=1)
-        if all_padding_columns.any():
-            column_padding[all_padding_columns, 0] = False
-        column_encoded = self.msa_column_encoder(
-            column_input,
-            src_key_padding_mask=column_padding,
+        d_single: int = 256,
+        d_pair: int = 128,
+        n_blocks: int = 48,
+        **configuration,
+    ):
+        super().__init__(
+            d_msa=d_single,
+            d_pair=d_pair,
+            d_single=d_single,
+            n_blocks=n_blocks,
+            **configuration,
         )
-        column_encoded = column_encoded.masked_fill(column_padding.unsqueeze(-1), 0.0)
-        encoded = column_encoded.reshape(B, L, N, self.d_single).permute(0, 2, 1, 3)
-        return encoded.masked_fill(msa_padding_mask.unsqueeze(-1), 0.0)
 
     def masked_reconstruction_loss(
         self,
@@ -437,59 +368,20 @@ class MSARepresentationBackbone(nn.Module):
         mask_probability: float = 0.15,
         generator: Optional[torch.Generator] = None,
     ) -> torch.Tensor:
-        """Self-supervised masked-token loss for representation-stage training."""
-        if not 0.0 < mask_probability <= 1.0:
-            raise ValueError("mask_probability must lie in (0, 1]")
-        if msa_padding_mask is None:
-            msa_padding_mask = msa_tokens.eq(self.padding_token)
-        valid = ~msa_padding_mask
-        if not valid.any():
-            raise ValueError("MSA must contain at least one non-padding token")
-        selected = (torch.rand(msa_tokens.shape, device=msa_tokens.device, generator=generator) < mask_probability) & valid
-        if not selected.any():
-            selected.reshape(-1)[torch.nonzero(valid.reshape(-1), as_tuple=False)[0, 0]] = True
-        corrupted = msa_tokens.masked_fill(selected, self.mask_token)
-        encoded = self.encode_msa(corrupted, msa_padding_mask)
-        logits = self.reconstruction_head(encoded)
-        return F.cross_entropy(logits[selected], msa_tokens[selected])
-
-    def forward(
-        self,
-        msa_tokens: torch.Tensor,  # (B, N_seq, L) MSA token IDs
-        pair_features: torch.Tensor,  # (B, L, L, d_pair) initial pair features
-        msa_padding_mask: Optional[torch.Tensor] = None,  # True means padding
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if msa_tokens.ndim != 3:
-            raise ValueError("msa_tokens must have shape (B,N_seq,L)")
-        B, N, L = msa_tokens.shape
-        if N < 1 or L < 1:
-            raise ValueError("MSA sequence and residue dimensions must be non-empty")
-        if pair_features.shape != (B, L, L, self.d_pair):
-            raise ValueError("pair_features must have shape (B,L,L,d_pair)")
-        if msa_tokens.min() < 0 or msa_tokens.max() >= self.padding_token + 1:
-            raise ValueError("msa_tokens contains values outside the 0..22 vocabulary")
-        if msa_padding_mask is None:
-            msa_padding_mask = msa_tokens.eq(self.padding_token)
-        elif msa_padding_mask.shape != msa_tokens.shape or msa_padding_mask.dtype != torch.bool:
-            raise ValueError("msa_padding_mask must be bool with shape (B,N_seq,L); True means padding")
-        elif msa_padding_mask.device != msa_tokens.device:
-            raise ValueError("msa_padding_mask and msa_tokens must be on the same device")
-
-        residue_valid = (~msa_padding_mask).any(dim=1)
-        enc = self.encode_msa(msa_tokens, msa_padding_mask)
-        valid_counts = (~msa_padding_mask).sum(dim=1).clamp_min(1).to(enc.dtype)
-        single = enc.sum(dim=1) / valid_counts.unsqueeze(-1)
-        single = self.frozen_feature_expander(single)
-        single = single.masked_fill(~residue_valid.unsqueeze(-1), 0.0)
-        # Pair: outer product mean
-        pair_l = single.unsqueeze(2).expand(-1, -1, L, -1)
-        pair_r = single.unsqueeze(1).expand(-1, L, -1, -1)
-        pair_repr = self.pair_init(
-            torch.cat([pair_l, pair_r], dim=-1)
-        )  # (B, L, L, d_pair)
-        pair_valid = residue_valid.unsqueeze(1) & residue_valid.unsqueeze(2)
-        pair_repr = (pair_repr + pair_features).masked_fill(~pair_valid.unsqueeze(-1), 0.0)
-        return single, pair_repr
+        """Compatibility helper for masked-MSA-only diagnostics."""
+        batch, _, n_res = msa_tokens.shape
+        pair_features = msa_tokens.new_zeros(
+            batch, n_res, n_res, self.d_pair, dtype=self.token_embed.weight.dtype
+        )
+        total, _ = self.representation_loss(
+            msa_tokens,
+            pair_features,
+            msa_padding_mask=msa_padding_mask,
+            mask_probability=mask_probability,
+            pair_loss_weight=0.0,
+            generator=generator,
+        )
+        return total
 
 
 EvoFormerBackbone = MSARepresentationBackbone

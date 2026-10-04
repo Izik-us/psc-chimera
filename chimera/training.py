@@ -140,6 +140,8 @@ class CanonicalTrainingBatch:
     objective_label_kinds: Optional[Mapping[str, ObjectiveLabelKind | str]] = None
     objective_features: Optional[Mapping[ObjectiveFeatureSource | str, torch.Tensor]] = None
     preference_batch: Optional[DPOBatch] = None
+    residue_index: Optional[torch.Tensor] = None
+    residue_mask: Optional[torch.Tensor] = None
 
     def to(self, device: torch.device | str) -> "CanonicalTrainingBatch":
         values = {}
@@ -185,10 +187,6 @@ def configure_trainable_components(model, regime: TrainingRegime | str) -> tuple
         module = getattr(model, name)
         for parameter in module.parameters():
             parameter.requires_grad_(True)
-    if regime == TrainingRegime.REPRESENTATION:
-        for module in (model.evoformer.pair_init, model.evoformer.frozen_feature_expander):
-            for parameter in module.parameters():
-                parameter.requires_grad_(False)
     for name in model._component_names:
         module = getattr(model, name)
         model.component_status[name]["frozen"] = not any(
@@ -352,6 +350,8 @@ class CanonicalTrainer:
             batch.msa_tokens,
             batch.pair_features,
             msa_padding_mask=batch.msa_padding_mask,
+            residue_mask=batch.residue_mask,
+            residue_index=batch.residue_index,
         )
         pair_cond = model.pair_connector(pair)
         constraints = None
@@ -470,6 +470,8 @@ class CanonicalTrainer:
                     batch.msa_tokens,
                     batch.pair_features,
                     msa_padding_mask=batch.msa_padding_mask,
+                    residue_mask=batch.residue_mask,
+                    residue_index=batch.residue_index,
                 )
             feature_inputs[ObjectiveFeatureSource.EVOLUTIONARY.value] = evolutionary.detach()
 
@@ -551,11 +553,15 @@ class CanonicalTrainer:
 
     def _loss(self, batch: CanonicalTrainingBatch) -> torch.Tensor:
         if self.regime == TrainingRegime.REPRESENTATION:
-            return self.model.evoformer.masked_reconstruction_loss(
+            loss, _ = self.model.evoformer.representation_loss(
                 batch.msa_tokens,
+                batch.pair_features,
                 msa_padding_mask=batch.msa_padding_mask,
+                residue_mask=batch.residue_mask,
                 generator=self.generator,
+                residue_index=batch.residue_index,
             )
+            return loss
         if self.regime in (TrainingRegime.FLOW, TrainingRegime.CONSTRAINT):
             if self.regime == TrainingRegime.CONSTRAINT and batch.constraints is None:
                 raise ValueError("constraint regime requires NRPS constraints")

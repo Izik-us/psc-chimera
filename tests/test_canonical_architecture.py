@@ -479,8 +479,8 @@ def test_representation_regime_has_explicit_masked_token_gradient_path():
     assert torch.isfinite(torch.tensor(result["loss"]))
     assert gradients["gradient_parameters"] > 0
     assert gradients["gradient_norm"] > 0
-    assert model.evoformer.msa_column_encoder.layers[0].self_attn.in_proj_weight.grad is not None
-    assert not model.evoformer.pair_init.weight.requires_grad
+    assert model.evoformer.blocks[0].msa_column_attention.q.weight.grad is not None
+    assert model.evoformer.relative_position_embed.weight.requires_grad
     assert model.component_status["evoformer"]["training_status"] == "in_progress"
     report = trainer.validate([batch], validation_manifest="msa-heldout-v1")
     assert report["examples"] == 1 and report["batch_count"] == 1
