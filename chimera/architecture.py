@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
-from typing import Optional, Dict, Tuple
+from typing import Any, Optional, Dict, Tuple
 from pathlib import Path
 
 import torch
