@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from data.dataset_engine import (
     AcquisitionManifest,
@@ -142,3 +143,26 @@ def test_structural_manifest_and_provenance_round_trip():
     assert manifest.structure_id == "1AMU:A"
     assert manifest.provenance.source_accession == "1AMU"
     assert manifest.to_dict()["split"] == "train"
+
+
+def test_checked_in_external_source_inventory_is_date_pinned_and_auditable():
+    inventory_path = Path(__file__).resolve().parents[1] / "data" / "external_sources.json"
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    sources = {source["source_id"]: source for source in inventory["sources"]}
+
+    assert inventory["verification_date"] == "2026-10-04"
+    assert {
+        "rcsb_pdb_wwpdb",
+        "wwpdb_ccd",
+        "uniprotkb_uniref",
+        "interpro_pfam",
+        "mibig",
+        "antismash",
+        "pubchem",
+        "chebi",
+        "ncbi_entrez_refseq",
+    } <= sources.keys()
+    assert "checksum_verified remains false" in sources["rcsb_pdb_wwpdb"]["checksum_policy"]
+    assert sources["mibig"]["used_for_seed"] is False
+    assert sources["antismash"]["evidence_class"] == "DATABASE_COMPUTED"
+    assert "5 requests/second" in sources["pubchem"]["rate_limits"]

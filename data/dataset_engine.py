@@ -101,6 +101,11 @@ class DatasetVersion:
     name: str
     source_versions: dict[str, str]
     processing_version: str
+    schema_version: str = "dataset-schema-v0.2"
+    qc_version: str = "UNKNOWN"
+    geometry_version: str = "UNKNOWN"
+    msa_generation_version: str = "UNKNOWN"
+    split_version: str = "UNKNOWN"
     annotation_versions: dict[str, str] = field(default_factory=dict)
     qc_config: dict[str, Any] = field(default_factory=dict)
     split_algorithm: str = "UNKNOWN"
@@ -109,6 +114,10 @@ class DatasetVersion:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def content_hash(self) -> str:
+        return stable_hash(self.to_dict())
 
 
 @dataclass(frozen=True)
@@ -189,6 +198,11 @@ def build_dataset_version(
     name: str,
     source_versions: Mapping[str, str],
     processing_version: str,
+    schema_version: str = "dataset-schema-v0.2",
+    qc_version: str = "UNKNOWN",
+    geometry_version: str = "UNKNOWN",
+    msa_generation_version: str = "UNKNOWN",
+    split_version: str = "UNKNOWN",
     annotation_versions: Mapping[str, str] | None = None,
     qc_config: Mapping[str, Any] | None = None,
     split_algorithm: str = "UNKNOWN",
@@ -200,6 +214,11 @@ def build_dataset_version(
         name=name,
         source_versions=dict(source_versions),
         processing_version=processing_version,
+        schema_version=schema_version,
+        qc_version=qc_version,
+        geometry_version=geometry_version,
+        msa_generation_version=msa_generation_version,
+        split_version=split_version,
         annotation_versions=dict(annotation_versions or {}),
         qc_config=dict(qc_config or {}),
         split_algorithm=split_algorithm,

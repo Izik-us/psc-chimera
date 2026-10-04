@@ -1,0 +1,17 @@
+{
+  "accession": "BGC0002122",
+  "archive_release": "4.0",
+  "quality": "questionable",
+  "record_bytes": 1053,
+  "record_path": "mibig_json_4.0/BGC0002122.json",
+  "record_sha256": "454f8fac9385b2d42a74d5c7b0cc6d423a9272082dac5d5b5e6187f3b23a55c7",
+  "retrieved_at": "2026-10-04T23:06:41.837547+00:00",
+  "source_archive_last_modified": "2024-11-15T09:21:47Z",
+  "source_archive_sha256": "986f1a69fb5eeb84fd7c0175ae921304c22fd5f8ed04c96d8c1c0c95a145837b",
+  "source_url": "https://dl.secondarymetabolites.org/mibig/mibig_json_4.0.tar.gz",
+  "status": "active",
+  "taxonomy": {
+    "name": "Aneurinibacillus migulanus",
+    "ncbiTaxId": 47500
+  }
+}

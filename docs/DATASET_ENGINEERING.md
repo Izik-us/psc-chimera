@@ -1,36 +1,36 @@
 # CHIMERA Dataset Engineering
 
-## 1. Repository audit summary
-
-The repository already contains several useful building blocks, but it does not yet have a canonical dataset-engine layer that is pinned to actual structural provenance and leakage-safe splits.
+**Status checked 2026-10-04 on `chimera-repair`.** The data path is now executable from raw RCSB mmCIF through canonical chain/sequence records, MSA and annotation context, geometry, split assignment and immutable storage. It is an interface-ready controlled seed, not a production-scale training corpus.
 
 Relevant implementation points:
 
-- [data/dataset.py](../data/dataset.py) defines a JSONL training dataset that validates tensorized MSA and geometry records.
-- [data/splitting.py](../data/splitting.py) contains deterministic cluster-based split utilities using exact-identity and sequence-identity fallback logic.
-- [data/training.py](../data/training.py) contains helpers for deduplication, stats, and download-with-checksum workflows.
-- [chimera/structure_utils.py](../chimera/structure_utils.py) contains a deterministic PDB backbone loader that honors model selection, residue ordering, and altLoc selection.
-- [chimera/proteinmpnn.py](../chimera/proteinmpnn.py) contains the canonical geometric graph and invariant edge-feature construction used for local geometric sequence design.
-- [chimera/domain_schema.py](../chimera/domain_schema.py) defines explicit NRPS schema primitives for domain spans and modules.
-- [chimera/architecture.py](../chimera/architecture.py) and [chimera/evoformer_stack.py](../chimera/evoformer_stack.py) define the model contract that expects evolutionary context, pair features, source frames, and downstream structural-conditioning inputs.
+- [data/rcsb.py](../data/rcsb.py) provides RCSB query discovery, ID manifests, cache-aware/retryable downloads, assembly files, per-record stage history and checksum semantics.
+- [data/structures.py](../data/structures.py) parses PDBx/mmCIF into every entity/label-chain record, retaining source numbering, atom masks, QC, ligand coordinates/contacts and provenance.
+- [data/uniprot.py](../data/uniprot.py), [data/msa.py](../data/msa.py) and [data/sequence_linkage.py](../data/sequence_linkage.py) resolve inactive accessions, retrieve UniRef members, form target-projected alignments and report sequence identity/coverage/mismatches/gaps.
+- [data/interpro.py](../data/interpro.py), [data/annotations.py](../data/annotations.py) and the source adapters preserve evidence-separated NRPS domains, modules, PPant sites, substrate reactions and ligand context.
+- [data/geometry.py](../data/geometry.py) derives masked frames, pair geometry, torsions, contacts and k-NN graphs.
+- [data/leakage_splits.py](../data/leakage_splits.py) writes deterministic group-safe TRAIN/VALIDATION/TEST/OOD manifests.
+- [data/dataset_api.py](../data/dataset_api.py) constructs one structured sample per chain and writes immutable SQLite/NPZ storage with random access and batching.
+- [data/external_sources.json](../data/external_sources.json) is the date-pinned source record; it distinguishes verified access methods from sources actually used in the seed.
 
-Important architectural boundary:
-
-- The dataset layer must not be used to replace the model architecture or the current ProteinMPNNBackbone compatibility path.
-- The data engine is instead the provenance and supervision layer for a future CHIMERA geometric sequence designer that learns conditional sequence design from structure, evolution, and NRPS context.
+`data/real_acquisition.py` remains only as a compatibility facade. It no longer contains a second parser or longest-chain implementation. The model architecture has not been changed during data implementation.
 
 ## 2. Canonical dataset architecture
 
-The dataset foundation is organized around explicit entities:
+The stable sample is organized around these entities:
 
 ```text
 Structure
-  ├── Chain
-  │    ├── Sequence
-  │    ├── MSAExample
-  │    └── NRPSDomain
-  │
-  └── ExperimentalMetadata
+  ├── Experimental metadata and assembly
+  ├── Entity
+  │    └── Chain
+  │         ├── polymer sequence and source/canonical/sequence/MSA maps
+  │         ├── N/CA/C/O/CB coordinates and atom/residue masks
+  │         ├── QC and provenance
+  │         ├── raw/normalized/model-ready MSA
+  │         ├── geometric derivatives
+  │         └── evidence-typed NRPS domains/modules
+  └── CCD ligand instances and chain-aware binding-site contacts
 
 NRPSDomain
   ├── DomainType
@@ -40,7 +40,9 @@ NRPSDomain
   └── StructuralRegion
 ```
 
-The implemented schema foundation lives in [data/dataset_engine.py](../data/dataset_engine.py) and includes:
+The schema/provenance contracts live in [data/dataset_engine.py](../data/dataset_engine.py); the executable sample and storage API lives in [data/dataset_api.py](../data/dataset_api.py). `sample = dataset[i]` contains tensors, metadata, linkage, annotations, MSA, masks, geometry and provenance.
+
+The version contract includes:
 
 - `ProvenanceRecord`
 - `DataQualityResult`
@@ -52,69 +54,46 @@ The implemented schema foundation lives in [data/dataset_engine.py](../data/data
 - `stable_hash()`
 - `summarize_records()`
 
-These primitives preserve provenance, support QC verdicts, and keep dataset-version metadata deterministic.
+These primitives are paired with explicit schema, QC, geometry, MSA-generation, split and manifest versions. See [data/dataset_spec_v0_1.json](../data/dataset_spec_v0_1.json).
 
 ## 3. External-source inventory
 
-The repository includes a machine-readable inventory at [data/external_sources.json](../data/external_sources.json). Selected high-value sources are:
+The machine-readable inventory at [data/external_sources.json](../data/external_sources.json) was checked against official sources on 2026-10-04. Sources actually used for the controlled seed:
 
 | Source | Purpose | Status |
 | --- | --- | --- |
-| RCSB PDB / wwPDB | Experimental structures in PDBx/mmCIF | verified |
-| AlphaFold Protein Structure Database | Predicted structure coverage | verified |
-| UniProt | Sequence and taxonomy metadata | verified |
-| NCBI Entrez / RefSeq / GenBank | Sequence accessioning and cross-references | verified |
-| ENA | Sequence archive and assembly metadata | verified |
-| Pfam | Domain family annotation | verified |
-| InterPro | Integrated domain annotation | verified |
-| MIBiG | NRPS / BGC metadata and product annotation | verified |
-| antiSMASH | NRPS/PKS cluster detection and annotation | verified |
-| PubChem | Chemical identifiers and ligand metadata | verified |
-| ChEBI | Chemical ontology and substrate normalization | verified |
+| RCSB PDB / wwPDB | Entry and assembly mmCIF, entity/chain metadata | Used; 1AMU entry and assembly 1 acquired |
+| wwPDB CCD | Component name/formula/descriptors embedded in mmCIF | Used for observed ligand metadata; no PubChem/ChEBI crosswalk in the seed |
+| UniProtKB / UniRef90 | Historical accession resolution, reviewed sequence/features and family members | Used; P14687 resolved to P0C062/P0C061 family |
+| InterPro / Pfam | Protein domain match coordinates and family/signature evidence | Used; InterPro 110.0, Pfam member 38.2 |
+
+Other verified but not attached to the 1AMU seed: MIBiG 4.0 JSON/GenBank, antiSMASH 8.0 result formats, PubChem PUG REST, ChEBI downloads, and NCBI E-utilities. The MIBiG/antiSMASH parsers are implemented and unit-tested; their seed record counts remain zero. AlphaFold DB and ENA are intentionally omitted from this selected inventory because predicted structures and a second nucleotide archive are not required to prove this experimental NRPS path.
 
 This inventory records what is currently verified and marks fields that cannot be confirmed as `UNKNOWN` rather than guessing.
 
 ## 4. Source rationale
 
-The following authoritative sources are the primary ones for the current dataset-engine phase:
+Source version, official URL, retrieval mechanism, format, verification date, usage terms, limits, identifiers and intended CHIMERA use are recorded per source in the inventory. Selected source rationale:
 
-- RCSB PDB / wwPDB for experimental structures and mmCIF download provenance.
-- AlphaFold DB for predicted-structure augmentation and coverage expansion with explicit provenance separation.
-- UniProt and NCBI/ENA for sequence identity, taxonomic mapping, and MSA linkage.
-- Pfam and InterPro for domain and family boundaries.
-- MIBiG and antiSMASH for NRPS/BGC annotation; these remain distinct from experimentally confirmed annotations.
-- PubChem and ChEBI for substrate and chemical mapping.
+- RCSB/wwPDB supplies experimental coordinates, entity sequences, author/label numbering and assembly files. Its APIs are rate-limited; static files are not. RCSB recommends starting at a handful of API requests per second; this client defaults to 2 requests/second.
+- UniProtKB/UniRef90 supplies sequence records and homolog clusters. The tested accession P14687 is inactive and demereged to P0C061/P0C062; the resolver follows that source record and sequence alignment chooses the structure-linked accession.
+- InterPro 110.0 supplies computational match spans, including GrsA A and carrier domains. UniProt feature evidence remains distinct from InterPro signatures.
+- MIBiG and antiSMASH remain separate curated/computed evidence sources; no BGC was guessed from a protein name.
+- PubChem is optional and subject to its published 5-requests/second PUG REST policy. ChEBI is optional and has monthly releases plus nightly ontology updates. Neither is used to infer a ligand's biochemical role from its name.
 
 The source inventory intentionally preserves the distinction between `experimental` and `predicted` structure provenance and avoids silently mixing the two.
 
-## 5. Structural ingestion and QC design
+## 5. Structural ingestion and QC
 
 The canonical pipeline is:
 
-1. manifest-driven record selection
-2. source download with checksum verification
-3. raw artifact retention
-4. parsing into canonical mmCIF or source-specific normalized records
-5. quality control with accepted / rejected / quarantined statuses
-6. backbone extraction and residue normalization
-7. derived geometric tensors, frames, contact maps, and graph features
-8. MSA linkage and split assignment
-9. dataset version pinning and immutability
+Implemented state history: REQUESTED, DISCOVERED, DOWNLOADING, DOWNLOADED, CHECKSUM_COMPUTED, optionally CHECKSUM_VERIFIED, PARSED, QC_PASSED/QC_FAILED and ACCEPTED/REJECTED/QUARANTINED. SHA-256 computation is never treated as external verification. The 1AMU source endpoint supplied no expected digest, so the seed records `sha256_computed=true`, `checksum_verified=false`, `checksum_status=UNVERIFIED`.
 
-The quality-control contract lives in `DataQualityResult`, and the provenance contract lives in `ProvenanceRecord`.
+Canonical chain records retain entity ID, label/auth chain IDs, author residue numbers, label sequence numbers, insertion codes, residue names, alternate locations, occupancy/B-factor, N/CA/C/O/CB coordinates and masks, unresolved polymer positions and a source-to-sequence map. QC checks chain length, unresolved/backbone/side-chain missingness, duplicate author numbering, nonstandard residues, peptide continuity and backbone bond lengths. Ligand contacts are computed across protein chains and carry chain/entity/residue references. Assembly files are separate explicit acquisition records; no longest-chain selection is used.
 
 ## 6. Dataset splits and leakage control
 
-The repository already has leak-resistant split logic in [data/splitting.py](../data/splitting.py). The new dataset-engine layer formalizes the split contract through `DatasetSplit` and the versioned dataset metadata in `DatasetVersion`.
-
-The intended future split strategy is configured as:
-
-- train
-- validation
-- test
-- OOD
-
-with family-aware, sequence-aware, and structural-identity leakage controls rather than naive random splitting.
+[data/leakage_splits.py](../data/leakage_splits.py) merges records sharing computed sequence-identity groups or supplied structural, protein-family, domain-family, NRPS-family, taxonomy, substrate and module-composition labels before assigning TRAIN/VALIDATION/TEST/OOD. OOD holdout is a named novelty dimension. Missing grouping dimensions are explicitly reported, not claimed as guarded. Small controlled corpora use a deterministic pairwise aligner; larger corpora must provide externally computed sequence cluster IDs. The 1AMU integration fixture has one linked sample and therefore demonstrates TRAIN assignment only; it does not provide independent validation, test or OOD examples.
 
 ## 7. Reproducibility and dataset versioning
 
@@ -129,32 +108,35 @@ Every dataset release should be pinned by:
 - feature-generation version
 - manifest checksums
 
-This is represented by `DatasetVersion` and `stable_hash()` in [data/dataset_engine.py](../data/dataset_engine.py).
+The frozen specification [data/dataset_spec_v0_1.json](../data/dataset_spec_v0_1.json) records source versions, processing/schema/QC/geometry/MSA/split versions and raw-source/manifest hashes. `DatasetVersion.content_hash` and split manifests are deterministic. `write_immutable_dataset` refuses to overwrite a versioned SQLite dataset.
 
 ## 8. Operational command patterns
 
-The dataset-engine foundation is designed to support commands such as:
+Useful validation commands:
 
 ```bash
-python -c "import json; from pathlib import Path; import data.dataset_engine as d; print(d.stable_hash({'source':'RCSB PDB'}))"
-python -m pytest tests/test_dataset_engineering.py
+python -m pytest tests/unit tests/integration/offline -q
+set CHIMERA_RUN_LIVE_EXTERNAL=1
+python -m pytest tests/integration/external -q
 ```
 
-This is intentionally a foundation only; it does not claim to have downloaded or processed a full scientific corpus.
+Live tests are opt-in and ordinary CI does not require internet.
 
 ## 9. Implementation status
 
-| Subsystem | Status |
+| Subsystem | Evidence/status |
 | --- | --- |
-| Repository audit | implemented |
-| Source inventory | implemented |
-| Canonical dataset schema | implemented |
-| Provenance layer | implemented |
-| Structural QC result contract | implemented |
-| Dataset versioning | implemented |
-| Split manifest contract | implemented |
-| Full external corpus acquisition | not yet complete |
-| Full MSA/NRPS construction | partial / foundation only |
-| End-to-end structural training corpus | not yet complete |
+| RCSB entry + biological assembly acquisition | Live tested on 1AMU; 1 accepted entry, 0 rejected/quarantined, two canonical chains; assembly 1 acquired |
+| Integrity | SHA-256 computed for both files; source checksum unverified because no authoritative expected checksum was supplied |
+| Structural QC and canonical representation | Offline unit tests plus live 1AMU parse; both chains accepted; masks and author/label mappings retained |
+| Sequence linkage | One chain linked to P0C062 from historical P14687 by global alignment; live UniRef pathway also returned a ≥99% match |
+| MSA | One UniRef90 family; 4 raw aligned rows (query plus 3 source sequence records), one model-ready row after 90% deduplication, Neff 1.0 |
+| NRPS annotation | One real UniProt/InterPro GrsA annotation with computed A/T spans, source-coded PPant site, A/T module relationship and curated reaction context |
+| MIBiG / antiSMASH | Source methods verified and parsers tested; zero linked records in the seed |
+| Ligand/substrate | Eight ligand instances in the two-chain asymmetric unit; chain-aware experimental contacts retained. The four chain-A contexts include PHE/AMP/Mg/SO4; role remains UNASSIGNED without a chemical crosswalk/experimental role assignment |
+| Geometry | Derived geometry and masks run in offline full path; rigid transform, masking and index-permutation properties unit-tested |
+| Splits | Hashed leakage-safe manifest generated; controlled one-sample seed assigned TRAIN. No independent VAL/TEST/OOD examples are present |
+| Storage/version | SQLite/NPZ random-access round-trip passed; seed spec is CHIMERA-DATASET-v0.1 |
+| MIBiG/antiSMASH and chemistry limitations | No MIBiG BGC association or antiSMASH result imported; PubChem/ChEBI canonical ligand mapping not performed |
 
-This task intentionally focuses on the data-engine foundation required before architectural redesign of the sequence designer.
+This is a frozen, tested data interface and a controlled real-data proof, not a claim that the single-family seed is sufficient for model training.
