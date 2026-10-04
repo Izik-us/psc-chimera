@@ -13,6 +13,7 @@ from .dataset_engine import (
     stable_hash,
     summarize_records,
 )
+from .real_acquisition import AcquisitionSummary, acquire_rcsb_structure, run_external_seed_pipeline
 
 __all__ = [
     "AcquisitionManifest",
@@ -24,6 +25,9 @@ __all__ = [
     "StructuralManifest",
     "build_acquisition_manifest",
     "build_dataset_version",
+    "AcquisitionSummary",
+    "acquire_rcsb_structure",
+    "run_external_seed_pipeline",
     "stable_hash",
     "summarize_records",
 ]

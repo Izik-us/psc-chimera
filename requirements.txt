@@ -7,6 +7,7 @@
 torch>=2.1.0
 einops>=0.7.0
 numpy>=1.24.0
+biopython>=1.84
 
 # Optional feature groups:
 # pip install -e '.[esm]' for the ESM-backed codon/fitness workflows
