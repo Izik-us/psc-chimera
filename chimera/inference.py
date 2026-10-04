@@ -565,7 +565,7 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
     old_num_threads = torch.get_num_threads()
     warnings_list = [
         "Geometry checks and deterministic evaluator scores are engineering proxies, not biological validation.",
-        "The CHIMERA EvoFormer is an untrained-by-default AlphaFold-2-style architecture, not an AlphaFold/OpenFold model or checkpoint; local ProteinMPNN-inspired sequence recovery is not native ProteinMPNN.",
+        "The CHIMERA EvoFormer is an untrained-by-default AlphaFold-2 architectural replication, not an AlphaFold/OpenFold model or checkpoint; local ProteinMPNN-inspired sequence recovery is not native ProteinMPNN.",
         f"timeout_seconds={config.timeout_seconds} is checked between microbatches and cannot interrupt an active model kernel.",
     ]
     readiness_before = model.inference_readiness()
@@ -799,7 +799,7 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
                 "deterministic evaluator proxy scores",
             ],
             "evolutionary_representation": {
-                "architecture": "CHIMERA-native AlphaFold-2-style coupled EvoFormer",
+                "architecture": "CHIMERA AlphaFold-2 EvoFormer architectural replication",
                 "training_status": model.component_status["evoformer"]["training_status"],
                 "pretrained_alphaFold_or_openfold_weights": False,
                 "checkpoint_compatibility": "not compatible",

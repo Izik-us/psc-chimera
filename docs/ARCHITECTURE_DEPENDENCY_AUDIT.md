@@ -89,7 +89,7 @@ and external model lock:
 | ProteinMPNN `v_48_020.pt`, pinned source `8907e6671bfbfc92303b5f79c4b5e6ce47cdef57` | `NATIVE_VERIFIED` by cached CPU adapter smoke; local SHA-256 only | Optional native adapter; not invoked by canonical sequence path |
 | RFdiffusion `Base_ckpt.pt`, pinned source `86507b6538f51fce57b5a72477165f03999ed7ae` | `UNAVAILABLE` for native inference on this host; upstream runtime requires Python 3.9, PyTorch 1.9, CUDA 11.1 and DGL CUDA 11.1 | Not a substitute for the local SE(3) bridge |
 | ESMFold v1 | `MISSING`; no adapter was found in the active composition | Optional; not required by the traced candidate |
-| AlphaFold2 parameter archive | `INCOMPATIBLE` as a standalone EvoFormer checkpoint; no native AF2/OpenFold inference was attempted | Not used by the local EvoFormer-like backbone |
+| AlphaFold2 parameter archive | `INCOMPATIBLE` as a standalone EvoFormer checkpoint; no AF2/OpenFold inference was attempted | Not used by CHIMERA's AlphaFold-2 EvoFormer architectural replication |
 | Retrieval index | `MISSING` | Optional; no production index |
 
 License and upstream revisions are in

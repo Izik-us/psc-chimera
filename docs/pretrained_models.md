@@ -37,7 +37,7 @@ manifest; every upstream-published SHA-256 remains absent.
 | ESM-2 contact-regression auxiliary | 3,431 bytes | `6a604b96722ed052eef8a094ad90b275ba2e987d406315dbed0bdc6b3c4238a7` | `INTEGRITY_VERIFIED`; loaded with ESM-2 through the canonical upstream `load_model_and_alphabet_core`. |
 | ProteinMPNN `v_48_020.pt` | 6,681,301 bytes | `c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd` | `INTEGRITY_VERIFIED`; exact upstream checkout at `8907e6671bfbfc92303b5f79c4b5e6ce47cdef57` loaded strictly. CPU adapter smoke produced `(1, 8)` sequence tokens and finite `(1, 8, 21)` log-probabilities while preserving a fixed residue. |
 | RFdiffusion `Base_ckpt.pt` | 483,616,107 bytes | `0fcf7d7c32b4848030aca3a051e6768de194616f96ba6c38186351a33bfc6eca` | `INTEGRITY_VERIFIED`; safe tensor-only inspection found the expected checkpoint payload keys, 5,998 tensors, and 59,808,046 tensor elements. Native inference is `UNAVAILABLE`: pinned `SE3nv` specifies Python 3.9, PyTorch 1.9, CUDA 11.1, and DGL CUDA 11.1; this host has Python 3.12 and CPU-only PyTorch 2.13. |
-| AlphaFold2 parameter archive | 5,587,968,000 bytes | `36d4b0220f3c735f3296d301152b738c9776d16981d054845a68a1370b26cfe3` | `INTEGRITY_VERIFIED`; tar listing contains 16 parameter files. This is not an EvoFormer checkpoint or a checkpoint for the local CHIMERA approximation. No native AlphaFold/OpenFold inference was run. |
+| AlphaFold2 parameter archive | 5,587,968,000 bytes | `36d4b0220f3c735f3296d301152b738c9776d16981d054845a68a1370b26cfe3` | `INTEGRITY_VERIFIED`; tar listing contains 16 parameter files. This is not a standalone EvoFormer checkpoint and is incompatible with CHIMERA's AlphaFold-2 architectural replication. No AlphaFold/OpenFold inference was run. |
 | ESMFold `esmfold_3B_v1.pt` | 2,771,653,574 bytes (upstream `Content-Length`) | — | `MISSING`: acquisition timed out, then the model store stopped the retry when the cache volume ran out of space. The atomic staging directory was removed; no partial model is registered. Native inference was not attempted. |
 
 Both cached native smoke tests passed offline (`2 passed`); they explicitly
@@ -133,7 +133,7 @@ resolved pretrained dependencies.
 
 | Adapter / model family | Real upstream checkpoint tested here | Current truthful status |
 | --- | --- | --- |
-| Local EvoFormer-like representation | No | Local MSA row/column approximation; not pretrained EvoFormer/OpenFold. |
+| CHIMERA EvoFormer architectural replication | No | Coupled AlphaFold-2 EvoFormer core implemented in CHIMERA; randomly initialized by default and not pretrained or checkpoint-compatible with AlphaFold/OpenFold. |
 | OpenFold | No | Native implementation not wired to the CHIMERA representation contract. |
 | Local sequence-recovery model | No | ProteinMPNN-inspired local model; not native pretrained ProteinMPNN. |
 | Native ProteinMPNN | Yes | `NATIVE_VERIFIED` on CPU through the adapter and exact pinned upstream source. |
@@ -141,7 +141,7 @@ resolved pretrained dependencies.
 | Native RFdiffusion | Checkpoint only | `UNAVAILABLE` for native inference with this host's runtime; never substituted with CHIMERA SE(3) flow. |
 | ESM-2 | Yes | `NATIVE_VERIFIED` on CPU through the ESM-backed CodonOptimizer encoder. |
 | ESMFold | No | `MISSING`; no cache artifact or CHIMERA ESMFold adapter. |
-| AlphaFold2 / OpenFold | Parameter archive only | Not a standalone EvoFormer checkpoint; no native adapter/inference integration established. |
+| AlphaFold2 / OpenFold | Parameter archive only | No standalone EvoFormer checkpoint or compatible CHIMERA weights; no upstream adapter/inference integration established. |
 
 Downloading or hashing weights establishes neither model compatibility nor
 scientific or biological validation.

@@ -1,4 +1,4 @@
-"""Native, masked AlphaFold-2-style EvoFormer stack for canonical CHIMERA.
+"""Masked CHIMERA implementation of the AlphaFold-2 EvoFormer core.
 
 This module implements the coupled MSA/pair representation operations in
 PyTorch. It is an architectural implementation, not a pretrained AlphaFold
@@ -8,6 +8,7 @@ model or a checkpoint-compatible port.
 from __future__ import annotations
 
 import math
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
@@ -74,6 +75,11 @@ def _initialize_gate(module: nn.Linear) -> None:
     nn.init.ones_(module.bias)
 
 
+def _linear_float32(module: nn.Linear, value: torch.Tensor) -> torch.Tensor:
+    bias = module.bias.float() if module.bias is not None else None
+    return F.linear(value, module.weight.float(), bias)
+
+
 def _validate_mask(mask: Optional[torch.Tensor], shape: tuple[int, ...], device, name: str):
     if mask is None:
         return torch.ones(shape, dtype=torch.bool, device=device)
@@ -85,6 +91,12 @@ def _validate_mask(mask: Optional[torch.Tensor], shape: tuple[int, ...], device,
     ):
         raise ValueError(f"{name} must be bool with shape {shape} on the input device")
     return mask
+
+
+def _chunk_ranges(length: int, chunk_size: Optional[int]):
+    size = length if chunk_size is None else chunk_size
+    for start in range(0, length, size):
+        yield start, min(start + size, length)
 
 
 class MSARowAttentionWithPairBias(nn.Module):
@@ -103,7 +115,7 @@ class MSARowAttentionWithPairBias(nn.Module):
         self.v = nn.Linear(c_m, c_m, bias=False)
         self.gate = nn.Linear(c_m, c_m)
         self.pair_bias = nn.Linear(c_z, n_heads, bias=False)
-        self.output = nn.Linear(c_m, c_m, bias=False)
+        self.output = nn.Linear(c_m, c_m)
         self.dropout = _SharedDropout(dropout, shared_axis=1)
         for projection in (self.q, self.k, self.v, self.pair_bias):
             _initialize_linear(projection)
@@ -115,11 +127,9 @@ class MSARowAttentionWithPairBias(nn.Module):
     ) -> torch.Tensor:
         batch, n_seq, n_res, c_m = msa.shape
         normalized = self.norm_m(msa)
-        pair_bias = self.pair_bias(self.norm_z(pair)).permute(0, 3, 1, 2)
-        pair_bias = pair_bias[:, None]
+        pair_bias = self._project_pair_bias(pair)
         outputs = []
-        for start in range(0, n_seq, self.attention_chunk_size):
-            end = min(start + self.attention_chunk_size, n_seq)
+        for start, end in _chunk_ranges(n_seq, self.attention_chunk_size):
             rows = normalized[:, start:end]
             q, k, v = (
                 projection(rows)
@@ -143,7 +153,11 @@ class MSARowAttentionWithPairBias(nn.Module):
             outputs.append(attended)
         return self.dropout(torch.cat(outputs, dim=1))
 
-    attention_chunk_size: int = 32
+    def _project_pair_bias(self, pair: torch.Tensor) -> torch.Tensor:
+        """Return per-head pair bias with query/key axes [j,k]."""
+        return self.pair_bias(self.norm_z(pair)).permute(0, 3, 1, 2)[:, None]
+
+    attention_chunk_size: Optional[int] = 32
 
 
 class MSAColumnAttention(nn.Module):
@@ -160,7 +174,7 @@ class MSAColumnAttention(nn.Module):
         self.k = nn.Linear(c_m, c_m, bias=False)
         self.v = nn.Linear(c_m, c_m, bias=False)
         self.gate = nn.Linear(c_m, c_m)
-        self.output = nn.Linear(c_m, c_m, bias=False)
+        self.output = nn.Linear(c_m, c_m)
         self.dropout = _SharedDropout(dropout, shared_axis=1)
         for projection in (self.q, self.k, self.v):
             _initialize_linear(projection)
@@ -172,8 +186,7 @@ class MSAColumnAttention(nn.Module):
         normalized = self.norm(msa).permute(0, 2, 1, 3)
         valid = msa_mask.permute(0, 2, 1)
         output_chunks = []
-        for start in range(0, n_res, self.attention_chunk_size):
-            end = min(start + self.attention_chunk_size, n_res)
+        for start, end in _chunk_ranges(n_res, self.attention_chunk_size):
             rows = normalized[:, start:end]
             query, key, value = (
                 projection(rows)
@@ -197,15 +210,17 @@ class MSAColumnAttention(nn.Module):
         output = torch.cat(output_chunks, dim=1).permute(0, 2, 1, 3)
         return self.dropout(output)
 
-    attention_chunk_size: int = 32
+    attention_chunk_size: Optional[int] = 32
 
 
 class MSATransition(nn.Module):
-    def __init__(self, c_m: int, depth: int):
+    def __init__(self, c_m: int, depth: int, transition_factor: int = 4):
         super().__init__()
+        if transition_factor <= 0:
+            raise ValueError("transition_factor must be positive")
         self.norm = _Float32LayerNorm(c_m)
-        self.input = nn.Linear(c_m, c_m * 4)
-        self.output = nn.Linear(c_m * 4, c_m)
+        self.input = nn.Linear(c_m, c_m * transition_factor)
+        self.output = nn.Linear(c_m * transition_factor, c_m)
         _initialize_linear(self.input)
         _initialize_residual_projection(self.output, depth)
 
@@ -216,37 +231,57 @@ class MSATransition(nn.Module):
 class OuterProductMean(nn.Module):
     """Chunked, validity-normalized MSA outer-product pair update."""
 
-    def __init__(self, c_m: int, c_z: int, c_hidden: int, depth: int, chunk_size: int):
+    def __init__(
+        self,
+        c_m: int,
+        c_z: int,
+        c_hidden: int,
+        depth: int,
+        chunk_size: Optional[int],
+        epsilon: float = 1e-3,
+    ):
         super().__init__()
+        if epsilon < 0.0:
+            raise ValueError("OPM epsilon must be non-negative")
         self.norm = _Float32LayerNorm(c_m)
-        self.left = nn.Linear(c_m, c_hidden, bias=False)
-        self.right = nn.Linear(c_m, c_hidden, bias=False)
+        self.left = nn.Linear(c_m, c_hidden)
+        self.right = nn.Linear(c_m, c_hidden)
         self.output = nn.Linear(c_hidden * c_hidden, c_z)
         self.chunk_size = chunk_size
+        self.epsilon = epsilon
         for projection in (self.left, self.right):
             _initialize_linear(projection)
         _initialize_residual_projection(self.output, depth)
 
     def forward(self, msa: torch.Tensor, msa_mask: torch.Tensor) -> torch.Tensor:
         batch, _, n_res, _ = msa.shape
-        normalized = self.norm(msa)
-        left = self.left(normalized)
-        right = self.right(normalized)
-        valid = msa_mask.to(left.dtype)
-        left = left * valid[..., None]
-        right = right * valid[..., None]
-        counts = torch.einsum("bni,bnj->bij", valid, valid)
-        rows = []
-        for start in range(0, n_res, self.chunk_size):
-            end = min(start + self.chunk_size, n_res)
-            outer = torch.einsum(
-                "bnih,bnje->bijhe",
-                left[:, :, start:end],
-                right,
-            )
-            outer = outer / counts[:, start:end, :, None, None].clamp_min(1.0)
-            outer = outer.reshape(batch, end - start, n_res, -1)
-            rows.append(self.output(outer))
+        autocast_context = (
+            torch.autocast(device_type=msa.device.type, enabled=False)
+            if torch.amp.autocast_mode.is_autocast_available(msa.device.type)
+            else nullcontext()
+        )
+        with autocast_context:
+            normalized = self.norm(msa.float())
+            left = _linear_float32(self.left, normalized)
+            right = _linear_float32(self.right, normalized)
+            valid = msa_mask.to(torch.float32)
+            left = left * valid[..., None]
+            right = right * valid[..., None]
+            counts = torch.einsum("bni,bnj->bij", valid, valid)
+            rows = []
+            for start, end in _chunk_ranges(n_res, self.chunk_size):
+                outer = torch.einsum(
+                    "bnih,bnje->bijhe",
+                    left[:, :, start:end],
+                    right,
+                )
+                outer = outer.reshape(batch, end - start, n_res, -1)
+                projected = _linear_float32(self.output, outer)
+                denominator = counts[:, start:end, :, None] + self.epsilon
+                projected = projected / denominator.clamp_min(
+                    torch.finfo(denominator.dtype).tiny
+                )
+                rows.append(projected.to(msa.dtype))
         return torch.cat(rows, dim=1) * (counts > 0)[..., None].to(msa.dtype)
 
 
@@ -264,9 +299,10 @@ class _TriangleMultiplication(nn.Module):
         self.right = nn.Linear(c_z, c_hidden)
         self.right_gate = nn.Linear(c_z, c_hidden)
         self.output_norm = _Float32LayerNorm(c_hidden)
-        self.output = nn.Linear(c_hidden, c_z, bias=False)
+        self.output = nn.Linear(c_hidden, c_z)
         self.output_gate = nn.Linear(c_z, c_z)
-        self.dropout = _SharedDropout(dropout, shared_axis=2)
+        # OpenFold DropoutRowwise shares the mask over pair axis -3 (i).
+        self.dropout = _SharedDropout(dropout, shared_axis=1)
         for projection in (self.left, self.right):
             _initialize_linear(projection)
         for gate in (self.left_gate, self.right_gate, self.output_gate):
@@ -321,8 +357,9 @@ class _TriangleAttention(nn.Module):
         self.v = nn.Linear(c_z, c_z, bias=False)
         self.bias = nn.Linear(c_z, n_heads, bias=False)
         self.gate = nn.Linear(c_z, c_z)
-        self.output = nn.Linear(c_z, c_z, bias=False)
-        self.dropout = _SharedDropout(dropout, shared_axis=2)
+        self.output = nn.Linear(c_z, c_z)
+        # Apply rowwise dropout only after all row chunks have been combined.
+        self.dropout = _SharedDropout(dropout, shared_axis=1)
         for projection in (self.q, self.k, self.v, self.bias):
             _initialize_linear(projection)
         _initialize_gate(self.gate)
@@ -335,8 +372,7 @@ class _TriangleAttention(nn.Module):
         normalized = self.norm(pair)
         batch, n_res, _, c_z = pair.shape
         outputs = []
-        for start in range(0, n_res, self.attention_chunk_size):
-            end = min(start + self.attention_chunk_size, n_res)
+        for start, end in _chunk_ranges(n_res, self.attention_chunk_size):
             query_nodes = normalized[:, start:end]
             q, k, v = (
                 projection(query_nodes)
@@ -344,11 +380,7 @@ class _TriangleAttention(nn.Module):
                 .permute(0, 1, 3, 2, 4)
                 for projection in (self.q, self.k, self.v)
             )
-            logits = torch.matmul(q, k.transpose(-1, -2)) * (self.c_head ** -0.5)
-            # Each key pair (i,k) contributes its projected pair bias to the
-            # queries (i,j), matching starting-node triangle attention.
-            bias = self.bias(query_nodes).permute(0, 1, 3, 2).unsqueeze(-2)
-            logits = logits + bias
+            logits = self._attention_logits(q, k, query_nodes)
             query_mask = pair_mask[:, start:end, None, :, None]
             key_mask = pair_mask[:, start:end, None, None, :]
             weights = _masked_softmax(logits, query_mask & key_mask, dim=-1)
@@ -361,13 +393,23 @@ class _TriangleAttention(nn.Module):
             )
             attended = self.output(attended)
             attended = attended * pair_mask[:, start:end, :, None].to(attended.dtype)
-            outputs.append(self.dropout(attended))
+            outputs.append(attended)
         output = torch.cat(outputs, dim=1)
         if self.orientation == "ending":
             output = output.transpose(1, 2)
-        return output
+        return self.dropout(output)
 
-    attention_chunk_size: int = 32
+    def _project_key_bias(self, pair_rows: torch.Tensor) -> torch.Tensor:
+        """Project Z[i,k] to per-head bias indexed on attention key k."""
+        return self.bias(pair_rows).permute(0, 1, 3, 2).unsqueeze(-2)
+
+    def _attention_logits(
+        self, query: torch.Tensor, key: torch.Tensor, pair_rows: torch.Tensor
+    ) -> torch.Tensor:
+        logits = torch.matmul(query, key.transpose(-1, -2)) * (self.c_head ** -0.5)
+        return logits + self._project_key_bias(pair_rows)
+
+    attention_chunk_size: Optional[int] = 32
 
 
 class TriangleAttentionStartingNode(_TriangleAttention):
@@ -381,11 +423,13 @@ class TriangleAttentionEndingNode(_TriangleAttention):
 
 
 class PairTransition(nn.Module):
-    def __init__(self, c_z: int, depth: int):
+    def __init__(self, c_z: int, depth: int, transition_factor: int = 4):
         super().__init__()
+        if transition_factor <= 0:
+            raise ValueError("transition_factor must be positive")
         self.norm = _Float32LayerNorm(c_z)
-        self.input = nn.Linear(c_z, c_z * 4)
-        self.output = nn.Linear(c_z * 4, c_z)
+        self.input = nn.Linear(c_z, c_z * transition_factor)
+        self.output = nn.Linear(c_z * transition_factor, c_z)
         _initialize_linear(self.input)
         _initialize_residual_projection(self.output, depth)
 
@@ -416,7 +460,9 @@ class EvoFormerBlock(nn.Module):
         dropout_msa_row: float,
         dropout_msa_column: float,
         dropout_triangle: float,
-        opm_chunk_size: int,
+        opm_chunk_size: Optional[int],
+        transition_factor: int,
+        opm_epsilon: float,
     ):
         super().__init__()
         self.msa_row_attention = MSARowAttentionWithPairBias(
@@ -425,9 +471,9 @@ class EvoFormerBlock(nn.Module):
         self.msa_column_attention = MSAColumnAttention(
             c_m, n_heads_msa, dropout_msa_column, depth
         )
-        self.msa_transition = MSATransition(c_m, depth)
+        self.msa_transition = MSATransition(c_m, depth, transition_factor)
         self.outer_product_mean = OuterProductMean(
-            c_m, c_z, c_hidden_opm, depth, opm_chunk_size
+            c_m, c_z, c_hidden_opm, depth, opm_chunk_size, opm_epsilon
         )
         self.triangle_multiplication_outgoing = TriangleMultiplicationOutgoing(
             c_z, c_hidden_triangle, depth, dropout_triangle
@@ -441,7 +487,7 @@ class EvoFormerBlock(nn.Module):
         self.triangle_attention_ending = TriangleAttentionEndingNode(
             c_z, n_heads_pair, depth, dropout_triangle
         )
-        self.pair_transition = PairTransition(c_z, depth)
+        self.pair_transition = PairTransition(c_z, depth, transition_factor)
 
     def forward(
         self,
@@ -499,18 +545,26 @@ class EvoFormerStack(nn.Module):
         dropout_msa_row: float = 0.15,
         dropout_msa_column: float = 0.0,
         dropout_triangle: float = 0.25,
-        opm_chunk_size: int = 16,
-        attention_chunk_size: int = 32,
+        opm_chunk_size: Optional[int] = 16,
+        attention_chunk_size: Optional[int] = 32,
         gradient_checkpointing: bool = False,
         max_relative_position: int = 32,
+        transition_factor: int = 4,
+        opm_epsilon: float = 1e-3,
     ):
         super().__init__()
         if min(d_msa, d_pair, d_single, n_blocks, n_heads_msa, n_heads_pair) <= 0:
             raise ValueError("EvoFormer dimensions, heads, and depth must be positive")
         if d_msa % n_heads_msa or d_pair % n_heads_pair:
             raise ValueError("MSA/pair widths must be divisible by their attention heads")
-        if min(c_hidden_opm, c_hidden_triangle, opm_chunk_size, attention_chunk_size) <= 0:
+        if min(c_hidden_opm, c_hidden_triangle) <= 0:
             raise ValueError("EvoFormer hidden widths and chunk sizes must be positive")
+        if opm_chunk_size is not None and opm_chunk_size <= 0:
+            raise ValueError("opm_chunk_size must be positive or None")
+        if attention_chunk_size is not None and attention_chunk_size <= 0:
+            raise ValueError("attention_chunk_size must be positive or None")
+        if transition_factor <= 0:
+            raise ValueError("transition_factor must be positive")
         if max_relative_position < 1:
             raise ValueError("max_relative_position must be positive")
         self.d_msa = d_msa
@@ -539,6 +593,8 @@ class EvoFormerStack(nn.Module):
                 dropout_msa_column,
                 dropout_triangle,
                 opm_chunk_size,
+                transition_factor,
+                opm_epsilon,
             )
             for _ in range(n_blocks)
         )
@@ -551,8 +607,6 @@ class EvoFormerStack(nn.Module):
             ):
                 attention.attention_chunk_size = attention_chunk_size
         self.single_projection = nn.Linear(d_msa, d_single)
-        self.final_msa_norm = _Float32LayerNorm(d_msa)
-        self.final_pair_norm = _Float32LayerNorm(d_pair)
         self.reconstruction_head = nn.Linear(d_msa, 22)
         self.pair_supervision_head = nn.Linear(d_pair, 1)
         _initialize_linear(self.single_projection)
@@ -560,7 +614,7 @@ class EvoFormerStack(nn.Module):
         nn.init.xavier_uniform_(self.pair_supervision_head.weight, gain=0.1)
         nn.init.zeros_(self.pair_supervision_head.bias)
         self.configuration = {
-            "architecture": "chimera_af2_style_evoformer_v1",
+            "architecture": "chimera_af2_evoformer_core_v2",
             "d_msa": d_msa,
             "d_pair": d_pair,
             "d_single": d_single,
@@ -576,6 +630,8 @@ class EvoFormerStack(nn.Module):
             "attention_chunk_size": attention_chunk_size,
             "gradient_checkpointing": gradient_checkpointing,
             "max_relative_position": max_relative_position,
+            "transition_factor": transition_factor,
+            "opm_epsilon": opm_epsilon,
         }
 
     def _pair_mask(self, residue_mask: torch.Tensor) -> torch.Tensor:
@@ -678,8 +734,6 @@ class EvoFormerStack(nn.Module):
                 )
                 if collect_diagnostics:
                     block_diagnostics.append(diagnostics)
-        msa = self.final_msa_norm(msa) * valid[..., None].to(msa.dtype)
-        pair = self.final_pair_norm(pair) * pair_mask[..., None].to(pair.dtype)
         single = self.single_projection(msa[:, 0])
         single_valid = valid[:, 0]
         single = single * single_valid[..., None].to(single.dtype)
