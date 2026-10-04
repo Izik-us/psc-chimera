@@ -4,7 +4,7 @@
 
 Stage 1 computational design prototype for the theoretical Pharmacosynthetic Constructor (PSC) engineering pipeline.
 
-> **Research-status notice:** CHIMERA is an untrained research prototype by default. Its canonical evolutionary representation is a native PyTorch, AlphaFold-2-style coupled EvoFormer stack; it is not the AlphaFold system, is not pretrained, and is not checkpoint-compatible with AlphaFold/OpenFold. The structural generator is a custom local SE(3) Schrödinger-bridge model, not RFdiffusion; and the sequence-recovery module is ProteinMPNN-inspired, not native ProteinMPNN. Random modules remain trainable and production inference fails closed until required components are trained, validated, and objective predictors calibrated. Proxy values are not biological measurements.
+> **Research-status notice:** CHIMERA is an untrained research prototype by default. Its canonical evolutionary representation is a CHIMERA PyTorch implementation of the AlphaFold-2 EvoFormer core; it is not the full AlphaFold system, is not pretrained, and is not checkpoint-compatible with AlphaFold/OpenFold. The structural generator is a custom local SE(3) Schrödinger-bridge model, not RFdiffusion; and the sequence-recovery module is ProteinMPNN-inspired, not native ProteinMPNN. Random modules remain trainable and production inference fails closed until required components are trained, validated, and objective predictors calibrated. Proxy values are not biological measurements.
 
 ---
 
@@ -17,7 +17,7 @@ Caller-prepared MSA tokens and pair features
         │
         ▼
 Evolutionary representation
-(48 coupled EvoFormer blocks by default; native CHIMERA weights, not pretrained AlphaFold)
+(48 coupled EvoFormer blocks by default; CHIMERA-owned parameters, not pretrained AlphaFold weights)
         ├─ MSA stream: pair-biased row attention → column attention → transition
         ├─ MSA-to-pair: masked Outer Product Mean
         └─ pair stream: triangle multiplication/attention → pair transition

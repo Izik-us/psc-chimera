@@ -1,8 +1,8 @@
 """Canonical CHIMERA v2 composition root.
 
-The canonical MSA backbone is a native PyTorch, AlphaFold-2-style EvoFormer
-stack, while the ProteinMPNN-inspired backbone retains its documented
-approximation boundary. Legacy ``CHIMERAv2`` remains isolated in
+The canonical MSA backbone is CHIMERA's PyTorch implementation of the
+AlphaFold-2 EvoFormer core. The ProteinMPNN-inspired backbone retains its
+documented approximation boundary. Legacy ``CHIMERAv2`` remains isolated in
 ``chimera.chimera_v2`` for compatibility and is not instantiated here.
 """
 
@@ -85,11 +85,13 @@ class CanonicalCHIMERAv2(nn.Module):
         n_modules: int = 5,
         evoformer_n_blocks: int = 48,
         evoformer_gradient_checkpointing: bool = False,
-        evoformer_attention_chunk_size: int = 32,
-        evoformer_opm_chunk_size: int = 16,
+        evoformer_attention_chunk_size: Optional[int] = 32,
+        evoformer_opm_chunk_size: Optional[int] = 16,
         evoformer_dropout_msa_row: float = 0.15,
         evoformer_dropout_msa_column: float = 0.0,
         evoformer_dropout_triangle: float = 0.25,
+        evoformer_transition_factor: int = 4,
+        evoformer_opm_epsilon: float = 1e-3,
         **legacy_aliases,
     ) -> None:
         super().__init__()
@@ -137,6 +139,8 @@ class CanonicalCHIMERAv2(nn.Module):
             dropout_msa_row=evoformer_dropout_msa_row,
             dropout_msa_column=evoformer_dropout_msa_column,
             dropout_triangle=evoformer_dropout_triangle,
+            transition_factor=evoformer_transition_factor,
+            opm_epsilon=evoformer_opm_epsilon,
         )
         self.flow_model = FlowMatchingBackbone(d_se3, d_pair_out, n_flow_blocks)
         self.base_mpnn = ProteinMPNNBackbone(d_mpnn)

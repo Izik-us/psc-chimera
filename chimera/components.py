@@ -1,7 +1,7 @@
 """Local model components used by canonical and legacy CHIMERA compositions.
 
-The canonical MSA backbone is an AlphaFold-2-style EvoFormer stack; the
-structural connector and ProteinMPNN-inspired trunk remain CHIMERA-local.
+The canonical MSA backbone implements the AlphaFold-2 EvoFormer core; the
+structural connector and ProteinMPNN-inspired trunk remain CHIMERA-specific.
 """
 
 from __future__ import annotations

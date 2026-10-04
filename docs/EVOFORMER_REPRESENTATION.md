@@ -1,11 +1,25 @@
 # Canonical EvoFormer evolutionary representation
 
-The canonical CHIMERA evolutionary subsystem is a native PyTorch,
-AlphaFold-2-style EvoFormer representation stack. It exists to repeatedly
-exchange information between aligned evolutionary observations and residue-pair
-features before CHIMERA's SE(3) structural generator consumes those
-representations. This is an architectural implementation, not the AlphaFold
-system, not pretrained, and not compatible with AlphaFold/OpenFold checkpoints.
+## Three levels of the claim
+
+1. **AlphaFold-2 EvoFormer core.** The reproduced core is the coupled MSA/pair
+   stack: pair-biased MSA row attention, MSA column attention, MSA and pair
+   transitions, Outer Product Mean, outgoing/incoming triangle multiplication,
+   and starting/ending triangle attention. These operations are based on
+   Jumper et al.'s Evoformer algorithms and the DeepMind/OpenFold reference
+   implementations.
+2. **CHIMERA EvoFormer implementation.** CHIMERA implements those information
+   flows in its own PyTorch modules, masks, configuration, and caller-provided
+   input/output interfaces. It is an **AlphaFold-2 architectural
+   replication**, not a port of their implementation or parameterization.
+3. **Full AlphaFold system.** The AlphaFold input pipeline, template and Extra
+   MSA stacks, recycling schedule, structure module, auxiliary structure
+   heads, training infrastructure, and trained weights are out of scope.
+
+The EvoFormer exists to repeatedly exchange information between aligned
+evolutionary observations and residue-pair features before CHIMERA's SE(3)
+structural generator consumes those representations. It is not pretrained and
+is not checkpoint-compatible with AlphaFold/OpenFold.
 
 ## Canonical path
 
@@ -47,7 +61,7 @@ block count, widths, dropout rates, chunk sizes, relative-position range, and
 gradient-checkpointing selection are part of `model_configuration()` and thus
 the checkpoint architecture identity.
 
-The block operations are separate residual updates in this order:
+The block operations are separate residual updates in this exact order:
 
 1. Per-MSA-row gated residue attention with learned pair-derived per-head bias.
 2. Per-residue MSA-column attention over valid aligned sequences.
@@ -58,12 +72,21 @@ The block operations are separate residual updates in this order:
 7. LayerNorm → `C_z → 4*C_z` → ReLU → `4*C_z → C_z` pair transition.
 
 The row attention bias is computed from normalized pair features and a
-no-bias projection to heads. Both MSA attention operations use explicit
-valid-token masks; all-masked rows produce zero attention rather than NaNs.
-Outer Product Mean divides by the number of aligned sequences valid at both
-residues and emits zero when that count is zero. Pair masks are the outer
-product of residue validity and are applied throughout the triangle stack.
-Fully padded examples remain finite and yield zero representations.
+no-bias projection to heads; its two residue axes are respectively the query
+residue and key residue. Triangle-attention bias comes from each key-side pair
+(`Z[i,k]` in starting-node orientation) and is broadcast over query pairs, not
+the reverse. Both MSA attention operations use explicit valid-token masks;
+all-masked rows produce zero attention rather than NaNs. Outer Product Mean
+divides by the number of aligned sequences valid at both residues plus the
+OpenFold `1e-3` numerical epsilon **after the output projection**, and emits
+zero when that count is zero. The outer product is contracted and flattened,
+projected to `C_z`, then divided by the jointly valid row count plus epsilon.
+Its two linear branches and output projection include biases. Pair masks are the
+outer product of residue validity and are applied throughout the triangle
+stack. Invalid pair states are also explicitly zeroed after residual updates;
+this is deliberate padding isolation beyond DeepMind's historically unmasked
+pair-transition implementation. Fully padded examples remain finite and
+yield zero representations.
 
 The pair state begins as the sum of the caller-provided pair features and a
 learned signed relative-position embedding. `residue_index` can be supplied to
@@ -82,21 +105,32 @@ diagnostics.
 
 - CHIMERA's default channels remain `C_m = 256`, `C_z = 128`, and
   `C_s = 256`; test models may set smaller compatible widths.
-- Row attention, column attention, and triangle attention are chunked along
-  independent MSA rows/residue nodes. Outer Product Mean chunks target
+- Row attention, column attention, and triangle attention can be chunked along
+  independent MSA rows/residue nodes. Outer Product Mean can chunk target
   residues, avoiding materialization of the full unchunked outer-product
-  intermediate. Optional gradient checkpointing trades compute for activation
-  memory.
+  intermediate. `None` selects full/un-chunked computation; chunked and
+  unchunked execution implement the same operations. Optional gradient
+  checkpointing trades compute for activation memory.
+- Outer Product Mean projection, contraction, and sequence normalization run
+  in float32 under autocast and return the update in the MSA input dtype to
+  avoid low-precision accumulation of evolutionary pair statistics.
 - Default residual-update dropout rates are 0.15 for MSA row attention, 0 for
-  MSA column attention, and 0.25 for triangle operations. The MSA attention
-  masks are shared across MSA rows; triangle-update masks are shared across
-  the attended pair-row axis. Dropout is confined to those residual branches.
-- Output projections use Xavier initialization scaled by `1/sqrt(n_blocks)`,
-  with zero biases, to keep residual updates bounded while retaining
-  nonzero first-step gradients through all branches. Attention gates are
-  initialized with zero weights and unit biases. This is a PyTorch-specific
-  initialization choice rather than a promise of parameter-level parity with
-  Haiku AlphaFold.
+  MSA column attention, and 0.25 for pair triangle operations. Following
+  OpenFold's `DropoutRowwise` broadcast dimension `-3`, MSA residual updates
+  share dropout across MSA sequence rows (`[B,1,L,C]`); pair residual updates
+  share across the first residue axis (`[B,1,L,C]`). Triangle-attention
+  dropout is applied after chunks are reassembled, so chunk size does not
+  change its sharing domain.
+- The transition expansion defaults to 4 and is part of the architecture
+  configuration. Configuration records widths, head counts, dropout rates,
+  chunk settings, gradient-checkpointing, relative-position range, transition
+  factor, and OPM epsilon; checkpoint validation rejects mismatches.
+- Initialization is intentionally CHIMERA-specific: Xavier initialization
+  with residual output scaling by `1/sqrt(n_blocks)`, and sigmoid gates with
+  zero weights/unit biases. This differs from OpenFold's mix of LeCun,
+  ReLU-He, gating, and zero-final initializers. It is not parameter-level
+  parity; the operation equations, orientations, masking, and dropout
+  semantics are the fidelity target.
 - This is architectural replication, not pretrained-weight compatibility.
   CHIMERA's operation names, state-dict keys, initializations, and downstream
   dimensions are independently owned.
@@ -122,24 +156,31 @@ the sum of:
    MSA. Invalid/gap residues are excluded and pairs with fewer than two
    jointly observed sequences are omitted.
 
-This provides evolutionary and co-evolutionary representation supervision; it
-does not establish structural accuracy. Structural utility is trained
-separately through the existing flow regime, where gradients propagate from
-the supervised SE(3) bridge loss through the pair connector and EvoFormer.
-The existing training gradient audit continues to verify trainable-component
+This is a CHIMERA-specific objective, not AlphaFold's structural training
+objective or full training recipe. AlphaFold jointly trained its structure
+prediction system using structural supervision (including FAPE and auxiliary
+distogram and masked-MSA losses), large-scale structure/sequence data,
+recycling, and distributed accelerator training. The CHIMERA objective does
+not establish structural accuracy. Structural utility is trained separately
+through the existing flow regime, where gradients propagate from the
+supervised SE(3) bridge loss through the pair connector and EvoFormer. The
+existing training gradient audit continues to verify trainable-component
 gradients. No AlphaFold-scale structural objective, dataset, recycling
 schedule, or pretrained representation is implied.
 
 ## References
 
 - Jumper et al., *Highly accurate protein structure prediction with
-  AlphaFold*, Nature 2021, including the Evoformer algorithms in the
+  AlphaFold*, Nature 2021, including Evoformer Algorithms 6–15 in the
   Supplementary Information.
 - [DeepMind AlphaFold source](https://github.com/google-deepmind/alphafold),
   particularly `alphafold/model/modules.py`.
 - [OpenFold source](https://github.com/aqlaboratory/openfold), particularly
-  the Evoformer and MSA/pair operation modules.
+  [`evoformer.py`](https://github.com/aqlaboratory/openfold/blob/main/openfold/model/evoformer.py),
+  MSA, Outer Product Mean, triangle attention/multiplication, transition,
+  primitive, and dropout modules.
 
 The implementation was written as CHIMERA-owned PyTorch code using these
 architectural references; it does not import or redistribute their model
-implementations or weights.
+implementations or weights. **AlphaFold/OpenFold checkpoint compatibility:
+NO.**
