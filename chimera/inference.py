@@ -89,6 +89,9 @@ class InferenceRequest:
     substrate_types: torch.Tensor | None = None
     validation_options: ValidationOptions = ValidationOptions()
     checkpoint_path: str | Path | None = None
+    msa_padding_mask: torch.Tensor | None = None
+    residue_mask: torch.Tensor | None = None
+    residue_index: torch.Tensor | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.config, InferenceConfig):
@@ -144,6 +147,34 @@ class InferenceRequest:
             raise InputValidationError("source_rotations must have shape (1,L,3,3)")
         if self.source_translations.shape != (1, length, 3):
             raise InputValidationError("source_translations must have shape (1,L,3)")
+        if self.msa_padding_mask is not None and (
+            not torch.is_tensor(self.msa_padding_mask)
+            or self.msa_padding_mask.shape != self.msa_tokens.shape
+            or self.msa_padding_mask.dtype != torch.bool
+        ):
+            raise InputValidationError(
+                "msa_padding_mask must be bool with shape (1,N,L)"
+            )
+        if self.residue_mask is not None and (
+            not torch.is_tensor(self.residue_mask)
+            or self.residue_mask.shape != (1, length)
+            or self.residue_mask.dtype != torch.bool
+        ):
+            raise InputValidationError("residue_mask must be bool with shape (1,L)")
+        if self.residue_index is not None and (
+            not torch.is_tensor(self.residue_index)
+            or self.residue_index.shape not in {(length,), (1, length)}
+            or self.residue_index.dtype not in {
+                torch.uint8,
+                torch.int8,
+                torch.int16,
+                torch.int32,
+                torch.int64,
+            }
+        ):
+            raise InputValidationError(
+                "residue_index must be an integer tensor with shape (L,) or (1,L)"
+            )
         for name, value in (
             ("initial_pair_features", self.initial_pair_features),
             ("source_rotations", self.source_rotations),
@@ -307,6 +338,9 @@ def _input_hash(request: InferenceRequest) -> str:
         "initial_pair_features",
         "source_rotations",
         "source_translations",
+        "msa_padding_mask",
+        "residue_mask",
+        "residue_index",
         "constraints",
         "target_substrate",
         "substrate_coordinates",
@@ -531,7 +565,7 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
     old_num_threads = torch.get_num_threads()
     warnings_list = [
         "Geometry checks and deterministic evaluator scores are engineering proxies, not biological validation.",
-        "Local MSA and ProteinMPNN-inspired components are approximations; no native external model backend was used.",
+        "The CHIMERA EvoFormer is an untrained-by-default AlphaFold-2-style architecture, not an AlphaFold/OpenFold model or checkpoint; local ProteinMPNN-inspired sequence recovery is not native ProteinMPNN.",
         f"timeout_seconds={config.timeout_seconds} is checked between microbatches and cannot interrupt an active model kernel.",
     ]
     readiness_before = model.inference_readiness()
@@ -599,6 +633,22 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
                         temperature=config.sequence_temperature,
                         generator=generator,
                         validate_geometry=request.validation_options.geometry,
+                        msa_padding_mask=(
+                            request.msa_padding_mask.to(device=device).expand(count, -1, -1)
+                            if request.msa_padding_mask is not None else None
+                        ),
+                        residue_mask=(
+                            request.residue_mask.to(device=device).expand(count, -1)
+                            if request.residue_mask is not None else None
+                        ),
+                        residue_index=(
+                            (
+                                request.residue_index.to(device=device).reshape(1, -1)
+                                if request.residue_index.ndim == 1
+                                else request.residue_index.to(device=device)
+                            ).expand(count, -1)
+                            if request.residue_index is not None else None
+                        ),
                     )
                 geometry_report = output["geometry_report"]
                 if geometry_report is not None:
@@ -745,10 +795,15 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
             ],
             "native_external_backends_used": [],
             "approximate_components_used": [
-                "local MSA representation",
                 "local ProteinMPNN-inspired sequence recovery",
                 "deterministic evaluator proxy scores",
             ],
+            "evolutionary_representation": {
+                "architecture": "CHIMERA-native AlphaFold-2-style coupled EvoFormer",
+                "training_status": model.component_status["evoformer"]["training_status"],
+                "pretrained_alphaFold_or_openfold_weights": False,
+                "checkpoint_compatibility": "not compatible",
+            },
             "retrieval": (
                 "requested_but_unavailable"
                 if config.retrieval_id is not None

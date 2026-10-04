@@ -60,13 +60,14 @@ checkpoint into CHIMERA's local flow model.
 
 ## OpenFold and AlphaFold
 
-The local MSA representation component is an EvoFormer-like approximation,
-not the native AlphaFold/OpenFold EvoFormer. AlphaFold's parameter archive is
-not a standalone EvoFormer checkpoint. An `OpenFoldCLIAdapter` boundary can
-call a separately supplied runner script and checkpoint, but this repository
-does not provide or validate that runner, checkpoint, database setup, or a
-native OpenFold inference environment. The direct `OpenFoldAdapter` is
-explicitly unwired.
+The canonical MSA representation is a native PyTorch, AlphaFold-2-style
+EvoFormer stack. It is not the full AlphaFold/OpenFold system, has no
+pretrained AlphaFold/OpenFold weights, and is not checkpoint-compatible with
+those models. AlphaFold's parameter archive is not a standalone EvoFormer
+checkpoint. An `OpenFoldCLIAdapter` boundary can call a separately supplied
+runner script and checkpoint, but this repository does not provide or validate
+that runner, checkpoint, database setup, or a native OpenFold inference
+environment. The direct `OpenFoldAdapter` is explicitly unwired.
 
 ## ESM-2 and ESMFold
 

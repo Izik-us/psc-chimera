@@ -146,8 +146,16 @@ def test_config_controls_microbatch_flow_steps_and_sequence_temperature(monkeypa
     model = _model()
     original_forward = model.forward
     calls = []
+    propagated_masks = []
 
     def observe_forward(*args, **kwargs):
+        propagated_masks.append(
+            (
+                kwargs["msa_padding_mask"],
+                kwargs["residue_mask"],
+                kwargs["residue_index"],
+            )
+        )
         calls.append(
             (
                 args[0].shape[0],
@@ -170,6 +178,9 @@ def test_config_controls_microbatch_flow_steps_and_sequence_temperature(monkeypa
                 cpu_threads=1,
             ),
             num_candidates=3,
+            msa_padding_mask=torch.zeros(1, 2, 8, dtype=torch.bool),
+            residue_mask=torch.ones(1, 8, dtype=torch.bool),
+            residue_index=torch.arange(8),
         ),
     )
 
@@ -180,6 +191,9 @@ def test_config_controls_microbatch_flow_steps_and_sequence_temperature(monkeypa
     assert all(generator is not None for _, _, _, generator, _ in calls)
     assert all(threads == 1 for _, _, _, _, threads in calls)
     assert len(result.candidates) == 3
+    assert propagated_masks[0][0].shape == (2, 2, 8)
+    assert propagated_masks[0][1].shape == (2, 8)
+    assert propagated_masks[0][2].shape == (2, 8)
     calls.clear()
     run_inference(
         model,
@@ -327,6 +341,20 @@ def test_invalid_request_shapes_fail_before_model_execution():
     inputs["initial_pair_features"] = torch.zeros(1, 8, 7, 16)
     with pytest.raises(InputValidationError, match="initial_pair_features"):
         InferenceRequest(config=_config(), **inputs)
+
+
+def test_request_accepts_and_validates_msa_masks_and_residue_indices():
+    request = _request(
+        msa_padding_mask=torch.zeros(1, 2, 8, dtype=torch.bool),
+        residue_mask=torch.ones(1, 8, dtype=torch.bool),
+        residue_index=torch.tensor([[0, 1, 2, 5, 6, 7, 8, 9]]),
+    )
+    assert request.msa_padding_mask.shape == request.msa_tokens.shape
+    assert request.residue_mask.shape == (1, 8)
+    assert request.residue_index.shape == (1, 8)
+
+    with pytest.raises(InputValidationError, match="residue_mask"):
+        _request(residue_mask=torch.ones(1, 7, dtype=torch.bool))
 
 
 def test_validation_can_be_explicitly_not_requested():

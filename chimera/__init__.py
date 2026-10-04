@@ -45,6 +45,7 @@ from .retrieval import StructuralRetriever
 from .sequence_design import MultiScaleNRPSDesigner
 from .conditioning import SubstratePocketConditioner
 from .components import MSARepresentationBackbone
+from .evoformer_stack import EvoFormerBlock, EvoFormerStack, EvoformerOutput
 from .autoregressive_policy import AutoregressiveSequencePolicy
 from .pareto_pcgrad import (
     MergeReadyParetoMultiObjectiveHead,
@@ -105,7 +106,7 @@ __all__ = [
     "ESMProteinFitnessScorer", "SE3FlowMatching", "SchrodingerBridge",
     "FlowMatchingBackbone", "InvariantPointAttention", "MultiScaleNRPSDesigner",
     "SubstratePocketConditioner",
-    "MSARepresentationBackbone",
+    "MSARepresentationBackbone", "EvoFormerBlock", "EvoFormerStack", "EvoformerOutput",
     "SE3SchrodingerBridge", "GeometryReport", "validate_backbone",
     "BiologicalObjectiveEvaluator", "ObjectiveOutput", "PCGradOptimizer", "pcgrad_step",
     "project_conflicting_gradients", "DPOBatch", "DPOTrainer",

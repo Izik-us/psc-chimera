@@ -9,7 +9,7 @@ Research Prototype
         -> Biological Validation
 ```
 
-The engineering gate evaluates software contracts only. A passing gate does not establish biological validity, experimental predictive performance, clinical utility, or readiness for biological deployment. The current local MSA row/column model, custom SE(3) Schrödinger bridge, and ProteinMPNN-inspired sequence-recovery module retain their documented approximation boundaries.
+The engineering gate evaluates software contracts only. A passing gate does not establish biological validity, experimental predictive performance, clinical utility, or readiness for biological deployment. The canonical MSA path now uses a native PyTorch, AlphaFold-2-style EvoFormer representation stack; this does not provide pretrained AlphaFold/OpenFold weights or establish biological validity. The custom SE(3) Schrödinger bridge and ProteinMPNN-inspired sequence-recovery module retain their documented approximation boundaries.
 
 ## Legacy Evidence Summary
 
