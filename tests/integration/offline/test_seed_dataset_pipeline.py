@@ -6,7 +6,7 @@ from data.dataset_api import SQLiteChimeraDataset, build_dataset_sample, write_i
 from data.leakage_splits import SplitConfig, generate_leakage_safe_splits
 from data.msa import MSAConfig, build_msa_record
 from data.sequence_linkage import SequenceCandidate, link_structure_sequence
-from data.structures import parse_mmcif_structure
+from data.structures import StructuralQCConfig, parse_mmcif_structure
 
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "data_engineering"
@@ -17,7 +17,14 @@ def test_1amu_derived_fixture_flows_through_canonical_dataset_pipeline_offline(t
     # The live external test remains the authoritative raw-RCSB acquisition path.
     entry_directory = FIXTURES / "rcsb" / "entry"
     acquisition = json.loads((entry_directory / "acquisition_manifest.jsonl").read_text(encoding="utf-8").splitlines()[0])
-    structure = parse_mmcif_structure(entry_directory / "1AMU.cif", structure_id="1AMU")
+    structure = parse_mmcif_structure(
+        entry_directory / "1AMU.cif",
+        structure_id="1AMU",
+        # The offline fixture is the canonical N/CA/C/O/CB representation, not a
+        # full raw atom dump. Do not interpret omitted non-canonical sidechain
+        # atoms as experimental missingness in this derived fixture.
+        config=StructuralQCConfig(maximum_missing_sidechain_fraction=1.0),
+    )
     chain = next(item for item in structure.chains if item.label_asym_id == "A")
 
     msa_snapshot = json.loads(
