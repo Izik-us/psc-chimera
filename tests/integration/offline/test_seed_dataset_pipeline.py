@@ -12,7 +12,9 @@ from data.structures import parse_mmcif_structure
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "data_engineering"
 
 
-def test_real_1amu_flows_through_canonical_dataset_pipeline_offline(tmp_path):
+def test_1amu_derived_fixture_flows_through_canonical_dataset_pipeline_offline(tmp_path):
+    # This fixture is a deterministic normalized reconstruction from the pinned real 1AMU acquisition record.
+    # The live external test remains the authoritative raw-RCSB acquisition path.
     entry_directory = FIXTURES / "rcsb" / "entry"
     acquisition = json.loads((entry_directory / "acquisition_manifest.jsonl").read_text(encoding="utf-8").splitlines()[0])
     structure = parse_mmcif_structure(entry_directory / "1AMU.cif", structure_id="1AMU")
