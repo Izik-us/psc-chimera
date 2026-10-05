@@ -69,3 +69,8 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+
+# Local live-test/debug summaries
+.live_*.json
+.pytest_*.txt
+.external_test_out.txt
