@@ -387,140 +387,133 @@ class MSARepresentationBackbone(EvoFormerStack):
 EvoFormerBackbone = MSARepresentationBackbone
 
 class ProteinMPNNBackbone(nn.Module):
-    """Geometry-aware sequence-design trunk for residue-level structural conditioning.
+    """CHIMERA geometric residue trunk for structure-conditioned sequence design.
 
-    The module consumes backbone coordinates, builds a local k-NN residue graph,
-    encodes distance- and direction-based geometric features, and updates each
-    residue representation using masked geometric message passing before
-    returning the CHIMERA node features used by downstream design.
+    Backbone atoms define residue-local frames, a masked k-NN graph supplies
+    rigid-transform-invariant edge geometry, and alternating node/edge
+    message-passing layers condition evolutionary residue states on the
+    generated 3-D backbone. Sequence logits remain owned by the downstream
+    CHIMERA sequence-design stack.
     """
 
-    def __init__(self, node_features: int = 128, edge_features: int = 128, max_neighbors: int = 16):
+    def __init__(self, node_features: int = 128, edge_features: int = 128,
+                 max_neighbors: int = 32, n_mp_layers: int = 3):
         super().__init__()
+        if node_features < 1 or edge_features < 1:
+            raise ValueError("node_features and edge_features must be positive")
+        if max_neighbors < 1:
+            raise ValueError("max_neighbors must be positive")
+        if n_mp_layers < 1:
+            raise ValueError("n_mp_layers must be positive")
         self.node_features = node_features
         self.edge_features = edge_features
         self.max_neighbors = max_neighbors
-        geometry_dim = 3 + 1 + 1 + 16 + 3
-        self.geometry_projection = nn.Sequential(
-            nn.Linear(node_features + geometry_dim, node_features),
+        self.n_mp_layers = n_mp_layers
+        self.node_geometry_dim = 6
+        self.edge_geometry_dim = 28
+        self.node_geometry_encoder = nn.Sequential(
+            nn.LayerNorm(self.node_geometry_dim),
+            nn.Linear(self.node_geometry_dim, node_features),
             nn.GELU(),
             nn.Linear(node_features, node_features),
         )
-        self.edge_encoder = nn.Sequential(
-            nn.Linear(16 + 3 + 1, edge_features),
+        self.edge_geometry_encoder = nn.Sequential(
+            nn.Linear(self.edge_geometry_dim, edge_features),
             nn.GELU(),
             nn.Linear(edge_features, edge_features),
         )
-        self.message_mlp = nn.Sequential(
-            nn.Linear(node_features * 2 + edge_features, node_features * 2),
-            nn.GELU(),
-            nn.Linear(node_features * 2, node_features),
+        from .proteinmpnn import EdgeMPNN, NodeMPNN
+        self.node_layers = nn.ModuleList(
+            [NodeMPNN(node_features, edge_features) for _ in range(n_mp_layers)]
         )
-        self.message_gate = nn.Linear(node_features * 2 + edge_features, node_features)
-        self.output = nn.Sequential(
-            nn.LayerNorm(node_features),
-            nn.Linear(node_features, node_features * 2),
-            nn.GELU(),
-            nn.Linear(node_features * 2, node_features),
+        self.edge_layers = nn.ModuleList(
+            [EdgeMPNN(node_features, edge_features) for _ in range(n_mp_layers)]
         )
+        self.output_norm = nn.LayerNorm(node_features)
 
-    def _local_geometry(self, ca_coords: torch.Tensor) -> torch.Tensor:
-        """Encode each residue using local distance and directional geometry."""
-        length = ca_coords.shape[0]
-        if length == 1:
-            return ca_coords.new_zeros((1, 24))
+    @staticmethod
+    def _derive_local_frames(backbone_coords: torch.Tensor, residue_mask: torch.Tensor):
+        """Construct N-CA-C frames that transform equivariantly under rigid motions."""
+        n_atom = backbone_coords[..., 0, :]
+        ca_atom = backbone_coords[..., 1, :]
+        c_atom = backbone_coords[..., 2, :]
+        ca_to_c = c_atom - ca_atom
+        ca_to_n = n_atom - ca_atom
+        cross = torch.cross(ca_to_c, ca_to_n, dim=-1)
+        finite = torch.isfinite(torch.stack([n_atom, ca_atom, c_atom], dim=-2)).all(dim=(-1, -2))
+        valid = (residue_mask & finite &
+                 (ca_to_c.norm(dim=-1) > 1e-6) &
+                 (ca_to_n.norm(dim=-1) > 1e-6) &
+                 (cross.norm(dim=-1) > 1e-6))
+        x_axis = F.normalize(ca_to_c, dim=-1, eps=1e-6)
+        z_axis = F.normalize(cross, dim=-1, eps=1e-6)
+        y_axis = F.normalize(torch.cross(z_axis, x_axis, dim=-1), dim=-1, eps=1e-6)
+        frames = torch.stack([x_axis, y_axis, z_axis], dim=-1)
+        identity = torch.eye(3, dtype=backbone_coords.dtype, device=backbone_coords.device)
+        identity = identity.view(1, 1, 3, 3).expand_as(frames)
+        frames = torch.where(valid.unsqueeze(-1).unsqueeze(-1), frames, identity)
+        return frames, valid
 
-        pairwise = (ca_coords[:, None, :] - ca_coords[None, :, :]).norm(dim=-1)
-        pairwise = pairwise.masked_fill(torch.eye(length, device=ca_coords.device, dtype=torch.bool), float("inf"))
-        k = min(self.max_neighbors, length - 1)
-        distances, neighbors = pairwise.topk(k, dim=-1, largest=False)
-        centers = torch.linspace(0.0, 20.0, 16, device=ca_coords.device, dtype=ca_coords.dtype)
-        rbf = torch.exp(-((distances.unsqueeze(-1) - centers) ** 2) / 2.0)
+    def _node_geometry(self, ca_coords: torch.Tensor, backbone_coords: torch.Tensor, residue_mask: torch.Tensor):
+        """Return scalar invariants with no dependence on the global coordinate frame."""
+        mask_f = residue_mask.to(ca_coords.dtype)
+        count = mask_f.sum(dim=1, keepdim=True).clamp_min(1.0)
+        center = (ca_coords * mask_f.unsqueeze(-1)).sum(dim=1, keepdim=True) / count.unsqueeze(-1)
+        center_radius = (ca_coords - center).norm(dim=-1, keepdim=True)
+        pairwise = torch.cdist(ca_coords, ca_coords)
+        pair_mask = residue_mask.unsqueeze(1) & residue_mask.unsqueeze(2)
+        pair_mask_f = pair_mask.to(ca_coords.dtype)
+        pair_count = pair_mask_f.sum(dim=-1, keepdim=True).clamp_min(1.0)
+        mean_dist = (pairwise * pair_mask_f).sum(dim=-1, keepdim=True) / pair_count
+        variance = ((pairwise - mean_dist).square() * pair_mask_f).sum(dim=-1, keepdim=True) / pair_count
+        std_dist = variance.clamp_min(0).sqrt()
+        self_mask = torch.eye(ca_coords.shape[1], dtype=torch.bool, device=ca_coords.device).unsqueeze(0)
+        nearest = pairwise.masked_fill(~pair_mask | self_mask, float("inf")).min(dim=-1, keepdim=True).values
+        nearest = torch.where(torch.isfinite(nearest), nearest, torch.zeros_like(nearest))
+        n_atom = backbone_coords[..., 0, :]
+        ca_atom = backbone_coords[..., 1, :]
+        c_atom = backbone_coords[..., 2, :]
+        n_ca = (n_atom - ca_atom).norm(dim=-1, keepdim=True)
+        ca_c = (c_atom - ca_atom).norm(dim=-1, keepdim=True)
+        geometry = torch.cat([center_radius, mean_dist, std_dist, nearest, n_ca, ca_c], dim=-1)
+        return geometry * residue_mask.unsqueeze(-1).to(geometry.dtype)
 
-        per_residue: list[torch.Tensor] = []
-        for residue_index in range(length):
-            local_distances = distances[residue_index]
-            local_neighbors = neighbors[residue_index]
-            local_delta = ca_coords[local_neighbors] - ca_coords[residue_index]
-            local_directions = local_delta / local_distances.clamp_min(1e-6).unsqueeze(-1)
-            local_summary = torch.cat(
-                [
-                    ca_coords[residue_index] - ca_coords.mean(dim=0),
-                    local_distances.mean().unsqueeze(0),
-                    local_distances.std().clamp_min(1e-6).unsqueeze(0),
-                    rbf[residue_index].mean(dim=0, keepdim=True).reshape(-1),
-                    local_directions.mean(dim=0, keepdim=True).reshape(-1),
-                ],
-                dim=0,
-            )
-            per_residue.append(local_summary)
-        return torch.stack(per_residue)
-
-    def _neighbor_edges(self, ca_coords: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return neighbor indices, edge features, and edge masks for each residue."""
-        length = ca_coords.shape[0]
-        if length == 1:
-            return (
-                torch.zeros((1, 1), dtype=torch.long, device=ca_coords.device),
-                torch.zeros((1, 1, 16 + 3 + 1), device=ca_coords.device, dtype=ca_coords.dtype),
-                torch.zeros((1, 1), device=ca_coords.device, dtype=torch.bool),
-            )
-
-        pairwise = (ca_coords[:, None, :] - ca_coords[None, :, :]).norm(dim=-1)
-        pairwise = pairwise.masked_fill(torch.eye(length, device=ca_coords.device, dtype=torch.bool), float("inf"))
-        k = min(self.max_neighbors, length - 1)
-        distances, neighbors = pairwise.topk(k, dim=-1, largest=False)
-
-        edges: list[torch.Tensor] = []
-        masks: list[torch.Tensor] = []
-        for residue_index in range(length):
-            local_neighbors = neighbors[residue_index]
-            local_delta = ca_coords[local_neighbors] - ca_coords[residue_index]
-            local_distances = distances[residue_index].clamp_min(1e-6)
-            local_directions = local_delta / local_distances.unsqueeze(-1)
-            centers = torch.linspace(0.0, 20.0, 16, device=ca_coords.device, dtype=ca_coords.dtype)
-            rbf = torch.exp(-((local_distances.unsqueeze(-1) - centers) ** 2) / 2.0)
-            edge_features = torch.cat([rbf, local_directions, local_distances.unsqueeze(-1)], dim=-1)
-            edges.append(edge_features)
-            masks.append(torch.ones_like(local_distances, dtype=torch.bool))
-
-        edge_tensor = torch.stack(edges)
-        mask_tensor = torch.stack(masks)
-        return neighbors, edge_tensor, mask_tensor
-
-    def forward(self, backbone_coords, node_features):
-        if backbone_coords.ndim != 4 or backbone_coords.shape[-2:] != (4, 3):
-            if backbone_coords.ndim != 4 or backbone_coords.shape[-2:] != (5, 3):
-                raise ValueError("backbone_coords must have shape (B, L, 4|5, 3)")
-        if node_features.ndim != 3 or node_features.shape[-1] != self.node_features:
+    def forward(self, backbone_coords: torch.Tensor, node_features: torch.Tensor,
+                residue_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Encode evolutionary residue features conditioned on 3-D backbone geometry."""
+        if backbone_coords.ndim != 4 or backbone_coords.shape[-2:] not in ((4, 3), (5, 3)):
+            raise ValueError("backbone_coords must have shape (B, L, 4|5, 3)")
+        if node_features.ndim != 3:
+            raise ValueError("node_features must have shape (B, L, node_features)")
+        if node_features.shape[:2] != backbone_coords.shape[:2]:
+            raise ValueError("node_features and backbone_coords must agree on batch and length")
+        if node_features.shape[-1] != self.node_features:
             raise ValueError(f"node_features must have shape (B, L, {self.node_features})")
-
-        batch_size, sequence_length, _ = node_features.shape
-        outputs = []
-        for batch_index in range(batch_size):
-            ca_coords = backbone_coords[batch_index, :, 1, :]
-            graph_geometry = self._local_geometry(ca_coords)
-            node_state = self.geometry_projection(torch.cat([node_features[batch_index], graph_geometry], dim=-1))
-
-            neighbors, edge_features, edge_mask = self._neighbor_edges(ca_coords)
-            updated: list[torch.Tensor] = []
-            for residue_index in range(sequence_length):
-                local_neighbors = neighbors[residue_index]
-                if local_neighbors.numel() == 0:
-                    updated.append(node_state[residue_index])
-                    continue
-                neighbor_features = node_state[local_neighbors]
-                local_edge = self.edge_encoder(edge_features[residue_index])
-                msg_input = torch.cat(
-                    [
-                        node_state[residue_index].unsqueeze(0).expand_as(neighbor_features),
-                        neighbor_features,
-                        local_edge,
-                    ],
-                    dim=-1,
-                )
-                gated_messages = self.message_mlp(msg_input) * torch.sigmoid(self.message_gate(msg_input))
-                message = gated_messages.mean(dim=0)
-                updated.append(self.output(node_state[residue_index] + message))
-            outputs.append(torch.stack(updated))
-        return torch.stack(outputs)  # (B, L, node_features)
+        batch_size, length = backbone_coords.shape[:2]
+        device = backbone_coords.device
+        if residue_mask is None:
+            residue_mask = torch.ones(batch_size, length, dtype=torch.bool, device=device)
+        elif residue_mask.shape != (batch_size, length) or residue_mask.dtype != torch.bool:
+            raise ValueError("residue_mask must have shape (B, L) and dtype bool")
+        if not torch.isfinite(backbone_coords).all() and residue_mask.all():
+            raise ValueError("backbone_coords contains non-finite values without a masking residue")
+        safe_coords = torch.nan_to_num(backbone_coords, nan=0.0, posinf=0.0, neginf=0.0)
+        safe_coords = safe_coords * residue_mask.unsqueeze(-1).unsqueeze(-1).to(safe_coords.dtype)
+        ca_coords = safe_coords[..., 1, :]
+        frames, frame_valid = self._derive_local_frames(safe_coords, residue_mask)
+        effective_mask = residue_mask & frame_valid
+        node_geometry = self._node_geometry(ca_coords, safe_coords, effective_mask)
+        node = node_features * effective_mask.unsqueeze(-1).to(node_features.dtype)
+        node = node + self.node_geometry_encoder(node_geometry)
+        from .proteinmpnn import get_protein_graph
+        neighbor_index, edge_geometry, edge_mask = get_protein_graph(ca_coords, frames, k_neighbors=self.max_neighbors)
+        neighbor_valid = residue_mask.unsqueeze(1).expand(-1, length, -1).gather(2, neighbor_index)
+        edge_mask = edge_mask & effective_mask.unsqueeze(-1) & neighbor_valid
+        edge = self.edge_geometry_encoder(edge_geometry)
+        edge = edge * edge_mask.unsqueeze(-1).to(edge.dtype)
+        for node_layer, edge_layer in zip(self.node_layers, self.edge_layers):
+            node = node_layer(node, edge, neighbor_index, edge_mask)
+            node = node * effective_mask.unsqueeze(-1).to(node.dtype)
+            edge = edge_layer(node, edge, neighbor_index)
+            edge = edge * edge_mask.unsqueeze(-1).to(edge.dtype)
+        return self.output_norm(node) * effective_mask.unsqueeze(-1).to(node.dtype)
