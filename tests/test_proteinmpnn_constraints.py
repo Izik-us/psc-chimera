@@ -89,3 +89,33 @@ def test_proteinmpnn_backbone_uses_geometry_to_change_features():
     assert out_a.shape == (1, 6, 16)
     assert out_b.shape == (1, 6, 16)
     assert not torch.allclose(out_a, out_b, atol=1e-5)
+
+def test_proteinmpnn_backbone_is_rigid_transform_invariant():
+    torch.manual_seed(11)
+    model = ProteinMPNNBackbone(node_features=16, edge_features=12, max_neighbors=4).eval()
+    evol = torch.randn(1, 7, 16)
+    coords = torch.randn(1, 7, 4, 3)
+    from chimera.lie import so3_exp
+
+    Q = so3_exp(torch.tensor([[0.31, -0.22, 0.17]], dtype=coords.dtype))[0]
+    translation = torch.tensor([2.5, -1.0, 3.2], dtype=coords.dtype)
+    transformed = torch.einsum("ij,blaj->blai", Q, coords) + translation
+    with torch.no_grad():
+        out_a = model(coords, evol)
+        out_b = model(transformed, evol)
+    assert torch.allclose(out_a, out_b, atol=2e-5, rtol=2e-5)
+
+
+def test_proteinmpnn_backbone_mask_blocks_invalid_residues():
+    torch.manual_seed(12)
+    model = ProteinMPNNBackbone(node_features=16, edge_features=12, max_neighbors=4).eval()
+    evol_a = torch.randn(1, 6, 16)
+    evol_b = evol_a.clone()
+    evol_b[:, 4:] = torch.randn_like(evol_b[:, 4:]) * 100.0
+    coords = torch.randn(1, 6, 4, 3)
+    residue_mask = torch.tensor([[True, True, True, True, False, False]])
+    with torch.no_grad():
+        out_a = model(coords, evol_a, residue_mask=residue_mask)
+        out_b = model(coords, evol_b, residue_mask=residue_mask)
+    assert torch.allclose(out_a[:, :4], out_b[:, :4], atol=1e-5, rtol=1e-5)
+    assert torch.equal(out_a[:, 4:], torch.zeros_like(out_a[:, 4:]))
