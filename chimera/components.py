@@ -387,37 +387,140 @@ class MSARepresentationBackbone(EvoFormerStack):
 EvoFormerBackbone = MSARepresentationBackbone
 
 class ProteinMPNNBackbone(nn.Module):
-    """Local residue-feature trunk used before multiscale sequence design.
+    """Geometry-aware sequence-design trunk for residue-level structural conditioning.
 
-    This small trainable module does not wrap or load native
-    ``dauparas/ProteinMPNN``. Native integration is isolated in the optional
-    ``ProteinMPNNAdapter``. ``backbone_coords`` and ``edge_features`` remain
-    in the local module's compatibility surface; this trunk uses node features
-    only. The canonical multiscale designer consumes geometric graph features
-    separately.
+    The module consumes backbone coordinates, builds a local k-NN residue graph,
+    encodes distance- and direction-based geometric features, and updates each
+    residue representation using masked geometric message passing before
+    returning the CHIMERA node features used by downstream design.
     """
 
-    def __init__(self, node_features: int = 128, edge_features: int = 128):
+    def __init__(self, node_features: int = 128, edge_features: int = 128, max_neighbors: int = 16):
         super().__init__()
         self.node_features = node_features
-        # Historical parameter name retained for checkpoint compatibility.
-        self.frozen_residue_adapter = nn.Sequential(
-            nn.Linear(node_features, node_features * 8),
+        self.edge_features = edge_features
+        self.max_neighbors = max_neighbors
+        geometry_dim = 3 + 1 + 1 + 16 + 3
+        self.geometry_projection = nn.Sequential(
+            nn.Linear(node_features + geometry_dim, node_features),
             nn.GELU(),
-            nn.Linear(node_features * 8, node_features * 8),
-            nn.GELU(),
-            nn.Linear(node_features * 8, node_features),
+            nn.Linear(node_features, node_features),
         )
-        self.mpnn_trunk = nn.Sequential(
+        self.edge_encoder = nn.Sequential(
+            nn.Linear(16 + 3 + 1, edge_features),
+            nn.GELU(),
+            nn.Linear(edge_features, edge_features),
+        )
+        self.message_mlp = nn.Sequential(
+            nn.Linear(node_features * 2 + edge_features, node_features * 2),
+            nn.GELU(),
+            nn.Linear(node_features * 2, node_features),
+        )
+        self.message_gate = nn.Linear(node_features * 2 + edge_features, node_features)
+        self.output = nn.Sequential(
+            nn.LayerNorm(node_features),
             nn.Linear(node_features, node_features * 2),
             nn.GELU(),
             nn.Linear(node_features * 2, node_features),
         )
-        print(
-            "[ProteinMPNNBackbone] Local residue-feature trunk; native ProteinMPNN "
-            "is provided by the optional adapter."
-        )
+
+    def _local_geometry(self, ca_coords: torch.Tensor) -> torch.Tensor:
+        """Encode each residue using local distance and directional geometry."""
+        length = ca_coords.shape[0]
+        if length == 1:
+            return ca_coords.new_zeros((1, 24))
+
+        pairwise = (ca_coords[:, None, :] - ca_coords[None, :, :]).norm(dim=-1)
+        pairwise = pairwise.masked_fill(torch.eye(length, device=ca_coords.device, dtype=torch.bool), float("inf"))
+        k = min(self.max_neighbors, length - 1)
+        distances, neighbors = pairwise.topk(k, dim=-1, largest=False)
+        centers = torch.linspace(0.0, 20.0, 16, device=ca_coords.device, dtype=ca_coords.dtype)
+        rbf = torch.exp(-((distances.unsqueeze(-1) - centers) ** 2) / 2.0)
+
+        per_residue: list[torch.Tensor] = []
+        for residue_index in range(length):
+            local_distances = distances[residue_index]
+            local_neighbors = neighbors[residue_index]
+            local_delta = ca_coords[local_neighbors] - ca_coords[residue_index]
+            local_directions = local_delta / local_distances.clamp_min(1e-6).unsqueeze(-1)
+            local_summary = torch.cat(
+                [
+                    ca_coords[residue_index] - ca_coords.mean(dim=0),
+                    local_distances.mean().unsqueeze(0),
+                    local_distances.std().clamp_min(1e-6).unsqueeze(0),
+                    rbf[residue_index].mean(dim=0, keepdim=True).reshape(-1),
+                    local_directions.mean(dim=0, keepdim=True).reshape(-1),
+                ],
+                dim=0,
+            )
+            per_residue.append(local_summary)
+        return torch.stack(per_residue)
+
+    def _neighbor_edges(self, ca_coords: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return neighbor indices, edge features, and edge masks for each residue."""
+        length = ca_coords.shape[0]
+        if length == 1:
+            return (
+                torch.zeros((1, 1), dtype=torch.long, device=ca_coords.device),
+                torch.zeros((1, 1, 16 + 3 + 1), device=ca_coords.device, dtype=ca_coords.dtype),
+                torch.zeros((1, 1), device=ca_coords.device, dtype=torch.bool),
+            )
+
+        pairwise = (ca_coords[:, None, :] - ca_coords[None, :, :]).norm(dim=-1)
+        pairwise = pairwise.masked_fill(torch.eye(length, device=ca_coords.device, dtype=torch.bool), float("inf"))
+        k = min(self.max_neighbors, length - 1)
+        distances, neighbors = pairwise.topk(k, dim=-1, largest=False)
+
+        edges: list[torch.Tensor] = []
+        masks: list[torch.Tensor] = []
+        for residue_index in range(length):
+            local_neighbors = neighbors[residue_index]
+            local_delta = ca_coords[local_neighbors] - ca_coords[residue_index]
+            local_distances = distances[residue_index].clamp_min(1e-6)
+            local_directions = local_delta / local_distances.unsqueeze(-1)
+            centers = torch.linspace(0.0, 20.0, 16, device=ca_coords.device, dtype=ca_coords.dtype)
+            rbf = torch.exp(-((local_distances.unsqueeze(-1) - centers) ** 2) / 2.0)
+            edge_features = torch.cat([rbf, local_directions, local_distances.unsqueeze(-1)], dim=-1)
+            edges.append(edge_features)
+            masks.append(torch.ones_like(local_distances, dtype=torch.bool))
+
+        edge_tensor = torch.stack(edges)
+        mask_tensor = torch.stack(masks)
+        return neighbors, edge_tensor, mask_tensor
 
     def forward(self, backbone_coords, node_features):
-        adapter = self.frozen_residue_adapter(node_features)
-        return self.mpnn_trunk(adapter)  # (B, L, node_features)
+        if backbone_coords.ndim != 4 or backbone_coords.shape[-2:] != (4, 3):
+            if backbone_coords.ndim != 4 or backbone_coords.shape[-2:] != (5, 3):
+                raise ValueError("backbone_coords must have shape (B, L, 4|5, 3)")
+        if node_features.ndim != 3 or node_features.shape[-1] != self.node_features:
+            raise ValueError(f"node_features must have shape (B, L, {self.node_features})")
+
+        batch_size, sequence_length, _ = node_features.shape
+        outputs = []
+        for batch_index in range(batch_size):
+            ca_coords = backbone_coords[batch_index, :, 1, :]
+            graph_geometry = self._local_geometry(ca_coords)
+            node_state = self.geometry_projection(torch.cat([node_features[batch_index], graph_geometry], dim=-1))
+
+            neighbors, edge_features, edge_mask = self._neighbor_edges(ca_coords)
+            updated: list[torch.Tensor] = []
+            for residue_index in range(sequence_length):
+                local_neighbors = neighbors[residue_index]
+                if local_neighbors.numel() == 0:
+                    updated.append(node_state[residue_index])
+                    continue
+                neighbor_features = node_state[local_neighbors]
+                local_edge = self.edge_encoder(edge_features[residue_index])
+                msg_input = torch.cat(
+                    [
+                        node_state[residue_index].unsqueeze(0).expand_as(neighbor_features),
+                        neighbor_features,
+                        local_edge,
+                    ],
+                    dim=-1,
+                )
+                gated_messages = self.message_mlp(msg_input) * torch.sigmoid(self.message_gate(msg_input))
+                message = gated_messages.mean(dim=0)
+                updated.append(self.output(node_state[residue_index] + message))
+            outputs.append(torch.stack(updated))
+        return torch.stack(outputs)  # (B, L, node_features)
