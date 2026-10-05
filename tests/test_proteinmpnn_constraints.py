@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from chimera.components import ProteinMPNNBackbone
 from chimera.proteinmpnn import SequenceDecoder, ProteinMPNN, get_protein_graph
 
 
@@ -57,3 +58,34 @@ def test_proteinmpnn_forward_shapes():
     logits = model(coords, frames, evol)
     assert logits.shape == (2, 5, 20)
     assert torch.isfinite(logits).all()
+
+
+def test_proteinmpnn_backbone_uses_geometry_to_change_features():
+    model = ProteinMPNNBackbone(node_features=16, edge_features=12)
+    evol = torch.randn(1, 6, 16)
+
+    backbone_a = torch.zeros(1, 6, 4, 3)
+    backbone_a[:, :, 1, :] = torch.tensor([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [3.0, 0.0, 0.0],
+        [4.0, 0.0, 0.0],
+        [5.0, 0.0, 0.0],
+    ])
+    for i in range(6):
+        backbone_a[:, i, 0, :] = backbone_a[:, i, 1, :] - torch.tensor([0.0, 0.0, 1.0])
+        backbone_a[:, i, 2, :] = backbone_a[:, i, 1, :] + torch.tensor([0.0, 1.0, 0.0])
+        backbone_a[:, i, 3, :] = backbone_a[:, i, 2, :] + torch.tensor([0.0, 0.0, 1.0])
+
+    backbone_b = backbone_a.clone()
+    backbone_b[:, :, 1, 1] = torch.tensor([0.0, 1.0, 0.0, 1.0, 0.0, 1.0], dtype=backbone_b.dtype).view(1, 6)
+    backbone_b[:, :, 2, 2] = torch.tensor([0.0, 0.0, 1.0, 1.0, 0.0, 2.0], dtype=backbone_b.dtype).view(1, 6)
+    backbone_b[:, :, 3, 0] = torch.tensor([0.5, 1.5, 2.5, 3.5, 4.5, 5.5], dtype=backbone_b.dtype).view(1, 6)
+
+    out_a = model(backbone_a, evol)
+    out_b = model(backbone_b, evol)
+
+    assert out_a.shape == (1, 6, 16)
+    assert out_b.shape == (1, 6, 16)
+    assert not torch.allclose(out_a, out_b, atol=1e-5)
