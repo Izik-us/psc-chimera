@@ -10,7 +10,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from ..lie import so3_log
+from chimera.lie import so3_log
 from .frames import carbonyl_angle_target, backbone_to_frames
 
 
