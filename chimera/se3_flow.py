@@ -201,9 +201,9 @@ class VelocityField(nn.Module):
 
     def __init__(
         self,
-        d_single: int = 256,
-        d_pair: int = 256,
-        n_blocks: int = 8,
+        d_single: int = 768,
+        d_pair: int = 512,
+        n_blocks: int = 28,
         n_head: Optional[int] = None,
         ipa_class=InvariantPointAttention,
     ):
