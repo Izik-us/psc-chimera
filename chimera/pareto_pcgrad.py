@@ -160,7 +160,7 @@ class ObjectiveFeatureEncoder(nn.Module):
 class MergeReadyParetoMultiObjectiveHead(nn.Module):
     """Standalone five-objective prediction head with true PCGrad support."""
 
-    def __init__(self, d_model: int = 256):
+    def __init__(self, d_model: int = 512):
         super().__init__()
         self.shared = nn.Sequential(
             nn.LayerNorm(d_model),
