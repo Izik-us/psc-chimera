@@ -15,7 +15,7 @@ import torch.nn.functional as F
 class AutoregressiveSequencePolicy(nn.Module):
     """Causal Transformer policy for amino-acid sequences."""
 
-    def __init__(self, context_dim: int, vocab_size: int = 20, layers: int = 2, heads: int = 4):
+    def __init__(self, context_dim: int, vocab_size: int = 20, layers: int = 10, heads: int = 8):
         super().__init__()
         if context_dim % heads:
             raise ValueError("context_dim must be divisible by heads")
