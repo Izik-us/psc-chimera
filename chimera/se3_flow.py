@@ -259,8 +259,8 @@ class VelocityField(nn.Module):
         R_t: torch.Tensor,  # (B, L, 3, 3) current rotations
         t_t: torch.Tensor,  # (B, L, 3)    current translations
         t_flow: torch.Tensor,  # (B,) flow time ∈ [0, 1]
-        pair_cond: torch.Tensor,  # (B, L, L, 256) pair conditioning
-        evol_single: torch.Tensor,  # (B, L, 256) evolutionary single representation
+        pair_cond: torch.Tensor,  # (B, L, L, d_pair) pair conditioning
+        evol_single: torch.Tensor,  # (B, L, d_single) projected evolutionary single representation
         R0: Optional[torch.Tensor] = None,  # (B, L, 3, 3) source backbone (bridge)
         t0: Optional[torch.Tensor] = None,  # (B, L, 3)    source translations
         substrate_coords: Optional[torch.Tensor] = None,  # (B, K, 3)
@@ -354,9 +354,9 @@ class FlowMatchingBackbone(nn.Module):
 
     def __init__(
         self,
-        d_single: int = 256,
-        d_pair: int = 256,
-        n_blocks: int = 8,
+        d_single: int = 768,
+        d_pair: int = 512,
+        n_blocks: int = 28,
         n_head: Optional[int] = None,
         diffusion: float = 0.05,
     ) -> None:
