@@ -1061,10 +1061,6 @@ class CanonicalCHIMERAv2(nn.Module):
         experimental: bool = False,
         residue_index: Optional[torch.Tensor] = None,
         residue_mask: Optional[torch.Tensor] = None,
-        fold_validator: Optional[Any] = None,
-        fold_budget: Optional[int] = None,
-        fold_n_null: int = 0,
-        fold_require_accept: bool = False,
     ) -> Dict:
         readiness = self.require_inference_ready(allow_experimental=experimental)
         if n_designs < 1 or n_pareto_samples < 1 or n_pareto_samples > n_designs:
@@ -1092,7 +1088,6 @@ class CanonicalCHIMERAv2(nn.Module):
                     raise ValueError(f"design constraints {name} must have batch size 1")
         batch_size = min(8, n_designs)
         sequences, objective_batches, proxy_batches = [], [], []
-        backbone_batches = []
         objective_feature_batches: dict[str, list[torch.Tensor]] = {}
         deterministic_assembly_batches = []
         rag_statuses = []
@@ -1119,8 +1114,6 @@ class CanonicalCHIMERAv2(nn.Module):
                 ),
             )
             sequences.append(outputs["sequence_tokens"][:, 0].detach().cpu())
-            if fold_validator is not None:
-                backbone_batches.append(outputs["backbone_coords"].detach().cpu())
             rag_statuses.append(outputs["rag_status"])
             for source, embedding in outputs["objective_feature_embeddings"].items():
                 objective_feature_batches.setdefault(source, []).append(embedding[:, 0].detach())
@@ -1210,44 +1203,10 @@ class CanonicalCHIMERAv2(nn.Module):
             selected = pareto_indices.index_select(0, frontier_order[:n_pareto_samples])
         else:
             selected = pareto_indices[:n_pareto_samples]
-        pareto_scores_out = None
-        pareto_count = int(pareto_indices.numel())
-        fold_summary = None
-        if fold_validator is not None:
-            # Opt-in: fold each designed *sequence* independently and score it against the backbone it
-            # was designed for. Replaces the sequence-independent backbone-sanity column (index 1).
-            from .validation.design_integration import fold_rerank
-
-            spans = None
-            if constraints is not None and constraints.domain_boundaries is not None:
-                spans = [(int(lo), int(hi)) for lo, hi in constraints.domain_boundaries[0].tolist()]
-            fold = fold_rerank(
-                fold_validator,
-                all_sequences,
-                torch.cat(backbone_batches)[:n_designs],
-                all_objectives,
-                pareto_fn=self.pareto_head.compute_pareto_frontier,
-                budget=fold_budget if fold_budget is not None else min(n_designs, 4 * n_pareto_samples),
-                residue_mask=residue_mask[0].cpu() if residue_mask is not None else None,
-                domain_spans=spans,
-                n_null=fold_n_null,
-                require_accept=fold_require_accept,
-            )
-            selected = fold.selected[:n_pareto_samples]
-            pareto_scores_out = fold.selected_scores[:n_pareto_samples]
-            pareto_count = fold.front_size
-            fold_summary = fold.summary()
-            ranking_source = f"fold_validated[{fold.label_kind}]+{ranking_source}"
-            objective_names = list(objective_names)
-            objective_names[1] = "fold_validated_structural_score"
         return {
             "pareto_sequences": all_sequences.index_select(0, selected),
-            "pareto_scores": (
-                pareto_scores_out if pareto_scores_out is not None
-                else all_objectives.index_select(0, selected)
-            ),
-            "fold_validation": fold_summary,
-            "pareto_count": pareto_count,
+            "pareto_scores": all_objectives.index_select(0, selected),
+            "pareto_count": int(pareto_indices.numel()),
             "all_sequences": all_sequences,
             "all_objectives": all_objectives,
             "acquisition_scores": acquisition_scores,

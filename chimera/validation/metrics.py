@@ -12,8 +12,8 @@ from dataclasses import dataclass
 
 import torch
 
-from ..folding.frames import backbone_to_frames, backbone_torsions
-from ..lie import so3_log
+from chimera.folding.frames import backbone_to_frames, backbone_torsions
+from chimera.lie import so3_log
 
 
 def _mask(mask, ref):
@@ -251,7 +251,7 @@ def frechet_mean_so3(R: torch.Tensor, iters: int = 30, tol: float = 1e-7):
     Iterates ``mu <- mu exp(mean_k log(mu^T R_k))``; converges for ensembles
     contained in a geodesic ball of radius < pi/2.
     """
-    from ..lie import so3_exp
+    from chimera.lie import so3_exp
 
     mu = R[0]
     for _ in range(iters):
