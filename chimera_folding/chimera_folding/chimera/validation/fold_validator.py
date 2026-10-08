@@ -26,11 +26,11 @@ from typing import Sequence
 
 import torch
 
-from ..errors import InputValidationError
+from chimera.errors import InputValidationError
 from ..folding.ensemble import FoldEnsemble
 from ..folding.frames import backbone_to_frames
 from ..folding.types import PAD_IDX, FoldingBackend
-from ..geometry import validate_backbone
+from chimera.geometry import validate_backbone
 from .calibration import ConfidenceCalibrator
 from .metrics import (
     contact_f1,

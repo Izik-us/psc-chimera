@@ -26,15 +26,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..errors import ConfigurationError
-from ..evoformer_stack import (
+from chimera.errors import ConfigurationError
+from chimera.evoformer_stack import (
     PairTransition,
     TriangleAttentionEndingNode,
     TriangleAttentionStartingNode,
     TriangleMultiplicationIncoming,
     TriangleMultiplicationOutgoing,
 )
-from ..se3_flow import IPABlock
+from chimera.se3_flow import IPABlock
 from .frames import frames_to_backbone, so3_exp_safe
 from .heads import ConfidenceHeads
 from .types import PAD_IDX, FoldingBackend, FoldPrediction
@@ -238,7 +238,7 @@ class CHIMERAFoldBackend(FoldingBackend):
             self.independence_class = "chimera_native_untrained"
             self.checkpoint_sha256 = None
         else:
-            from ..backends import load_frozen_native
+            from chimera.backends import load_frozen_native
 
             load_frozen_native(model, checkpoint, "chimera-fold")
             self.independence_class = "chimera_native"
