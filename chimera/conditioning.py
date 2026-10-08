@@ -11,7 +11,7 @@ import torch.nn as nn
 class SubstratePocketConditioner(nn.Module):
     """Condition pair features on substrate identity and optional coordinates."""
 
-    def __init__(self, d_pair: int = 256, d_sub: int = 128):
+    def __init__(self, d_pair: int = 512, d_sub: int = 128):
         super().__init__()
         self.substrate_emb = nn.Embedding(30, d_sub)
         self.substrate_proj = nn.Linear(d_sub, d_pair)
