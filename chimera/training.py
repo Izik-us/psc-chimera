@@ -381,6 +381,7 @@ class CanonicalTrainer:
             raise ValueError("flow training requires source and target rotations/translations")
         single, pair_cond, constraints = self._conditioning(batch)
         fixed_mask = constraints.fixed_mask if constraints is not None else None
+        flow_single = self.model.flow_evo_projection(single)
         conditioning = lambda nodes, time: self.model.evol_cross_attn(nodes, single, time)
         return self.model.flow_model.loss(
             batch.source_R,
@@ -388,7 +389,7 @@ class CanonicalTrainer:
             batch.target_R,
             batch.target_t,
             pair_cond,
-            single,
+            flow_single,
             fixed_mask=fixed_mask,
             substrate_coords=batch.substrate_coords,
             evol_conditioning_fn=conditioning,
