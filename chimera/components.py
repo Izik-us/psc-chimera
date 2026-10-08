@@ -27,11 +27,11 @@ class TriangularPairUpdateConnector(nn.Module):
     def __init__(
         self,
         evo_pair_dim: int = 128,
-        out_dim: int = 256,
+        out_dim: int = 512,
         n_heads: int = 4,
     ):
         super().__init__()
-        # Linear projection: 128→256
+        # Linear projection: 128→512
         self.input_proj = nn.Linear(evo_pair_dim, out_dim)
         self.input_norm = nn.LayerNorm(out_dim)
 
@@ -73,7 +73,7 @@ class TriangularPairUpdateConnector(nn.Module):
         self,
         pair_repr: torch.Tensor,  # (B, L, L, 128)
         retrieved_context: Optional[torch.Tensor] = None,  # (B, K, 256) from RAG
-    ) -> torch.Tensor:  # (B, L, L, 256)
+    ) -> torch.Tensor:  # (B, L, L, 512)
 
         z = self.input_norm(self.input_proj(pair_repr))  # (B, L, L, 256)
 
@@ -202,7 +202,7 @@ class EvolCrossAttentionConnector(nn.Module):
     noise schedule or to monotonically vary with flow time.
     """
 
-    def __init__(self, d_se3: int = 256, d_evo: int = 256, n_heads: int = 8):
+    def __init__(self, d_se3: int = 768, d_evo: int = 256, n_heads: int = 8):
         super().__init__()
         # Main cross-attention: SE3 queries attend to evolutionary memory
         self.cross_attn = nn.MultiheadAttention(
@@ -264,7 +264,7 @@ class NodeProjectionConnector(nn.Module):
     it does not encode residue identity or perform attention.
     """
 
-    def __init__(self, evo_dim: int = 256, mpnn_dim: int = 128):
+    def __init__(self, evo_dim: int = 256, mpnn_dim: int = 512):
         super().__init__()
         self.proj = nn.Sequential(
             nn.LayerNorm(evo_dim),
@@ -296,7 +296,7 @@ class NRPSConstraintEncoder(nn.Module):
     impose hard geometric constraints on generated structures.
     """
 
-    def __init__(self, d: int = 256, max_len: int = 2000):
+    def __init__(self, d: int = 512, max_len: int = 2000):
         super().__init__()
         # Domain type embeddings (A, T, C, TE, linker = 5 types)
         self.domain_emb = nn.Embedding(5, d)
