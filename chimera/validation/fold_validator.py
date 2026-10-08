@@ -27,9 +27,9 @@ from typing import Sequence
 import torch
 
 from chimera.errors import InputValidationError
-from ..folding.ensemble import FoldEnsemble
-from ..folding.frames import backbone_to_frames
-from ..folding.types import PAD_IDX, FoldingBackend
+from chimera.folding.ensemble import FoldEnsemble
+from chimera.folding.frames import backbone_to_frames
+from chimera.folding.types import PAD_IDX, FoldingBackend
 from chimera.geometry import validate_backbone
 from .calibration import ConfidenceCalibrator
 from .metrics import (

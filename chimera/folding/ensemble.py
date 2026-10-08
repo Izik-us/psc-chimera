@@ -7,7 +7,7 @@ from typing import Sequence
 
 import torch
 
-from ..validation.metrics import apply_rigid, frechet_mean_so3, kabsch, tm_score
+from chimera.validation.metrics import apply_rigid, frechet_mean_so3, kabsch, tm_score
 from .frames import backbone_to_frames
 from .types import FoldingBackend, FoldPrediction
 

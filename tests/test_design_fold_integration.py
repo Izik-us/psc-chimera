@@ -9,9 +9,9 @@ import pytest
 import torch
 
 from chimera import CHIMERAv2
-from folding.frames import ideal_backbone_from_torsions
-from folding.types import FoldingBackend, FoldPrediction
-from validation import FoldValidationConfig, FoldValidator
+from chimera.folding.frames import ideal_backbone_from_torsions
+from chimera.folding.types import FoldingBackend, FoldPrediction
+from chimera.validation import FoldValidationConfig, FoldValidator
 
 L = 8
 

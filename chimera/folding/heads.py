@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..validation.metrics import tm_d0
+from chimera.validation.metrics import tm_d0
 
 
 class ConfidenceHeads(nn.Module):

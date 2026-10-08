@@ -6,17 +6,17 @@ import pytest
 import torch
 
 from chimera.errors import ConfigurationError, InputValidationError
-from folding.adapters import ExternalFoldingBackend, parse_backbone_pdb
-from folding.frames import (
+from chimera.folding.adapters import ExternalFoldingBackend, parse_backbone_pdb
+from chimera.folding.frames import (
     backbone_to_frames, carbonyl_angle_target, frames_to_backbone, ideal_backbone_from_torsions, so3_exp_safe,
 )
-from folding.losses import fape, folding_loss
-from folding.model import CHIMERAFold, CHIMERAFoldBackend, FoldConfig
-from folding.types import FoldingBackend, FoldPrediction
+from chimera.folding.losses import fape, folding_loss
+from chimera.folding.model import CHIMERAFold, CHIMERAFoldBackend, FoldConfig
+from chimera.folding.types import FoldingBackend, FoldPrediction
 from chimera.geometry import validate_backbone
 from chimera.lie import so3_exp
-from validation import ConfidenceCalibrator, Decision, FoldValidator, pareto_funnel, structural_objective_labels
-from validation.metrics import (
+from chimera.validation import ConfidenceCalibrator, Decision, FoldValidator, pareto_funnel, structural_objective_labels
+from chimera.validation.metrics import (
     contact_f1, domain_arrangement, frechet_mean_so3, kabsch, lddt_ca, rmsd, tm_score, torsion_agreement,
 )
 

@@ -61,7 +61,7 @@ def distogram_loss(logits, ca_true, mask, edges):
 
 
 def realised_lddt(ca_pred, ca_true, mask, cutoff: float = 15.0):
-    from ..validation.metrics import lddt_ca
+    from chimera.validation.metrics import lddt_ca
 
     per_res, _ = lddt_ca(ca_pred, ca_true, mask, cutoff=cutoff)
     return per_res
