@@ -16,7 +16,7 @@ from typing import Sequence
 
 import torch
 
-from ..errors import ConfigurationError, InferenceError
+from chimera.errors import ConfigurationError, InferenceError
 from .frames import backbone_to_frames, frames_to_backbone
 from .types import FoldingBackend, FoldPrediction, detokenize
 
