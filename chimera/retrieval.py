@@ -31,8 +31,8 @@ class StructuralRetriever(nn.Module):
 
     def __init__(
         self,
-        d_embed: int = 256,
-        d_context: int = 256,
+        d_embed: int = 128,
+        d_context: int = 512,
         n_retrieve: int = 5,
     ):
         super().__init__()
