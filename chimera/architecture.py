@@ -73,17 +73,17 @@ class CanonicalCHIMERAv2(nn.Module):
         self,
         d_evo_single: int = 256,
         d_evo_pair: int = 128,
-        d_se3: int = 256,
-        d_pair_out: int = 256,
-        d_mpnn: int = 128,
-        n_flow_blocks: int = 8,
+        d_se3: int = 768,
+        d_pair_out: int = 512,
+        d_mpnn: int = 512,
+        n_flow_blocks: int = 28,
         n_flow_steps: int = 20,
         n_retrieve: int = 5,
         n_mpnn_seqs: int = 10,
         n_mc_dropout: int = 30,
         n_domains: int = 5,
         n_modules: int = 5,
-        evoformer_n_blocks: int = 48,
+        evoformer_n_blocks: int = 138,
         evoformer_gradient_checkpointing: bool = False,
         evoformer_attention_chunk_size: Optional[int] = 32,
         evoformer_opm_chunk_size: Optional[int] = 16,
@@ -104,10 +104,8 @@ class CanonicalCHIMERAv2(nn.Module):
             evoformer_n_blocks = int(legacy_aliases["evoformer_layers"])
         if min(d_evo_single, d_evo_pair, d_se3, d_pair_out, d_mpnn) <= 0:
             raise ValueError("model dimensions must be positive")
-        if d_evo_single != d_se3:
-            raise ValueError("d_evo_single must equal d_se3 for the configured velocity conditioning")
-        if d_se3 % 8 or d_pair_out % 4 or d_mpnn % 4:
-            raise ValueError("d_se3, d_pair_out and d_mpnn must be divisible by their attention head counts")
+        if d_se3 % 12 or d_pair_out % 4 or d_mpnn % 8:
+            raise ValueError("d_se3 must be divisible by 12 flow heads; d_pair_out by 4 pair heads; d_mpnn by 8 sequence heads")
         if min(
             n_flow_blocks, n_flow_steps, n_mpnn_seqs, n_domains, n_modules,
             evoformer_n_blocks,
@@ -142,10 +140,16 @@ class CanonicalCHIMERAv2(nn.Module):
             transition_factor=evoformer_transition_factor,
             opm_epsilon=evoformer_opm_epsilon,
         )
-        self.flow_model = FlowMatchingBackbone(d_se3, d_pair_out, n_flow_blocks)
-        self.base_mpnn = ProteinMPNNBackbone(d_mpnn)
-        self.pair_connector = TriangularPairUpdateConnector(d_evo_pair, d_pair_out)
-        self.evol_cross_attn = EvolCrossAttentionConnector(d_se3, d_evo_single)
+        self.flow_evo_projection = nn.Linear(d_evo_single, d_se3)
+        self.flow_model = FlowMatchingBackbone(d_se3, d_pair_out, n_flow_blocks, n_head=12)
+        self.base_mpnn = ProteinMPNNBackbone(
+            node_features=d_mpnn,
+            edge_features=d_mpnn,
+            max_neighbors=32,
+            n_mp_layers=8,
+        )
+        self.pair_connector = TriangularPairUpdateConnector(d_evo_pair, d_pair_out, n_heads=4)
+        self.evol_cross_attn = EvolCrossAttentionConnector(d_se3, d_evo_single, n_heads=8)
         self.node_connector = NodeProjectionConnector(d_evo_single, d_mpnn)
         self.constraint_encoder = NRPSConstraintEncoder(d=d_pair_out)
         self.structural_retriever = StructuralRetriever(
@@ -156,9 +160,9 @@ class CanonicalCHIMERAv2(nn.Module):
         self.substrate_conditioner = SubstratePocketConditioner(d_pair=d_pair_out)
         self.multi_scale_designer = MultiScaleNRPSDesigner(
             d_residue=d_mpnn,
-            d_domain=256,
-            d_module=512,
-            d_assembly=256,
+            d_domain=1024,
+            d_module=2048,
+            d_assembly=1024,
             n_domains=n_domains,
             n_modules=n_modules,
             edge_dim=28,
@@ -167,7 +171,7 @@ class CanonicalCHIMERAv2(nn.Module):
         self.pareto_head = MergeReadyParetoMultiObjectiveHead(d_model=d_mpnn)
         self.objective_evaluator = BiologicalObjectiveEvaluator()
         self._seq_to_repr = nn.Linear(20, d_mpnn)
-        self.sequence_policy = AutoregressiveSequencePolicy(d_mpnn)
+        self.sequence_policy = AutoregressiveSequencePolicy(d_mpnn, layers=10, heads=8)
         self.ret_proj = nn.Linear(30, d_pair_out)
         self.uncertainty_estimator = BayesianUncertaintyEstimator(n_samples=n_mc_dropout)
         self.dpo_trainer = DPOTrainer(beta=0.1)
@@ -800,11 +804,13 @@ class CanonicalCHIMERAv2(nn.Module):
         if torch.any((face_id < 0) | (face_id >= 20)):
             raise ValueError("icosahedral_face values must be in [0,19]")
 
+        flow_single = self.flow_evo_projection(single_repr)
+
         def evo_conditioning_fn(nodes, flow_time):
             return self.evol_cross_attn(nodes, single_repr, flow_time)
 
         R_final, t_final = self.flow_model.sample(
-            source_R, source_t, pair_cond, single_repr,
+            source_R, source_t, pair_cond, flow_single,
             n_steps=steps,
             fixed_mask=fixed_mask,
             substrate_coords=substrate_coords,
