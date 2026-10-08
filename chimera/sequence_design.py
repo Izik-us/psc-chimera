@@ -50,14 +50,14 @@ class MultiScaleNRPSDesigner(nn.Module):
 
     def __init__(
         self,
-        d_residue: int = 128,  # per-residue feature dim (ProteinMPNN node dim)
-        d_domain: int = 256,  # per-domain feature dim
-        d_module: int = 512,  # per-module feature dim
-        d_assembly: int = 256,  # assembly context dim
+        d_residue: int = 512,  # per-residue feature dim (ProteinMPNN node dim)
+        d_domain: int = 1024,  # per-domain feature dim
+        d_module: int = 2048,  # per-module feature dim
+        d_assembly: int = 1024,  # assembly context dim
         n_domains: int = 5,  # A, T, C, TE, linker
         n_modules: int = 5,  # up to 5 NRPS modules in PSC Layer 1
         vocab_size: int = 20,  # amino acid vocabulary
-        edge_dim: int = 16,
+        edge_dim: int = 28,
     ):
         super().__init__()
         self.n_domains = n_domains
