@@ -20,12 +20,12 @@ def so3_exp(omega: torch.Tensor) -> torch.Tensor:
     if omega.shape[-1] != 3:
         raise ValueError("omega must have final dimension 3")
     theta2 = (omega * omega).sum(-1, keepdim=True)
-    theta = theta2.sqrt()
+    eps = torch.finfo(omega.dtype).eps
+    theta = theta2.clamp_min(eps).sqrt()
     K = hat(omega)
     I = torch.eye(3, device=omega.device, dtype=omega.dtype)
     while I.ndim < K.ndim:
         I = I.unsqueeze(0)
-    eps = torch.finfo(omega.dtype).eps
     theta2_safe = theta2.clamp_min(eps)
     a = torch.where(
         theta2 < 1e-8,
