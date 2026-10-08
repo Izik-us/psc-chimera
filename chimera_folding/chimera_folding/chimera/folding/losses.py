@@ -10,7 +10,6 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from chimera.lie import so3_log
 from .frames import carbonyl_angle_target, backbone_to_frames
 
 
@@ -37,8 +36,18 @@ def aligned_error(R_pred, t_pred, R_true, t_true, eps: float = 1e-4):
     return ((xp - xt) ** 2).sum(-1).add(eps).sqrt()
 
 
-def so3_geodesic_loss(R_pred, R_true, mask, eps: float = 1e-6):
-    ang = so3_log(R_pred.transpose(-1, -2) @ R_true).pow(2).sum(-1).add(eps).sqrt()
+def so3_angle(Rrel, eps: float = 1e-8):
+    """Geodesic angle of a relative rotation; gradient-safe at 0 and pi (atan2 form)."""
+    tr = Rrel.diagonal(dim1=-2, dim2=-1).sum(-1)
+    v = torch.stack(
+        (Rrel[..., 2, 1] - Rrel[..., 1, 2], Rrel[..., 0, 2] - Rrel[..., 2, 0], Rrel[..., 1, 0] - Rrel[..., 0, 1]),
+        dim=-1,
+    )
+    return torch.atan2(0.5 * (v.pow(2).sum(-1) + eps).sqrt(), 0.5 * (tr - 1.0))
+
+
+def so3_geodesic_loss(R_pred, R_true, mask):
+    ang = so3_angle(R_pred.transpose(-1, -2) @ R_true)
     m = mask.to(ang.dtype)
     return (ang * m).sum(-1) / m.sum(-1).clamp_min(1)
 

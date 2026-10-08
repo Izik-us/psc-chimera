@@ -76,6 +76,27 @@ def carbonyl_angle_target(coords: torch.Tensor) -> torch.Tensor:
     return torch.stack((torch.sin(ang), torch.cos(ang)), dim=-1)
 
 
+def so3_exp_safe(w: torch.Tensor) -> torch.Tensor:
+    """Rodrigues exponential with finite gradients at w = 0 (Taylor branch for tiny angles)."""
+    th2 = (w * w).sum(-1, keepdim=True)
+    small = th2 < 1e-8
+    th2s = torch.where(small, torch.ones_like(th2), th2)
+    th = th2s.sqrt()
+    a = torch.where(small, 1.0 - th2 / 6.0, torch.sin(th) / th)
+    b = torch.where(small, 0.5 - th2 / 24.0, (1.0 - torch.cos(th)) / th2s)
+    zero = torch.zeros_like(w[..., 0])
+    K = torch.stack(
+        (
+            torch.stack((zero, -w[..., 2], w[..., 1]), -1),
+            torch.stack((w[..., 2], zero, -w[..., 0]), -1),
+            torch.stack((-w[..., 1], w[..., 0], zero), -1),
+        ),
+        -2,
+    )
+    I = torch.eye(3, dtype=w.dtype, device=w.device).expand_as(K)
+    return I + a.unsqueeze(-1) * K + b.unsqueeze(-1) * (K @ K)
+
+
 def _nerf(a, b, c, length, angle, torsion):
     bc = F.normalize(c - b, dim=-1)
     nrm = F.normalize(torch.cross(b - a, bc, dim=-1), dim=-1)
@@ -143,4 +164,5 @@ __all__ = [
     "ideal_backbone_from_torsions",
     "backbone_torsions",
     "carbonyl_angle_target",
+    "so3_exp_safe",
 ]
