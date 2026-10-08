@@ -350,7 +350,7 @@ class MSARepresentationBackbone(EvoFormerStack):
         self,
         d_single: int = 256,
         d_pair: int = 128,
-        n_blocks: int = 48,
+        n_blocks: int = 138,
         **configuration,
     ):
         super().__init__(
@@ -396,8 +396,8 @@ class ProteinMPNNBackbone(nn.Module):
     CHIMERA sequence-design stack.
     """
 
-    def __init__(self, node_features: int = 128, edge_features: int = 128,
-                 max_neighbors: int = 32, n_mp_layers: int = 3):
+    def __init__(self, node_features: int = 512, edge_features: int = 512,
+                 max_neighbors: int = 32, n_mp_layers: int = 8):
         super().__init__()
         if node_features < 1 or edge_features < 1:
             raise ValueError("node_features and edge_features must be positive")
