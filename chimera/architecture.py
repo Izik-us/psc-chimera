@@ -78,6 +78,7 @@ class CanonicalCHIMERAv2(nn.Module):
         d_mpnn: int = 512,
         n_flow_blocks: int = 28,
         n_flow_steps: int = 20,
+        n_flow_heads: Optional[int] = None,
         n_retrieve: int = 5,
         n_mpnn_seqs: int = 10,
         n_mc_dropout: int = 30,
@@ -104,8 +105,10 @@ class CanonicalCHIMERAv2(nn.Module):
             evoformer_n_blocks = int(legacy_aliases["evoformer_layers"])
         if min(d_evo_single, d_evo_pair, d_se3, d_pair_out, d_mpnn) <= 0:
             raise ValueError("model dimensions must be positive")
-        if d_se3 % 12 or d_pair_out % 4 or d_mpnn % 8:
-            raise ValueError("d_se3 must be divisible by 12 flow heads; d_pair_out by 4 pair heads; d_mpnn by 8 sequence heads")
+        if d_pair_out % 4 or d_mpnn % 8:
+            raise ValueError("d_pair_out must be divisible by 4 pair heads; d_mpnn by 8 sequence heads")
+        if n_flow_heads is not None and (n_flow_heads <= 0 or d_se3 % n_flow_heads):
+            raise ValueError("n_flow_heads must be positive and divide d_se3")
         if min(
             n_flow_blocks, n_flow_steps, n_mpnn_seqs, n_domains, n_modules,
             evoformer_n_blocks,
@@ -141,7 +144,10 @@ class CanonicalCHIMERAv2(nn.Module):
             opm_epsilon=evoformer_opm_epsilon,
         )
         self.flow_evo_projection = nn.Linear(d_evo_single, d_se3)
-        self.flow_model = FlowMatchingBackbone(d_se3, d_pair_out, n_flow_blocks, n_head=12)
+        resolved_flow_heads = 12 if n_flow_heads is None and d_se3 == 768 else n_flow_heads
+        self.flow_model = FlowMatchingBackbone(
+            d_se3, d_pair_out, n_flow_blocks, n_head=resolved_flow_heads
+        )
         self.base_mpnn = ProteinMPNNBackbone(
             node_features=d_mpnn,
             edge_features=d_mpnn,
