@@ -148,6 +148,16 @@ class MultiScaleNRPSDesigner(nn.Module):
             raise ValueError("edge_index must have shape (B,L,K)")
         if edge_feats.shape[:3] != edge_index.shape:
             raise ValueError("edge_feats dimensions must match edge_index")
+        expected_edge_dim = self.edge_proj.in_features
+        if edge_feats.shape[-1] == 16 and expected_edge_dim == 28:
+            # Legacy checkpoints supplied 16-D geometric edges. Preserve those
+            # features and zero-fill the 12 geometry channels added in v2.
+            edge_feats = torch.nn.functional.pad(edge_feats, (0, 12))
+        elif edge_feats.shape[-1] != expected_edge_dim:
+            raise ValueError(
+                f"edge_feats last dimension must be {expected_edge_dim}"
+                + (" (or legacy 16-D)" if expected_edge_dim == 28 else "")
+            )
         if torch.any((edge_index < 0) | (edge_index >= L)):
             raise ValueError("edge_index contains residue indices outside the sequence")
         if edge_mask is None:
