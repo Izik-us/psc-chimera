@@ -1347,6 +1347,72 @@ class CanonicalCHIMERAv2(nn.Module):
                         UserWarning,
                         stacklevel=2,
                     )
+                # The canonical model intentionally widened the domain/module/
+                # assembly hierarchy. Migrate overlapping parameter regions
+                # while retaining fresh initialization in newly added channels.
+                target_state = getattr(self, module_name).state_dict()
+                widened_keys = []
+                for key, source in tuple(values.items()):
+                    target = target_state.get(key)
+                    if not torch.is_tensor(source) or not torch.is_tensor(target):
+                        continue
+                    if source.shape == target.shape:
+                        continue
+                    if source.ndim != target.ndim or any(
+                        old_size > new_size
+                        for old_size, new_size in zip(source.shape, target.shape)
+                    ):
+                        raise ValueError(
+                            f"cannot safely widen legacy designer tensor {key!r}: "
+                            f"{tuple(source.shape)} -> {tuple(target.shape)}"
+                        )
+                    migrated = target.detach().cpu().clone()
+                    source_cpu = source.detach().cpu()
+                    if (
+                        key.endswith("in_proj_weight")
+                        and source.ndim == 2
+                        and target.ndim == 2
+                        and source.shape[0] == 3 * source.shape[1]
+                        and target.shape[0] == 3 * target.shape[1]
+                    ):
+                        old_width, new_width = source.shape[1], target.shape[1]
+                        for projection in range(3):
+                            migrated[
+                                projection * new_width:projection * new_width + old_width,
+                                :old_width,
+                            ] = source_cpu[
+                                projection * old_width:(projection + 1) * old_width,
+                                :old_width,
+                            ]
+                    elif (
+                        key.endswith("in_proj_bias")
+                        and source.ndim == 1
+                        and target.ndim == 1
+                        and source.shape[0] % 3 == 0
+                        and target.shape[0] % 3 == 0
+                    ):
+                        old_width, new_width = source.shape[0] // 3, target.shape[0] // 3
+                        for projection in range(3):
+                            migrated[
+                                projection * new_width:projection * new_width + old_width
+                            ] = source_cpu[
+                                projection * old_width:(projection + 1) * old_width
+                            ]
+                    else:
+                        overlap = tuple(slice(0, size) for size in source.shape)
+                        migrated[overlap] = source_cpu
+                    values[key] = migrated
+                    widened_keys.append(key)
+                if widened_keys:
+                    self.component_status[module_name]["migration_status"] = (
+                        "widened legacy designer tensors: " + ", ".join(widened_keys)
+                    )
+                    warnings.warn(
+                        "Migrated legacy hierarchical designer tensors into widened canonical "
+                        "dimensions; newly introduced channels retain current initialization.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
             if module_name == "pareto_head":
                 values, migration_status = self._migrate_pareto_state_dict(
                     values,
