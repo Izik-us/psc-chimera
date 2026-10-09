@@ -207,10 +207,23 @@ class MultiScaleNRPSDesigner(nn.Module):
             raise ValueError("edge_index must contain integer residue indices")
         if torch.any((edge_index < 0) | (edge_index >= L)):
             raise ValueError("edge_index contains residue indices outside the sequence")
-        if domain_boundaries.shape != (B, self.n_domains, 2):
-            raise ValueError("domain_boundaries must have shape (B,n_domains,2)")
-        if module_boundaries.shape != (B, self.n_modules, 2):
-            raise ValueError("module_boundaries must have shape (B,n_modules,2)")
+        if (
+            domain_boundaries.ndim != 3
+            or domain_boundaries.shape[0] != B
+            or domain_boundaries.shape[-1] != 2
+            or domain_boundaries.shape[1] < self.n_domains
+        ):
+            raise ValueError("domain_boundaries must contain at least n_domains spans")
+        if (
+            module_boundaries.ndim != 3
+            or module_boundaries.shape[0] != B
+            or module_boundaries.shape[-1] != 2
+            or module_boundaries.shape[1] < self.n_modules
+        ):
+            raise ValueError("module_boundaries must contain at least n_modules spans")
+        # Existing callers may pad boundary tensors to a common maximum count.
+        domain_boundaries = domain_boundaries[:, : self.n_domains]
+        module_boundaries = module_boundaries[:, : self.n_modules]
         if icosahedral_face.shape != (B,):
             raise ValueError("icosahedral_face must have shape (B,)")
         if torch.any((icosahedral_face < 0) | (icosahedral_face >= self.face_encoding.num_embeddings)):
@@ -308,14 +321,12 @@ class MultiScaleNRPSDesigner(nn.Module):
         # domain/module span overlap rather than a global context broadcast.
         module_repr = module_repr + torch.tanh(self.assembly_gate) * self.td_assembly_to_module(assembly_repr)
         module_repr = module_repr * module_valid.unsqueeze(-1).to(module_repr.dtype)
-        domain_starts = domain_boundaries[..., 0].to(device=device, dtype=torch.long).clamp(0, L)
-        domain_ends = domain_boundaries[..., 1].to(device=device, dtype=torch.long).clamp(0, L)
-        module_starts = module_boundaries[..., 0].to(device=device, dtype=torch.long).clamp(0, L)
-        module_ends = module_boundaries[..., 1].to(device=device, dtype=torch.long).clamp(0, L)
-        overlap = (
-            torch.minimum(domain_ends.unsqueeze(-1), module_ends.unsqueeze(1))
-            - torch.maximum(domain_starts.unsqueeze(-1), module_starts.unsqueeze(1))
-        ).clamp_min(0).to(module_repr.dtype)
+        # Count only unmasked residues shared by each domain/module pair.
+        overlap = torch.einsum(
+            "bdl,bml->bdm",
+            domain_membership.to(module_repr.dtype),
+            module_membership.to(module_repr.dtype),
+        )
         overlap = overlap * module_valid.unsqueeze(1).to(overlap.dtype)
         mapped_modules = self.td_module_to_domain(module_repr)
         domain_module_context = torch.einsum("bdm,bmf->bdf", overlap, mapped_modules)
