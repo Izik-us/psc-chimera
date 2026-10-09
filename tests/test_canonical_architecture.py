@@ -366,6 +366,7 @@ def test_compatible_component_checkpoint_is_loaded_but_not_assumed_trained(tmp_p
         evoformer_ckpt=str(checkpoint),
         d_evo_single=32,
         d_evo_pair=16,
+        evoformer_n_blocks=48,
         d_se3=32,
         d_pair_out=32,
         d_mpnn=16,
