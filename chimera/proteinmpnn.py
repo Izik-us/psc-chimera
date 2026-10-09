@@ -70,6 +70,12 @@ class NodeMPNN(nn.Module):
 
     def __init__(self, c_node: int = 128, c_edge: int = 128):
         super().__init__()
+        if c_node < 1 or c_edge < 1:
+            raise ValueError("node and edge feature widths must be positive")
+        self.attention_heads = min(8, c_node)
+        while c_node % self.attention_heads:
+            self.attention_heads -= 1
+        self.head_dim = c_node // self.attention_heads
         self.norm = nn.LayerNorm(c_node)
         self.msg = nn.Sequential(
             nn.Linear(c_node * 2 + c_edge, c_node * 2),
@@ -99,11 +105,23 @@ class NodeMPNN(nn.Module):
         message = self.msg(msg_input) * torch.sigmoid(self.gate(msg_input))
 
         valid = edge_mask.to(torch.bool)
-        scores = (message * node_i).sum(dim=-1) * (node.shape[-1] ** -0.5)
-        scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
-        weights = torch.softmax(scores, dim=-1) * valid.to(scores.dtype)
+        # Each feature head has its own edge-conditioned neighborhood
+        # distribution. Existing message/gate projections are reused, so old
+        # checkpoints load strictly with their original parameter schema.
+        message_heads = message.reshape(
+            B, L, K, self.attention_heads, self.head_dim
+        )
+        query_heads = node_i.reshape(
+            B, L, K, self.attention_heads, self.head_dim
+        )
+        scores = (message_heads * query_heads).sum(dim=-1) * (self.head_dim ** -0.5)
+        scores = scores.permute(0, 1, 3, 2)
+        head_valid = valid.unsqueeze(2)
+        scores = scores.masked_fill(~head_valid, torch.finfo(scores.dtype).min)
+        weights = torch.softmax(scores, dim=-1) * head_valid.to(scores.dtype)
         weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-        aggregate = (message * weights.unsqueeze(-1)).sum(dim=2)
+        weights = weights.permute(0, 1, 3, 2).unsqueeze(-1)
+        aggregate = (message_heads * weights).sum(dim=2).reshape(B, L, node.shape[-1])
 
         updated = node + aggregate
         return updated + self.ff(updated)
