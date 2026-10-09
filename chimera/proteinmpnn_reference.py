@@ -168,6 +168,8 @@ class ProteinMPNNReference(nn.Module):
             backbone_coords, sequence, residue_mask, design_mask, residue_idx, chain_encoding
         )
         batch, length = S.shape
+        if self.ca_only:
+            X = X[:, :, 1, :]
         if randn is None:
             randn = torch.randn((batch, length), device=X.device, dtype=X.dtype)
         elif randn.shape != (batch, length):
@@ -212,6 +214,8 @@ class ProteinMPNNReference(nn.Module):
             backbone_coords, sequence, residue_mask, design_mask, residue_idx, chain_encoding
         )
         batch, length = S.shape
+        if self.ca_only:
+            X = X[:, :, 1, :]
         if randn is None:
             randn = torch.randn((batch, length), device=X.device, dtype=X.dtype)
         elif randn.shape != (batch, length):
