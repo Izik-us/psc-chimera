@@ -493,7 +493,7 @@ Raw FP32 parameter storage is about 2.86 GiB. This excludes gradients, optimizer
 
 The earlier 749,197,845 value was a planning estimate, not the actual instantiated count. The authoritative count for this source revision is 767,740,533. The audited default is therefore a roughly 768M-parameter architecture, not exactly 750M. The count does not include the separate CHIMERAFold model, optional external ESM/ProteinMPNN models, external folding backends, or the standalone CodonOptimizer.
 
-The audit's sequence-policy update is a **synthetic one-step training smoke test**: it checks finite teacher-forced loss, finite gradients, and an actual optimizer parameter update. It does not establish a multi-epoch training run on biological data, a trained full-system checkpoint, or scientific performance. The final CI run should be consulted for the completion status of that smoke test.
+The audit's sequence-policy update is a **synthetic one-step training smoke test**: it checks finite teacher-forced loss, finite gradients, and an actual optimizer parameter update. The audit step completed successfully in [GitHub Actions run 37943369035](https://github.com/Izik-us/psc-chimera/actions/runs/37943369035). This confirms that the instantiated full-size model's sequence-policy training path performed an optimizer update. It does not establish a multi-epoch run on biological data, a trained full-system checkpoint, or scientific performance.
 
 ---
 
