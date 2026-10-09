@@ -64,14 +64,15 @@ flowchart TD
     B --> F["NodeProjectionConnector\n256 -> 512 residue features"]
 
     G["NRPSConstraints\nfixed residues / Stachelhaus sites\ndomain & module boundaries\nicosahedral face / PPT serine"] --> H["NRPSConstraintEncoder"]
-    H --> C
 
     I["Target substrate ID\noptional substrate coordinates/types"] --> J["SubstratePocketConditioner"]
     C --> J
 
     K["Optional structural retrieval index"] -. "currently unavailable unless aligned evidence exists" .-> C
 
-    J --> L["SE3SchrodingerBridge + FlowMatchingBackbone\n28-block IPA velocity model\n768 single / 512 pair\nSinkhorn endpoint coupling for training\nEuler-Maruyama sampling for inference"]
+    H --> J2["Add constraint encoding to pair diagonal\nwhen NRPS constraints are supplied"]
+    J --> J2
+    J2 --> L["SE3SchrodingerBridge + FlowMatchingBackbone\n28-block IPA velocity model\n768 single / 512 pair\nSinkhorn endpoint coupling for training\nEuler-Maruyama sampling for inference"]
     D --> L
     E --> L
     A --> L
