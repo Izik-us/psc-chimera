@@ -35,7 +35,7 @@ Caller-prepared MSA tokens (B,N_seq,L)
        M ∈ R[B,N_seq,L,C_m]         Z ∈ R[B,L,L,C_z]
              │                            │
        ┌─────┴────────────────────────────┴─────────────────────┐
-       │                  48 EvoFormer blocks                    │
+       │                 138 EvoFormer blocks                    │
        │                                                        │
        │  MSA row attention + learned pair bias ────────────┐   │
        │  MSA column attention                              │   │
