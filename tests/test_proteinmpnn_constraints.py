@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from chimera.components import ProteinMPNNBackbone
-from chimera.proteinmpnn import SequenceDecoder, ProteinMPNN, get_protein_graph
+from chimera.proteinmpnn import NodeMPNN, SequenceDecoder, ProteinMPNN, get_protein_graph
 
 
 def test_fixed_positions_are_hard_constrained():
@@ -119,3 +119,19 @@ def test_proteinmpnn_backbone_mask_blocks_invalid_residues():
         out_b = model(coords, evol_b, residue_mask=residue_mask)
     assert torch.allclose(out_a[:, :4], out_b[:, :4], atol=1e-5, rtol=1e-5)
     assert torch.equal(out_a[:, 4:], torch.zeros_like(out_a[:, 4:]))
+
+
+def test_node_mpnn_headwise_attention_handles_empty_neighborhoods_and_gradients():
+    torch.manual_seed(31)
+    model = NodeMPNN(c_node=16, c_edge=12)
+    node = torch.randn(2, 5, 16, requires_grad=True)
+    edge = torch.randn(2, 5, 3, 12, requires_grad=True)
+    neighbor_index = torch.zeros(2, 5, 3, dtype=torch.long)
+    edge_mask = torch.zeros(2, 5, 3, dtype=torch.bool)
+
+    output = model(node, edge, neighbor_index, edge_mask)
+    assert output.shape == node.shape
+    assert torch.isfinite(output).all()
+    output.square().mean().backward()
+    assert node.grad is not None and torch.isfinite(node.grad).all()
+    assert edge.grad is not None and torch.isfinite(edge.grad).all()
