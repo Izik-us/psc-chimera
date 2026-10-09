@@ -24,7 +24,9 @@ def test_multiscale_designer_handles_empty_spans_padding_and_gradients():
     domain_boundaries = torch.tensor(
         [[[0, 2], [2, 2], [4, 8]], [[0, 3], [3, 5], [5, 8]]]
     )
-    module_boundaries = torch.tensor([[[0, 4], [4, 8]], [[0, 0], [0, 8]]])
+    module_boundaries = torch.tensor(
+        [[[0, 4], [4, 8], [0, 0]], [[0, 0], [0, 8], [0, 0]]]
+    )
     residue_mask = torch.tensor(
         [[True, True, True, True, True, True, False, False],
          [True, True, True, True, True, True, True, True]]
