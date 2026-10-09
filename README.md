@@ -86,8 +86,7 @@ retrieval is isolated in `retrieval.py`. `multi_objective.py` is only a
 compatibility import shim; its historical implementations are isolated in
 `legacy_optimization.py` and are not imported by canonical architecture code.
 
-The default canonical constructor uses 138 EvoFormer blocks. The EvoFormer computation, masks, configuration, and training objective are
-documented in [docs/EVOFORMER_REPRESENTATION.md](./docs/EVOFORMER_REPRESENTATION.md).
+The default canonical constructor uses 138 EvoFormer blocks. The EvoFormer computation, masks, configuration, and training objective are documented in [docs/EVOFORMER_REPRESENTATION.md](./docs/EVOFORMER_REPRESENTATION.md). The full source-grounded blueprint, including the complete design graph, staged training, inference, CHIMERAFold, data plane, checkpoints, and readiness boundaries, is in [docs/CHIMERA_FULL_ARCHITECTURE_BLUEPRINT.md](./docs/CHIMERA_FULL_ARCHITECTURE_BLUEPRINT.md).
 
 ### Scientific status of the transport model
 
