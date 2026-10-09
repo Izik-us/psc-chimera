@@ -48,11 +48,18 @@ class AutoregressiveSequencePolicy(nn.Module):
             raise ValueError("context must have shape (B,L,D) or (B,D) matching tokens")
         return context
 
-    @staticmethod
-    def _pair_bias(projected_context: torch.Tensor) -> torch.Tensor:
-        """Normalized residue-context compatibility, used as a gentle logit bias."""
-        normalized = F.normalize(projected_context, p=2, dim=-1, eps=1e-6)
-        return 0.25 * torch.matmul(normalized, normalized.transpose(-1, -2))
+    def _pair_bias(self, projected_context: torch.Tensor) -> torch.Tensor:
+        """Head-specific residue compatibility bias, shaped (B,H,L,L).
+
+        Context channels are partitioned by attention head, so each head can
+        learn a different compatibility geometry without adding checkpoint
+        parameters. The bounded cosine bias perturbs, rather than replaces,
+        the query-key attention scores.
+        """
+        batch, length, _ = projected_context.shape
+        split = projected_context.reshape(batch, length, self.heads, self.head_dim)
+        split = F.normalize(split, p=2, dim=-1, eps=1e-6)
+        return 0.25 * torch.einsum("bihd,bjhd->bhij", split, split)
 
     def _run_full_layer(
         self,
@@ -78,7 +85,7 @@ class AutoregressiveSequencePolicy(nn.Module):
             ),
             float("-inf"),
         )
-        attention_bias = pair_bias.unsqueeze(1) + causal.view(1, 1, length, length)
+        attention_bias = pair_bias + causal.view(1, 1, length, length)
         attended = F.scaled_dot_product_attention(
             query,
             key,
@@ -102,6 +109,8 @@ class AutoregressiveSequencePolicy(nn.Module):
         if torch.any((tokens < 0) | (tokens >= self.vocab_size)):
             raise ValueError("tokens contain amino-acid IDs outside the policy vocabulary")
         context = self._expand_context(context, length)
+        if context.shape[0] != batch:
+            raise ValueError("context and tokens must have the same batch size")
         projected_context = self.context(context)
         decoder_input = torch.cat(
             [torch.full_like(tokens[:, :1], self.vocab_size), tokens[:, :-1]], dim=1
@@ -138,13 +147,17 @@ class AutoregressiveSequencePolicy(nn.Module):
         batch = projected_context.shape[0]
         context_at_position = projected_context[:, position : position + 1]
         hidden = context_at_position + self.token_embedding(previous_token.reshape(batch, 1))
-        context_query = F.normalize(context_at_position, p=2, dim=-1, eps=1e-6)
-        context_keys = F.normalize(
-            projected_context[:, : position + 1], p=2, dim=-1, eps=1e-6
+        context_query = context_at_position.reshape(
+            batch, 1, self.heads, self.head_dim
         )
-        pair_bias = 0.25 * torch.matmul(
-            context_query, context_keys.transpose(-1, -2)
-        ).unsqueeze(1)
+        context_query = F.normalize(context_query, p=2, dim=-1, eps=1e-6)
+        context_keys = projected_context[:, : position + 1].reshape(
+            batch, position + 1, self.heads, self.head_dim
+        )
+        context_keys = F.normalize(context_keys, p=2, dim=-1, eps=1e-6)
+        pair_bias = 0.25 * torch.einsum(
+            "bqhd,bkhd->bhqk", context_query, context_keys
+        )
         updated_caches = []
 
         for layer, cache in zip(self.decoder.layers, caches):

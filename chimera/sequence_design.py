@@ -253,16 +253,38 @@ class MultiScaleNRPSDesigner(nn.Module):
         edge_emb = self.edge_proj(edge_feats) + self.edge_type_embedding(edge_types)
         neighbor_index = edge_index.unsqueeze(-1).expand(-1, -1, -1, D)
 
+        # Partition channels into up to eight heads. Each head learns a
+        # distinct compatibility surface from its own feature subspace while
+        # keeping the existing parameter schema intact.
+        attention_heads = min(8, D)
+        while D % attention_heads:
+            attention_heads -= 1
+        head_dim = D // attention_heads
+
         for mpnn_layer in self.residue_mpnn:
             neighbors = s.unsqueeze(1).expand(-1, L, -1, -1).gather(2, neighbor_index)
             neighbor_messages = neighbors + edge_emb
             neighbor_valid = residue_mask.unsqueeze(1).expand(-1, L, -1).gather(2, edge_index)
             valid_edges = edge_mask & residue_mask.unsqueeze(-1) & neighbor_valid
-            scores = F.cosine_similarity(s.unsqueeze(2), neighbor_messages, dim=-1) * 4.0
-            scores = scores.masked_fill(~valid_edges, torch.finfo(scores.dtype).min)
-            weights = torch.softmax(scores, dim=-1) * valid_edges.to(scores.dtype)
+
+            query_heads = F.normalize(
+                s.reshape(B, L, attention_heads, head_dim), p=2, dim=-1, eps=1e-6
+            )
+            message_heads = F.normalize(
+                neighbor_messages.reshape(B, L, edge_index.shape[-1], attention_heads, head_dim),
+                p=2, dim=-1, eps=1e-6,
+            )
+            scores = torch.einsum("blhd,blkhd->blhk", query_heads, message_heads) * 4.0
+            head_valid = valid_edges.unsqueeze(2)
+            scores = scores.masked_fill(~head_valid, torch.finfo(scores.dtype).min)
+            weights = torch.softmax(scores, dim=-1) * head_valid.to(scores.dtype)
             weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-            aggregate = (neighbor_messages * weights.unsqueeze(-1)).sum(dim=2)
+            message_values = neighbor_messages.reshape(
+                B, L, edge_index.shape[-1], attention_heads, head_dim
+            )
+            aggregate = torch.einsum(
+                "blhk,blkhd->blhd", weights, message_values
+            ).reshape(B, L, D)
             s = s + mpnn_layer(torch.cat([s, aggregate], dim=-1))
             s = s * residue_mask.unsqueeze(-1).to(s.dtype)
 
@@ -278,10 +300,28 @@ class MultiScaleNRPSDesigner(nn.Module):
         domain_repr = domain_repr + torch.tanh(self.domain_gate) * self.domain_ffn(domain_ctx)
         domain_repr = domain_repr * domain_valid.unsqueeze(-1).to(domain_repr.dtype)
 
-        # Module scale: learned interface states are gated by pairwise
-        # compatibility between adjacent module representations.
+        # Bottom-up domain -> module transfer. Pool attended domain states by
+        # their actual residue-span overlap with each module, rather than
+        # bypassing the domain scale with a second residue-only mean pool.
+        overlap = torch.einsum(
+            "bdl,bml->bdm",
+            domain_membership.to(s.dtype),
+            module_membership.to(s.dtype),
+        )
+        overlap_sum = overlap.sum(dim=1)  # (B,M), overlap mass per module
+        domain_to_module_weights = overlap / overlap_sum.unsqueeze(1).clamp_min(1.0)
+        module_from_domains = torch.einsum(
+            "bdm,bdf->bmf", domain_to_module_weights, domain_repr
+        )
         module_means, module_valid = self._masked_segment_pool(s, module_membership)
-        module_repr = self.module_pool(self.domain_pool(module_means))
+        module_from_residues = self.domain_pool(module_means)
+        has_domain_context = (overlap_sum > 0).unsqueeze(-1)
+        module_inputs = torch.where(
+            has_domain_context,
+            0.5 * (module_from_residues + module_from_domains),
+            module_from_residues,
+        )
+        module_repr = self.module_pool(module_inputs)
         module_repr = module_repr * module_valid.unsqueeze(-1).to(module_repr.dtype)
         safe_module_mask = self._safe_attention_mask(module_valid)
         module_ctx, _ = self.module_attn(
@@ -322,11 +362,7 @@ class MultiScaleNRPSDesigner(nn.Module):
         module_repr = module_repr + torch.tanh(self.assembly_gate) * self.td_assembly_to_module(assembly_repr)
         module_repr = module_repr * module_valid.unsqueeze(-1).to(module_repr.dtype)
         # Count only unmasked residues shared by each domain/module pair.
-        overlap = torch.einsum(
-            "bdl,bml->bdm",
-            domain_membership.to(module_repr.dtype),
-            module_membership.to(module_repr.dtype),
-        )
+        overlap = overlap.to(module_repr.dtype)
         overlap = overlap * module_valid.unsqueeze(1).to(overlap.dtype)
         mapped_modules = self.td_module_to_domain(module_repr)
         domain_module_context = torch.einsum("bdm,bmf->bdf", overlap, mapped_modules)
