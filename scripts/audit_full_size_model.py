@@ -1,23 +1,29 @@
 """Full-size canonical CHIMERA parameter audit and staged-training smoke test.
 
-This deliberately instantiates CanonicalCHIMERAv2 with production defaults.
-It verifies the complete parameter count, then performs one teacher-forced
-sequence-policy optimizer update while retaining the full-size model instance.
-The synthetic batch is only a runtime/training-contract smoke test, not model
-training on biological data or evidence of scientific readiness.
+This deliberately instantiates CanonicalCHIMERAv2 with production defaults,
+then runs one real CanonicalTrainer sequence-regime step on a tiny synthetic
+batch. It verifies full-size model construction, finite loss/gradients, the
+trainer's component gradient contract, and an optimizer update. It is a
+runtime/training-contract smoke test, not biological model training.
 """
 from __future__ import annotations
 
-import math
 import torch
 
 from chimera.architecture import CanonicalCHIMERAv2
+from chimera.training import (
+    CanonicalTrainer,
+    CanonicalTrainingBatch,
+    TrainingRegime,
+    configure_trainable_components,
+)
 
 
-EXPECTED_PARAMETERS = 749_197_845
+EXPECTED_PARAMETERS = 749_197_845  # historical planning estimate, not an assertion
 AA_VOCAB_SIZE = 20
 BATCH_SIZE = 1
-SEQUENCE_LENGTH = 4
+MSA_DEPTH = 2
+SEQUENCE_LENGTH = 5
 
 
 def main() -> None:
@@ -35,7 +41,7 @@ def main() -> None:
         parameter.numel() for parameter in model.parameters() if parameter.requires_grad
     )
     print(f"total_parameters={total_parameters:,}")
-    print(f"target_parameters={EXPECTED_PARAMETERS:,}")
+    print(f"planned_reference_parameters={EXPECTED_PARAMETERS:,}")
     print(f"initial_trainable_parameters={trainable_initial:,}")
     print(f"fp32_parameter_storage_GiB={total_parameters * 4 / (1024**3):.3f}")
     print("top_level_parameter_breakdown:")
@@ -49,55 +55,83 @@ def main() -> None:
     print(f"parameter_delta_vs_planned_reference={delta:+,} ({relative_delta:+.3f}%)")
     print("note=the reference count is a planning estimate; the instantiated source count is authoritative")
 
-    # The production trainer is staged. Exercise its real teacher-forced
-    # sequence-policy loss on the full-size model instance with a tiny synthetic
-    # batch, so the smoke test is bounded and does not pretend to train biology.
-    for parameter in model.parameters():
-        parameter.requires_grad_(False)
-        parameter.grad = None
-    for parameter in model.sequence_policy.parameters():
-        parameter.requires_grad_(True)
-
-    optimizer = torch.optim.AdamW(model.sequence_policy.parameters(), lr=1e-4)
-    context = torch.randn(BATCH_SIZE, SEQUENCE_LENGTH, model.d_mpnn)
-    targets = torch.randint(0, AA_VOCAB_SIZE, (BATCH_SIZE, SEQUENCE_LENGTH))
-    before = next(model.sequence_policy.parameters()).detach().clone()
-
-    optimizer.zero_grad(set_to_none=True)
-    loss = model.sequence_policy_loss(context, targets)
-    if loss.ndim != 0 or not torch.isfinite(loss):
-        raise AssertionError(f"training loss is not a finite scalar: {loss}")
-    loss.backward()
-
-    gradients = [
-        parameter.grad
-        for parameter in model.sequence_policy.parameters()
-        if parameter.grad is not None
+    # Use the actual staged trainer and its sequence loss/gradient contract.
+    # SGD avoids allocating Adam moment buffers for hundreds of millions of
+    # trainable parameters while still proving an optimizer update occurred.
+    selected = configure_trainable_components(model, TrainingRegime.SEQUENCE)
+    selected_parameters = [
+        parameter for parameter in model.parameters() if parameter.requires_grad
     ]
-    if not gradients:
-        raise AssertionError("sequence-policy training produced no gradients")
-    if not all(torch.isfinite(gradient).all() for gradient in gradients):
-        raise AssertionError("sequence-policy training produced non-finite gradients")
-    grad_norm = torch.sqrt(sum(gradient.detach().float().square().sum() for gradient in gradients))
-    optimizer.step()
-    after = next(model.sequence_policy.parameters()).detach()
+    trainable_count = sum(parameter.numel() for parameter in selected_parameters)
+    optimizer = torch.optim.SGD(selected_parameters, lr=1e-5)
+    trainer = CanonicalTrainer(
+        model,
+        TrainingRegime.SEQUENCE,
+        optimizer=optimizer,
+        dataset_manifest={
+            "dataset_version": "synthetic-training-smoke-v1",
+            "synthetic_only": True,
+            "purpose": "training-contract verification, not biological supervision",
+        },
+        random_seed=20261009,
+    )
+
+    msa_tokens = torch.randint(0, AA_VOCAB_SIZE, (BATCH_SIZE, MSA_DEPTH, SEQUENCE_LENGTH))
+    pair_features = torch.randn(BATCH_SIZE, SEQUENCE_LENGTH, SEQUENCE_LENGTH, model.d_evo_pair)
+    target_sequence = torch.randint(0, AA_VOCAB_SIZE, (BATCH_SIZE, SEQUENCE_LENGTH))
+    target_R = torch.eye(3).reshape(1, 1, 3, 3).expand(
+        BATCH_SIZE, SEQUENCE_LENGTH, 3, 3
+    ).clone()
+    target_t = torch.zeros(BATCH_SIZE, SEQUENCE_LENGTH, 3)
+    target_t[0, :, 0] = torch.arange(SEQUENCE_LENGTH, dtype=torch.float32) * 3.8
+    batch = CanonicalTrainingBatch(
+        msa_tokens=msa_tokens,
+        pair_features=pair_features,
+        target_R=target_R,
+        target_t=target_t,
+        target_sequence=target_sequence,
+    )
+
+    before = next(parameter for parameter in model.sequence_policy.parameters()).detach().clone()
+    result = trainer.train_step(batch)
+    loss = result["loss"]
+    if not torch.isfinite(torch.tensor(loss)):
+        raise AssertionError(f"training loss is not finite: {loss}")
+
+    component_report = result["gradient_flow"]["components"]
+    required = (
+        "evoformer",
+        "node_connector",
+        "base_mpnn",
+        "multi_scale_designer",
+        "_seq_to_repr",
+        "sequence_policy",
+    )
+    for name in required:
+        row = component_report.get(name, {})
+        if row.get("gradient_parameters", 0) == 0:
+            raise AssertionError(f"trainer reported no gradients for required component {name}")
+        if not row.get("all_gradients_finite", False):
+            raise AssertionError(f"trainer reported non-finite gradients for {name}")
+
+    after = next(parameter for parameter in model.sequence_policy.parameters()).detach()
     changed = not torch.equal(before, after)
     if not changed:
         raise AssertionError("optimizer step did not update sequence-policy parameters")
 
-    trainable_after = sum(
-        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
-    )
-    print(f"training_regime=teacher_forced_sequence_policy")
-    print(f"training_batch_shape={(BATCH_SIZE, SEQUENCE_LENGTH)}")
-    print(f"sequence_policy_trainable_parameters={trainable_after:,}")
-    print(f"loss={float(loss.detach()):.8f}")
-    print(f"gradient_l2_norm={float(grad_norm):.8f}")
+    print(f"training_regime={TrainingRegime.SEQUENCE.value}")
+    print(f"selected_components={','.join(selected)}")
+    print(f"sequence_length={SEQUENCE_LENGTH}")
+    print(f"msa_shape={(BATCH_SIZE, MSA_DEPTH, SEQUENCE_LENGTH)}")
+    print(f"regime_trainable_parameters={trainable_count:,}")
+    print(f"loss={loss:.8f}")
+    print(f"global_step={result['global_step']}")
+    print("required_gradient_contract=PASS")
     print(f"optimizer_update_confirmed={changed}")
     print("result=PASS")
     print(
-        "scope=full-size architecture instantiated; one synthetic teacher-forced "
-        "sequence-policy optimizer step confirmed; no biological training claim"
+        "scope=full-size architecture instantiated; one synthetic CanonicalTrainer "
+        "sequence-regime optimizer step confirmed; no biological training claim"
     )
 
 
