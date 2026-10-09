@@ -389,11 +389,11 @@ EvoFormerBackbone = MSARepresentationBackbone
 class ProteinMPNNBackbone(nn.Module):
     """CHIMERA geometric residue trunk for structure-conditioned sequence design.
 
-    Backbone atoms define residue-local frames, a masked k-NN graph supplies
-    rigid-transform-invariant edge geometry, and alternating node/edge
-    message-passing layers condition evolutionary residue states on the
-    generated 3-D backbone. Sequence logits remain owned by the downstream
-    CHIMERA sequence-design stack.
+    Backbone atoms define residue-local frames, and a masked k-NN graph
+    supplies rigid-transform-invariant edge geometry. Native edge-conditioned
+    attention adaptively aggregates geometric messages; edge updates and masked
+    residual pathways preserve the original checkpoint parameter schema.
+    Sequence logits remain owned by CHIMERA's downstream sequence-design stack.
     """
 
     def __init__(self, node_features: int = 512, edge_features: int = 512,
