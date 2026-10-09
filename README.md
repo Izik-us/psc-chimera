@@ -22,7 +22,7 @@ Caller-prepared MSA tokens and pair features
         │
         ▼
 Evolutionary representation
-(48 coupled EvoFormer blocks by default; CHIMERA-owned parameters, not pretrained AlphaFold weights)
+(138 coupled EvoFormer blocks by default; CHIMERA-owned parameters, not pretrained AlphaFold weights)
         ├─ MSA stream: pair-biased row attention → column attention → transition
         ├─ MSA-to-pair: masked Outer Product Mean
         └─ pair stream: triangle multiplication/attention → pair transition
@@ -86,7 +86,7 @@ retrieval is isolated in `retrieval.py`. `multi_objective.py` is only a
 compatibility import shim; its historical implementations are isolated in
 `legacy_optimization.py` and are not imported by canonical architecture code.
 
-The EvoFormer computation, masks, configuration, and training objective are
+The default canonical constructor uses 138 EvoFormer blocks. The EvoFormer computation, masks, configuration, and training objective are
 documented in [docs/EVOFORMER_REPRESENTATION.md](./docs/EVOFORMER_REPRESENTATION.md).
 
 ### Scientific status of the transport model
