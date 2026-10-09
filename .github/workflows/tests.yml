@@ -44,6 +44,10 @@ jobs:
     - name: Validate documented architecture contract
       run: python scripts/validate_repo_contract.py
 
+    - name: Audit full-size canonical model and run one staged training update
+      if: matrix.python-version == '3.11'
+      run: python scripts/audit_full_size_model.py
+
     - name: Run CPU scientific and integration tests
       run: |
         pytest tests/ -v --tb=short -m "not gpu and not requires_weights"
