@@ -183,6 +183,7 @@ class CHIMERAv2(nn.Module):
             d_assembly=256,
             n_domains=n_domains,
             n_modules=n_modules,
+            edge_dim=16,
         )
 
         # ── NEW IN V2: Pareto multi-objective head (~1M params) ──────────────
