@@ -507,7 +507,11 @@ class ProteinMPNNBackbone(nn.Module):
         node = node + self.node_geometry_encoder(node_geometry)
         from .proteinmpnn import get_protein_graph
         neighbor_index, edge_geometry, edge_mask = get_protein_graph(ca_coords, frames, k_neighbors=self.max_neighbors)
-        neighbor_valid = residue_mask.unsqueeze(1).expand(-1, length, -1).gather(2, neighbor_index)
+        # A residue with a degenerate N-CA-C frame is not a valid geometric
+        # neighbor even when its sequence position is unpadded. Exclude it
+        # from both query and key sides of the graph to avoid treating the
+        # fallback identity frame as measured geometry.
+        neighbor_valid = effective_mask.unsqueeze(1).expand(-1, length, -1).gather(2, neighbor_index)
         edge_mask = edge_mask & effective_mask.unsqueeze(-1) & neighbor_valid
         edge = self.edge_geometry_encoder(edge_geometry)
         edge = edge * edge_mask.unsqueeze(-1).to(edge.dtype)
