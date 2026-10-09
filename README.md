@@ -2,6 +2,11 @@
 
 **Compositional Hierarchical Inference Model for Evolutionary Representation and Architecture**
 
+[![Tests](https://github.com/Izik-us/psc-chimera/actions/workflows/tests.yml/badge.svg)](https://github.com/Izik-us/psc-chimera/actions)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.1+-ee4c2c.svg)](https://pytorch.org/)
+
 Stage 1 computational design prototype for the theoretical Pharmacosynthetic Constructor (PSC) engineering pipeline.
 
 > **Research-status notice:** CHIMERA is an untrained research prototype by default. Its canonical evolutionary representation is a CHIMERA PyTorch implementation of the AlphaFold-2 EvoFormer core; it is not the full AlphaFold system, is not pretrained, and is not checkpoint-compatible with AlphaFold/OpenFold. The structural generator is a custom local SE(3) Schrödinger-bridge model, not RFdiffusion; and the sequence-recovery module is ProteinMPNN-inspired, not native ProteinMPNN. Random modules remain trainable and production inference fails closed until required components are trained, validated, and objective predictors calibrated. Proxy values are not biological measurements.
