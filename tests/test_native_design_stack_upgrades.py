@@ -44,6 +44,22 @@ def test_multiscale_designer_handles_empty_spans_padding_and_gradients():
     assert residue.grad is not None and torch.isfinite(residue.grad).all()
     assert evo.grad is not None and torch.isfinite(evo.grad).all()
 
+    # Padded token features must not bleed into valid residue outputs via
+    # segment pooling or cross-scale attention.
+    changed_residue = residue.detach().clone()
+    changed_evo = evo.detach().clone()
+    changed_residue[0, 6:] += 1000.0
+    changed_evo[0, 6:] -= 1000.0
+    with torch.no_grad():
+        changed_logits = model(
+            changed_residue, changed_evo, edge, edge_index,
+            domain_boundaries, module_boundaries, faces,
+            edge_mask=edge_mask, residue_mask=residue_mask,
+        )
+    assert torch.allclose(
+        logits.detach()[0, :6], changed_logits[0, :6], atol=1e-5, rtol=1e-5
+    )
+
 
 def test_policy_teacher_forcing_remains_causal_with_structure_bias():
     torch.manual_seed(22)
@@ -103,3 +119,17 @@ def test_policy_generation_preserves_fixed_tokens_and_rejects_invalid_constraint
         assert "valid amino-acid IDs" in str(exc)
     else:
         raise AssertionError("invalid fixed token was not rejected")
+
+def test_policy_structure_bias_is_head_specific_without_new_parameters():
+    torch.manual_seed(25)
+    policy = AutoregressiveSequencePolicy(
+        context_dim=32, vocab_size=20, layers=2, heads=4
+    ).eval()
+    context = torch.randn(2, 7, 32)
+    with torch.no_grad():
+        projected = policy.context(context)
+        bias = policy._pair_bias(projected)
+    assert bias.shape == (2, 4, 7, 7)
+    assert torch.isfinite(bias).all()
+    # Distinct channel groups provide each attention head its own bias field.
+    assert not torch.allclose(bias[:, 0], bias[:, 1])

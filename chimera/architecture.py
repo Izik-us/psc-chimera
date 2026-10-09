@@ -747,6 +747,11 @@ class CanonicalCHIMERAv2(nn.Module):
             raise ValueError("initial_pair_features must have shape (B,L,L,d_evo_pair)")
         if source_R.shape != (B, L, 3, 3) or source_t.shape != (B, L, 3):
             raise ValueError("source backbone shapes must be (B,L,3,3) and (B,L,3)")
+        if residue_mask is not None:
+            if residue_mask.shape != (B, L) or residue_mask.dtype != torch.bool:
+                raise ValueError("residue_mask must have bool shape (B,L)")
+            if residue_mask.device != device:
+                raise ValueError("residue_mask must be on the same device as model inputs")
         if source_R.device != device or source_t.device != device or initial_pair_features.device != device:
             raise ValueError("all model inputs must be on the same device")
         if temperature <= 0:
@@ -831,8 +836,15 @@ class CanonicalCHIMERAv2(nn.Module):
             for position in constraints.stachelhaus_positions:
                 pocket_mask[:, max(0, int(position) - 2):min(L, int(position) + 3)] = True
         evol_nodes = self.node_connector(single_repr, pocket_mask)
-        base_nodes = self.base_mpnn(backbone_coords, evol_nodes)
+        base_nodes = self.base_mpnn(
+            backbone_coords, evol_nodes, residue_mask=residue_mask
+        )
         edge_index, edge_features, edge_mask = get_protein_graph(t_final, R_final, k_neighbors=32)
+        if residue_mask is not None:
+            valid_neighbors = residue_mask.unsqueeze(1).expand(-1, L, -1).gather(
+                2, edge_index
+            )
+            edge_mask = edge_mask & valid_neighbors & residue_mask.unsqueeze(-1)
         if edge_features.shape[-1] != 28:
             raise RuntimeError(f"protein graph edge width must be 28, got {edge_features.shape[-1]}")
         max_neighbors = 32
@@ -859,6 +871,7 @@ class CanonicalCHIMERAv2(nn.Module):
                 module_boundaries=module_bounds,
                 icosahedral_face=face_id,
                 edge_mask=edge_mask,
+                residue_mask=residue_mask,
             ))
         logits = torch.stack(logits_per_draw, dim=1)
         if constraints is not None and constraints.fixed_sequence is not None:
