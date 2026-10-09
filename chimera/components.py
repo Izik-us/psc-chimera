@@ -350,7 +350,7 @@ class MSARepresentationBackbone(EvoFormerStack):
         self,
         d_single: int = 256,
         d_pair: int = 128,
-        n_blocks: int = 138,
+        n_blocks: int = 48,
         **configuration,
     ):
         super().__init__(
