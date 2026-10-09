@@ -577,7 +577,9 @@ class CanonicalTrainer:
         if self.regime == TrainingRegime.REPRESENTATION:
             return ("evoformer",)
         if self.regime in (TrainingRegime.FLOW, TrainingRegime.CONSTRAINT):
-            required = ["evoformer", "flow_evo_projection", "pair_connector", "flow_model", "evol_cross_attn"]
+            required = ["evoformer", "pair_connector", "flow_model", "evol_cross_attn"]
+            if self.regime == TrainingRegime.FLOW:
+                required.append("flow_evo_projection")
             if batch.constraints is not None:
                 required.append("constraint_encoder")
             if batch.substrate_id is not None:
