@@ -183,6 +183,7 @@ class CanonicalCHIMERAv2(nn.Module):
         self.dpo_trainer = DPOTrainer(beta=0.1)
         self._component_names = (
             "evoformer",
+            "flow_evo_projection",
             "flow_model",
             "base_mpnn",
             "pair_connector",
@@ -421,7 +422,7 @@ class CanonicalCHIMERAv2(nn.Module):
     def inference_readiness(self) -> dict:
         """Report component training state; module existence is not readiness."""
         required = (
-            "evoformer", "flow_model", "base_mpnn", "pair_connector",
+            "evoformer", "flow_evo_projection", "flow_model", "base_mpnn", "pair_connector",
             "evol_cross_attn", "node_connector", "constraint_encoder",
             "substrate_conditioner", "multi_scale_designer", "pareto_head",
             "objective_feature_encoder", "_seq_to_repr", "sequence_policy",
