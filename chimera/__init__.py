@@ -75,6 +75,7 @@ from .objective_schema import (
 )
 # Caller-supplied evidence summary; distinct from the executed release gate.
 from .readiness import PreProductionGateEvidence, preproduction_readiness_report
+from .proteinmpnn_reference import ProteinMPNNReference
 from .adapters import (
     BackboneEncoder,
     StructureGenerator,
@@ -101,7 +102,7 @@ def __getattr__(name: str):
 
 
 __all__ = [
-    "CHIMERAv2", "CanonicalCHIMERAv2", "NRPSConstraints",
+    "CHIMERAv2", "CanonicalCHIMERAv2", "ProteinMPNNReference", "NRPSConstraints",
     "CodonOptimizer", "optimize_nrps_for_mammalian_expression",
     "ESMProteinFitnessScorer", "SE3FlowMatching", "SchrodingerBridge",
     "FlowMatchingBackbone", "InvariantPointAttention", "MultiScaleNRPSDesigner",
