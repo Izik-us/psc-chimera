@@ -6,6 +6,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class MultiScaleNRPSDesigner(nn.Module):
@@ -132,143 +133,205 @@ class MultiScaleNRPSDesigner(nn.Module):
             nn.Linear(d_residue * 2, vocab_size),
         )
 
+    @staticmethod
+    def _segment_membership(
+        boundaries: torch.Tensor, length: int, device: torch.device
+    ) -> torch.Tensor:
+        """Build vectorized batch/segment/residue span membership."""
+        if boundaries.ndim != 3 or boundaries.shape[-1] != 2:
+            raise ValueError("boundaries must have shape (B, segments, 2)")
+        starts = boundaries[..., 0].to(device=device, dtype=torch.long).clamp(0, length)
+        ends = boundaries[..., 1].to(device=device, dtype=torch.long).clamp(0, length)
+        if torch.any(ends < starts):
+            raise ValueError("segment end boundaries must be >= start boundaries")
+        positions = torch.arange(length, device=device).view(1, 1, length)
+        return (positions >= starts.unsqueeze(-1)) & (positions < ends.unsqueeze(-1))
+
+    @staticmethod
+    def _masked_segment_pool(
+        features: torch.Tensor, membership: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Mean-pool variable-length spans; empty spans map to finite zeros."""
+        weights = membership.to(features.dtype)
+        counts = weights.sum(dim=-1)
+        pooled = torch.einsum("bsl,bld->bsd", weights, features)
+        pooled = pooled / counts.clamp_min(1).unsqueeze(-1)
+        valid = counts > 0
+        return pooled * valid.unsqueeze(-1).to(pooled.dtype), valid
+
+    @staticmethod
+    def _safe_attention_mask(valid_segments: torch.Tensor) -> torch.Tensor:
+        """Avoid all-key-masked attention without marking empty segments valid."""
+        safe = valid_segments.clone()
+        safe[:, 0] = safe[:, 0] | ~valid_segments.any(dim=1)
+        return safe
+
     def forward(
         self,
-        residue_feats: torch.Tensor,  # (B, L, d_residue) from ProteinMPNN
-        evol_node_feats: torch.Tensor,  # (B, L, d_residue) from EvoFormer
-        edge_feats: torch.Tensor,  # (B, L, K, 16) geometric edge features
-        edge_index: torch.Tensor,  # (B, L, K) k-NN indices
-        domain_boundaries: torch.Tensor,  # (B, n_domains, 2) [start, end] per domain
-        module_boundaries: torch.Tensor,  # (B, n_modules, 2) [start, end] per module
-        icosahedral_face: torch.Tensor,  # (B,) which face (0-19) is this module on
+        residue_feats: torch.Tensor,
+        evol_node_feats: torch.Tensor,
+        edge_feats: torch.Tensor,
+        edge_index: torch.Tensor,
+        domain_boundaries: torch.Tensor,
+        module_boundaries: torch.Tensor,
+        icosahedral_face: torch.Tensor,
         edge_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:  # (B, L, 20) amino acid logits
-        B, L, _ = residue_feats.shape
+        residue_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Produce amino-acid logits with mask-aware multiscale information flow.
+
+        Span computation is vectorized over the batch. Empty spans and padded
+        residues stay finite, and masked neighbors cannot affect valid residues.
+        Existing modules and parameter names are retained for checkpoint reuse.
+        """
+        if residue_feats.ndim != 3:
+            raise ValueError("residue_feats must have shape (B,L,d_residue)")
+        B, L, D = residue_feats.shape
+        if D != self.sequence_head[0].normalized_shape[0]:
+            raise ValueError("residue feature width does not match d_residue")
+        if evol_node_feats.shape != residue_feats.shape:
+            raise ValueError("evol_node_feats must match residue_feats shape")
         if edge_index.ndim != 3 or edge_index.shape[:2] != (B, L):
             raise ValueError("edge_index must have shape (B,L,K)")
         if edge_feats.shape[:3] != edge_index.shape:
             raise ValueError("edge_feats dimensions must match edge_index")
         expected_edge_dim = self.edge_proj.in_features
         if edge_feats.shape[-1] == 16 and expected_edge_dim == 28:
-            # Legacy checkpoints supplied 16-D geometric edges. Preserve those
-            # features and zero-fill the 12 geometry channels added in v2.
-            edge_feats = torch.nn.functional.pad(edge_feats, (0, 12))
+            edge_feats = F.pad(edge_feats, (0, 12))
         elif edge_feats.shape[-1] != expected_edge_dim:
             raise ValueError(
                 f"edge_feats last dimension must be {expected_edge_dim}"
                 + (" (or legacy 16-D)" if expected_edge_dim == 28 else "")
             )
+        if edge_index.dtype not in (torch.int32, torch.int64):
+            raise ValueError("edge_index must contain integer residue indices")
         if torch.any((edge_index < 0) | (edge_index >= L)):
             raise ValueError("edge_index contains residue indices outside the sequence")
+        if domain_boundaries.shape != (B, self.n_domains, 2):
+            raise ValueError("domain_boundaries must have shape (B,n_domains,2)")
+        if module_boundaries.shape != (B, self.n_modules, 2):
+            raise ValueError("module_boundaries must have shape (B,n_modules,2)")
+        if icosahedral_face.shape != (B,):
+            raise ValueError("icosahedral_face must have shape (B,)")
+        if torch.any((icosahedral_face < 0) | (icosahedral_face >= self.face_encoding.num_embeddings)):
+            raise ValueError("icosahedral_face IDs must be in [0, 19]")
+        if residue_mask is None:
+            residue_mask = torch.ones(B, L, dtype=torch.bool, device=residue_feats.device)
+        elif residue_mask.shape != (B, L) or residue_mask.dtype != torch.bool:
+            raise ValueError("residue_mask must be bool with shape (B,L)")
         if edge_mask is None:
             edge_mask = torch.ones_like(edge_index, dtype=torch.bool)
         elif edge_mask.shape != edge_index.shape or edge_mask.dtype != torch.bool:
             raise ValueError("edge_mask must be bool with shape (B,L,K)")
 
-        # ── Scale 1: Residue message passing ─────────────────────────────────
-        s = residue_feats + evol_node_feats  # fuse evolutionary context
-        domain_ids = torch.full((B, L), -1, dtype=torch.long, device=s.device)
-        for domain_idx in range(self.n_domains):
-            starts = domain_boundaries[:, domain_idx, 0].clamp(0, L)
-            ends = domain_boundaries[:, domain_idx, 1].clamp(0, L)
-            for batch_idx in range(B):
-                domain_ids[batch_idx, starts[batch_idx]:ends[batch_idx]] = domain_idx
+        device = residue_feats.device
+        domain_membership = self._segment_membership(domain_boundaries, L, device)
+        module_membership = self._segment_membership(module_boundaries, L, device)
+        domain_membership = domain_membership & residue_mask.unsqueeze(1)
+        module_membership = module_membership & residue_mask.unsqueeze(1)
+
+        # Residue scale: edge-conditioned neighborhood attention replaces the
+        # mean-only reducer while using the native edge and relation features.
+        s = (residue_feats + evol_node_feats) * residue_mask.unsqueeze(-1).to(residue_feats.dtype)
+        domain_labels = domain_membership.to(torch.int64).argmax(dim=1)
+        has_domain = domain_membership.any(dim=1)
+        domain_ids = torch.where(has_domain, domain_labels, torch.full_like(domain_labels, -1))
         edge_types = self.classify_edge_types(domain_ids, edge_index)
+        edge_emb = self.edge_proj(edge_feats) + self.edge_type_embedding(edge_types)
+        neighbor_index = edge_index.unsqueeze(-1).expand(-1, -1, -1, D)
 
         for mpnn_layer in self.residue_mpnn:
-            # Aggregate neighbor messages
-            neighbors = edge_index.unsqueeze(-1).expand(-1, -1, -1, s.shape[-1])
-            neighbor_feats = s.unsqueeze(2).expand(-1, -1, edge_index.shape[-1], -1)
-            neighbor_feats = (
-                s.unsqueeze(1).expand(-1, L, -1, -1).gather(2, neighbors)
-            )  # (B, L, K, d_residue)
-            edge_emb = self.edge_proj(edge_feats) + self.edge_type_embedding(edge_types)
-            valid_edges = edge_mask.unsqueeze(-1).to(neighbor_feats.dtype)
-            neighbor_messages = (neighbor_feats + edge_emb) * valid_edges
-            neighbor_feats_flat = neighbor_messages.sum(dim=2) / valid_edges.sum(dim=2).clamp_min(1)
-            combined = torch.cat([s, neighbor_feats_flat], dim=-1)
-            s = s + mpnn_layer(combined)
+            neighbors = s.unsqueeze(1).expand(-1, L, -1, -1).gather(2, neighbor_index)
+            neighbor_messages = neighbors + edge_emb
+            neighbor_valid = residue_mask.unsqueeze(1).expand(-1, L, -1).gather(2, edge_index)
+            valid_edges = edge_mask & residue_mask.unsqueeze(-1) & neighbor_valid
+            scores = F.cosine_similarity(s.unsqueeze(2), neighbor_messages, dim=-1) * 4.0
+            scores = scores.masked_fill(~valid_edges, torch.finfo(scores.dtype).min)
+            weights = torch.softmax(scores, dim=-1) * valid_edges.to(scores.dtype)
+            weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+            aggregate = (neighbor_messages * weights.unsqueeze(-1)).sum(dim=2)
+            s = s + mpnn_layer(torch.cat([s, aggregate], dim=-1))
+            s = s * residue_mask.unsqueeze(-1).to(s.dtype)
 
-        # ── Scale 2: Bottom-up domain pooling ────────────────────────────────
-        domain_feats = []
-        for d in range(self.n_domains):
-            start = domain_boundaries[:, d, 0]  # (B,)
-            end = domain_boundaries[:, d, 1]
-
-            # Pool residue features within this domain
-            domain_residues = []
-            for b in range(B):
-                s_b, e_b = start[b].item(), end[b].item()
-                domain_residues.append(s[b, s_b:e_b].mean(dim=0))
-            domain_feat = torch.stack(domain_residues)  # (B, d_residue)
-            domain_feats.append(self.domain_pool(domain_feat))
-
-        domain_repr = torch.stack(domain_feats, dim=1)  # (B, n_domains, d_domain)
-
-        # Domain self-attention (which domains influence which)
-        domain_ctx, _ = self.domain_attn(domain_repr, domain_repr, domain_repr)
+        # Domain scale: safely pooled bottom-up summaries and masked attention.
+        domain_means, domain_valid = self._masked_segment_pool(s, domain_membership)
+        domain_repr = self.domain_pool(domain_means)
+        domain_repr = domain_repr * domain_valid.unsqueeze(-1).to(domain_repr.dtype)
+        safe_domain_mask = self._safe_attention_mask(domain_valid)
+        domain_ctx, _ = self.domain_attn(
+            domain_repr, domain_repr, domain_repr,
+            key_padding_mask=~safe_domain_mask, need_weights=False,
+        )
         domain_repr = domain_repr + torch.tanh(self.domain_gate) * self.domain_ffn(domain_ctx)
+        domain_repr = domain_repr * domain_valid.unsqueeze(-1).to(domain_repr.dtype)
 
-        # ── Scale 3: Bottom-up module pooling ─────────────────────────────────
-        module_feats = []
-        for m in range(self.n_modules):
-            start = module_boundaries[:, m, 0]
-            end = module_boundaries[:, m, 1]
-            module_residues = []
-            for b in range(B):
-                s_b, e_b = start[b].item(), end[b].item()
-                if e_b > s_b:
-                    module_residues.append(s[b, s_b:e_b].mean(dim=0))
-                else:
-                    module_residues.append(torch.zeros_like(s[b, 0]))
-            module_feat = self.domain_pool(torch.stack(module_residues))
-            module_feats.append(self.module_pool(module_feat))
-
-        module_repr = torch.stack(module_feats, dim=1)  # (B, n_modules, d_module)
-
-        # Module self-attention — THIS learns inter-module compatibility
-        module_ctx, _ = self.module_attn(module_repr, module_repr, module_repr)
+        # Module scale: learned interface states are gated by pairwise
+        # compatibility between adjacent module representations.
+        module_means, module_valid = self._masked_segment_pool(s, module_membership)
+        module_repr = self.module_pool(self.domain_pool(module_means))
+        module_repr = module_repr * module_valid.unsqueeze(-1).to(module_repr.dtype)
+        safe_module_mask = self._safe_attention_mask(module_valid)
+        module_ctx, _ = self.module_attn(
+            module_repr, module_repr, module_repr,
+            key_padding_mask=~safe_module_mask, need_weights=False,
+        )
         module_repr = module_repr + torch.tanh(self.module_gate) * module_ctx
+        module_repr = module_repr * module_valid.unsqueeze(-1).to(module_repr.dtype)
 
-        # Module pair interaction (explicit interface modeling)
-        if module_repr.shape[1] > 1:
-            left = module_repr[:, :-1, :]
-            right = module_repr[:, 1:, :]
+        if self.n_modules > 1:
+            left, right = module_repr[:, :-1], module_repr[:, 1:]
+            interface_valid = module_valid[:, :-1] & module_valid[:, 1:]
+            compatibility = F.cosine_similarity(left, right, dim=-1).unsqueeze(-1)
             interface = self.module_interface_head(torch.cat([left, right], dim=-1))
-            module_repr = module_repr.clone()
-            module_repr[:, :-1] = module_repr[:, :-1] + torch.tanh(self.module_gate) * interface
-            module_repr[:, 1:] = module_repr[:, 1:] + torch.tanh(self.module_gate) * interface
+            interface = interface * torch.sigmoid(compatibility)
+            interface = interface * interface_valid.unsqueeze(-1).to(interface.dtype)
+            zeros = torch.zeros_like(module_repr[:, :1])
+            module_repr = module_repr + torch.tanh(self.module_gate) * (
+                torch.cat([interface, zeros], dim=1) +
+                torch.cat([zeros, interface], dim=1)
+            )
+            module_repr = module_repr * module_valid.unsqueeze(-1).to(module_repr.dtype)
 
-        # ── Scale 4: Assembly context ─────────────────────────────────────────
-        face_emb = self.face_encoding(icosahedral_face)  # (B, d_assembly)
-        assembly_repr = self.assembly_project(module_repr)  # (B, n_modules, d_assembly)
-        assembly_repr = assembly_repr + face_emb.unsqueeze(1)  # broadcast face context
-
-        # Assembly-level attention (module sees icosahedral context)
-        asm_ctx, _ = self.assembly_attn(assembly_repr, assembly_repr, assembly_repr)
+        # Assembly scale: face-conditioned module representations with
+        # safe handling when a batch contains no non-empty module spans.
+        face_emb = self.face_encoding(icosahedral_face.to(device=device, dtype=torch.long))
+        assembly_repr = self.assembly_project(module_repr) + face_emb.unsqueeze(1)
+        assembly_repr = assembly_repr * module_valid.unsqueeze(-1).to(assembly_repr.dtype)
+        asm_ctx, _ = self.assembly_attn(
+            assembly_repr, assembly_repr, assembly_repr,
+            key_padding_mask=~safe_module_mask, need_weights=False,
+        )
         assembly_repr = assembly_repr + torch.tanh(self.assembly_gate) * asm_ctx
+        assembly_repr = assembly_repr * module_valid.unsqueeze(-1).to(assembly_repr.dtype)
 
-        # ── Top-down pass: flow assembly context back to residues ────────────
-        # Assembly → module
-        asm_to_mod = self.td_assembly_to_module(
-            assembly_repr.mean(dim=1)
-        )  # (B, d_module)
-        module_repr = module_repr + torch.tanh(self.assembly_gate) * asm_to_mod.unsqueeze(1)
+        # Top-down: module-specific assembly context, followed by explicit
+        # domain/module span overlap rather than a global context broadcast.
+        module_repr = module_repr + torch.tanh(self.assembly_gate) * self.td_assembly_to_module(assembly_repr)
+        module_repr = module_repr * module_valid.unsqueeze(-1).to(module_repr.dtype)
+        domain_starts = domain_boundaries[..., 0].to(device=device, dtype=torch.long).clamp(0, L)
+        domain_ends = domain_boundaries[..., 1].to(device=device, dtype=torch.long).clamp(0, L)
+        module_starts = module_boundaries[..., 0].to(device=device, dtype=torch.long).clamp(0, L)
+        module_ends = module_boundaries[..., 1].to(device=device, dtype=torch.long).clamp(0, L)
+        overlap = (
+            torch.minimum(domain_ends.unsqueeze(-1), module_ends.unsqueeze(1))
+            - torch.maximum(domain_starts.unsqueeze(-1), module_starts.unsqueeze(1))
+        ).clamp_min(0).to(module_repr.dtype)
+        overlap = overlap * module_valid.unsqueeze(1).to(overlap.dtype)
+        mapped_modules = self.td_module_to_domain(module_repr)
+        domain_module_context = torch.einsum("bdm,bmf->bdf", overlap, mapped_modules)
+        overlap_count = overlap.sum(dim=-1, keepdim=True)
+        domain_module_context = domain_module_context / overlap_count.clamp_min(1.0)
+        domain_repr = domain_repr + torch.tanh(self.module_gate) * domain_module_context
+        domain_repr = domain_repr * domain_valid.unsqueeze(-1).to(domain_repr.dtype)
 
-        # Module → domain
-        mod_to_dom = self.td_module_to_domain(module_repr.mean(dim=1))  # (B, d_domain)
-        domain_repr = domain_repr + torch.tanh(self.module_gate) * mod_to_dom.unsqueeze(1)
+        domain_residue = self.td_domain_to_residue(domain_repr)
+        residue_weights = domain_membership.transpose(1, 2).to(s.dtype)
+        residue_weights = residue_weights / residue_weights.sum(dim=-1, keepdim=True).clamp_min(1.0)
+        domain_feedback = torch.einsum("bld,bdf->blf", residue_weights, domain_residue)
+        s = (s + domain_feedback) * residue_mask.unsqueeze(-1).to(s.dtype)
 
-        # Domain → residue (scatter back using domain boundaries)
-        dom_to_res = self.td_domain_to_residue(domain_repr)  # (B, n_domains, d_residue)
-        for d in range(self.n_domains):
-            for b in range(B):
-                s_b = domain_boundaries[b, d, 0].item()
-                e_b = domain_boundaries[b, d, 1].item()
-                s[b, s_b:e_b] = s[b, s_b:e_b] + dom_to_res[b, d].unsqueeze(0)
-
-        # ── Final sequence prediction ─────────────────────────────────────────
-        return self.sequence_head(s)  # (B, L, 20)
+        logits = self.sequence_head(s)
+        return logits * residue_mask.unsqueeze(-1).to(logits.dtype)
 
     @staticmethod
     def classify_edge_types(domain_ids: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:

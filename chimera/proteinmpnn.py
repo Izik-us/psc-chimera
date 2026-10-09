@@ -85,17 +85,28 @@ class NodeMPNN(nn.Module):
         )
 
     def forward(self, node, edge, k_idx, edge_mask):
+        """Aggregate native geometric messages with edge-conditioned attention.
+
+        Scores reuse existing projections, preserving parameter names and
+        checkpoint schemas. Empty neighborhoods safely yield zero aggregates.
+        """
         B, L, K, _ = edge.shape
         node_n = self.norm(node)
         idx_expanded = k_idx.unsqueeze(-1).expand(-1, -1, -1, node_n.shape[-1])
         node_j = node_n.unsqueeze(1).expand(-1, L, -1, -1).gather(2, idx_expanded)
         node_i = node_n.unsqueeze(2).expand(-1, -1, K, -1)
         msg_input = torch.cat([node_i, node_j, edge], dim=-1)
-        messages = self.msg(msg_input) * torch.sigmoid(self.gate(msg_input))
-        messages = messages * edge_mask.to(messages.dtype).unsqueeze(-1)
-        denom = edge_mask.to(messages.dtype).sum(-1, keepdim=True).clamp_min(1.0)
-        agg = messages.sum(2) / denom
-        return node + agg + self.ff(node + agg)
+        message = self.msg(msg_input) * torch.sigmoid(self.gate(msg_input))
+
+        valid = edge_mask.to(torch.bool)
+        scores = (message * node_i).sum(dim=-1) * (node.shape[-1] ** -0.5)
+        scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
+        weights = torch.softmax(scores, dim=-1) * valid.to(scores.dtype)
+        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        aggregate = (message * weights.unsqueeze(-1)).sum(dim=2)
+
+        updated = node + aggregate
+        return updated + self.ff(updated)
 
 
 class EdgeMPNN(nn.Module):

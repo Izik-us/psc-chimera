@@ -952,7 +952,6 @@ class CanonicalCHIMERAv2(nn.Module):
             "sequence_tokens": sampled,
             "sequence_logits": logits,
             "sequence_context": policy_context.reshape(B, n_draws, L, self.d_mpnn),
-            "geometric_residue_features": base_nodes,
             "objective_context": sampled_repr.reshape(B, n_draws, L, self.d_mpnn),
             "objective_feature_embeddings": {
                 name: value.reshape(B, n_draws, self.d_mpnn)
