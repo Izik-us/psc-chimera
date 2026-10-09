@@ -9,13 +9,14 @@ import pytest
 import torch
 
 from chimera import CHIMERAv2
+from chimera.architecture import CanonicalCHIMERAv2
 from chimera.folding.frames import ideal_backbone_from_torsions
 from chimera.folding.types import FoldingBackend, FoldPrediction
 from chimera.validation import FoldValidationConfig, FoldValidator
 
 L = 8
 
-
+assert CHIMERAv2 is CanonicalCHIMERAv2
 class Const(FoldingBackend):
     name, independence_class = "const", "test_double"
 
