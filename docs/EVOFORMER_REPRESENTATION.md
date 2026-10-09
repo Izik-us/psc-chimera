@@ -54,7 +54,7 @@ Caller-prepared MSA tokens (B,N_seq,L)
 ```
 
 `CanonicalCHIMERAv2` constructs `MSARepresentationBackbone`, implemented by
-`EvoFormerStack`. The `evoformer_n_blocks` model option defaults to **48** and
+`EvoFormerStack`. The `evoformer_n_blocks` model option in `CanonicalCHIMERAv2` defaults to **138** and
 is passed directly to the `ModuleList`; a smaller count is an explicit
 development/test configuration, not a silent production substitution. The
 block count, widths, dropout rates, chunk sizes, relative-position range, and
