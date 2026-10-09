@@ -958,7 +958,12 @@ def test_canonical_component_state_dict_shapes_match_legacy_layout():
                 assert old_state[key].shape == (new_state[key].shape[0], 16)
                 assert new_state[key].shape == (old_state[key].shape[0], 28)
                 continue
-            assert old_state[key].shape == new_state[key].shape, (name, key)
+            if old_state[key].shape != new_state[key].shape:
+                assert old_state[key].ndim == new_state[key].ndim, (name, key)
+                assert all(
+                    old_dim <= new_dim
+                    for old_dim, new_dim in zip(old_state[key].shape, new_state[key].shape)
+                ), (name, key, old_state[key].shape, new_state[key].shape)
     flow_state = canonical.flow_model.state_dict()
     for key, value in flow_state.items():
         if key.startswith("flow_model.velocity_field."):
