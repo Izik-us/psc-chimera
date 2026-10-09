@@ -1398,6 +1398,22 @@ class CanonicalCHIMERAv2(nn.Module):
                             ] = source_cpu[
                                 projection * old_width:(projection + 1) * old_width
                             ]
+                    elif (
+                        key == "module_interface_head.0.weight"
+                        and source.ndim == 2
+                        and target.ndim == 2
+                        and source.shape[1] % 2 == 0
+                        and target.shape[1] % 2 == 0
+                    ):
+                        # The input concatenates left/right module vectors.
+                        # Keep each legacy half aligned with its widened half.
+                        old_width = source.shape[1] // 2
+                        new_width = target.shape[1] // 2
+                        old_output = source.shape[0]
+                        migrated[:old_output, :old_width] = source_cpu[:, :old_width]
+                        migrated[:old_output, new_width:new_width + old_width] = (
+                            source_cpu[:, old_width:]
+                        )
                     else:
                         overlap = tuple(slice(0, size) for size in source.shape)
                         migrated[overlap] = source_cpu
