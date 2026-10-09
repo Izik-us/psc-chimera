@@ -103,7 +103,7 @@ class ObjectiveLabelKind(str, Enum):
 _REGIME_MODULES = {
     TrainingRegime.REPRESENTATION: ("evoformer",),
     TrainingRegime.FLOW: (
-        "evoformer", "pair_connector", "flow_model", "evol_cross_attn",
+        "evoformer", "flow_evo_projection", "pair_connector", "flow_model", "evol_cross_attn",
         "constraint_encoder", "substrate_conditioner",
     ),
     TrainingRegime.SEQUENCE: (
@@ -577,7 +577,7 @@ class CanonicalTrainer:
         if self.regime == TrainingRegime.REPRESENTATION:
             return ("evoformer",)
         if self.regime in (TrainingRegime.FLOW, TrainingRegime.CONSTRAINT):
-            required = ["evoformer", "pair_connector", "flow_model", "evol_cross_attn"]
+            required = ["evoformer", "flow_evo_projection", "pair_connector", "flow_model", "evol_cross_attn"]
             if batch.constraints is not None:
                 required.append("constraint_encoder")
             if batch.substrate_id is not None:
