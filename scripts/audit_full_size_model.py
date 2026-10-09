@@ -130,9 +130,38 @@ def main() -> None:
     print(f"optimizer_update_confirmed={changed}")
     print("result=PASS")
     print(
-        "scope=full-size architecture instantiated; one synthetic CanonicalTrainer "
+        "training_scope=full-size architecture instantiated; one synthetic CanonicalTrainer "
         "sequence-regime optimizer step confirmed; no biological training claim"
     )
+
+    # Exercise the full canonical generation path at tiny length after the
+    # training step. This verifies inference plumbing on the full-size model;
+    # it is not evidence that the random model generates useful designs.
+    model.eval()
+    with torch.inference_mode():
+        generated = model(
+            msa_tokens,
+            pair_features,
+            target_R,
+            target_t,
+            n_flow_steps=2,
+            n_mpnn_seqs=1,
+            validate_geometry=False,
+        )
+    if generated["sequence_tokens"].shape != (BATCH_SIZE, 1, SEQUENCE_LENGTH):
+        raise AssertionError(
+            f"unexpected sequence output shape: {tuple(generated['sequence_tokens'].shape)}"
+        )
+    if generated["backbone_coords"].shape != (BATCH_SIZE, SEQUENCE_LENGTH, 4, 3):
+        raise AssertionError(
+            f"unexpected backbone output shape: {tuple(generated['backbone_coords'].shape)}"
+        )
+    if not torch.isfinite(generated["backbone_coords"]).all():
+        raise AssertionError("full-size inference produced non-finite backbone coordinates")
+    print(f"inference_sequence_shape={tuple(generated['sequence_tokens'].shape)}")
+    print(f"inference_backbone_shape={tuple(generated['backbone_coords'].shape)}")
+    print("full_size_inference_smoke=PASS")
+    print("result=PASS")
 
 
 if __name__ == "__main__":
