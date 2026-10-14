@@ -74,3 +74,25 @@ def test_request_requires_matching_preprocessing_identity():
     )
     with pytest.raises(InputValidationError, match="preprocessing_id"):
         build_inference_request(prepared, config)
+
+
+def test_prepared_input_identity_tracks_tensor_contents_not_only_shapes():
+    msa, pair, R, t = _inputs()
+    first = prepare_inference_inputs(
+        msa_tokens=msa,
+        pair_features=pair,
+        source_rotations=R,
+        source_translations=t,
+        manifest=_manifest(),
+    )
+    changed_pair = pair.clone()
+    changed_pair[0, 0, 0, 0] = 1.0
+    second = prepare_inference_inputs(
+        msa_tokens=msa,
+        pair_features=changed_pair,
+        source_rotations=R,
+        source_translations=t,
+        manifest=_manifest(),
+    )
+    assert first.identity != second.identity
+
