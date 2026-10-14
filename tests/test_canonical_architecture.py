@@ -817,6 +817,8 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     assert payload["artifact_type"] == "canonical_training_checkpoint"
     assert manifest.format_version == 4
     assert manifest.chimera_version
+    assert payload["training"]["frozen_backbone_fingerprint"]
+    assert payload["training"]["allow_sequence_backbone_finetuning"] is False
     assert manifest.git_commit
     assert manifest.git_worktree_clean is not None
     assert manifest.source_tree_hash
@@ -855,6 +857,10 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     assert torch.equal(torch.rand(()), expected_rng_values[2])
     assert torch.equal(torch.rand((), generator=explicit_generator), expected_rng_values[3])
     assert restored._resume_source_manifest == payload["manifest"]
+    assert (
+        restored._frozen_backbone_fingerprint
+        == payload["training"]["frozen_backbone_fingerprint"]
+    )
     assert restored.global_step == 1
     assert restored.epoch == 0
     assert restored_model.component_status["sequence_policy"]["training_status"] == "validated"
@@ -1171,3 +1177,25 @@ def test_sequence_backbone_finetuning_requires_explicit_opt_in():
     )
     assert "evoformer" in trainer.trainable_components
     assert all(parameter.requires_grad for parameter in model.evoformer.parameters())
+
+
+
+def test_sequence_stage_rejects_frozen_backbone_mutation():
+    from chimera.training import CanonicalTrainer, TrainingRegime
+
+    model = CHIMERAv2(
+        d_evo_single=32,
+        d_evo_pair=16,
+        d_se3=32,
+        d_pair_out=32,
+        d_mpnn=16,
+        n_flow_blocks=1,
+        n_domains=2,
+        n_modules=2,
+        n_mc_dropout=2,
+    )
+    trainer = CanonicalTrainer(model, TrainingRegime.SEQUENCE)
+    with torch.no_grad():
+        next(model.evoformer.parameters()).add_(1.0)
+    with pytest.raises(RuntimeError, match="frozen EvoFormer fingerprint changed"):
+        trainer.train_step(None)
