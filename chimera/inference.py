@@ -219,7 +219,10 @@ class InferenceRequest:
                 raise InputValidationError("substrate inputs must be finite floating-point tensors")
         if self.target_substrate not in _SUBSTRATE_TOKENS:
             raise InputValidationError(f"unsupported target_substrate {self.target_substrate!r}")
-        if self.readiness_policy not in READINESS_POLICIES:
+        if (
+            not isinstance(self.readiness_policy, str)
+            or self.readiness_policy not in READINESS_POLICIES
+        ):
             raise InputValidationError(
                 f"readiness_policy must be one of {sorted(READINESS_POLICIES)}"
             )
