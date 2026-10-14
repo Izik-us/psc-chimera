@@ -1180,7 +1180,7 @@ def test_sequence_backbone_finetuning_requires_explicit_opt_in():
 
 
 
-def test_sequence_stage_rejects_frozen_backbone_mutation():
+def test_sequence_stage_rejects_frozen_backbone_mutation(tmp_path):
     from chimera.training import CanonicalTrainer, TrainingRegime
 
     model = CHIMERAv2(
@@ -1198,4 +1198,4 @@ def test_sequence_stage_rejects_frozen_backbone_mutation():
     with torch.no_grad():
         next(model.evoformer.parameters()).add_(1.0)
     with pytest.raises(RuntimeError, match="frozen EvoFormer fingerprint changed"):
-        trainer.train_step(None)
+        trainer.save_checkpoint(tmp_path / "unexpected-backbone-change.pt")
