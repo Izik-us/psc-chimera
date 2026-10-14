@@ -107,7 +107,7 @@ _REGIME_MODULES = {
         "constraint_encoder", "substrate_conditioner",
     ),
     TrainingRegime.SEQUENCE: (
-        "evoformer", "node_connector", "base_mpnn", "multi_scale_designer",
+        "node_connector", "base_mpnn", "multi_scale_designer",
         "_seq_to_repr", "sequence_policy",
     ),
     TrainingRegime.CONSTRAINT: (
@@ -176,10 +176,23 @@ class CanonicalTrainingBatch:
         return type(self)(**values)
 
 
-def configure_trainable_components(model, regime: TrainingRegime | str) -> tuple[str, ...]:
-    """Freeze everything outside one explicit stage; random modules remain trainable in-stage."""
+def configure_trainable_components(
+    model,
+    regime: TrainingRegime | str,
+    *,
+    allow_sequence_backbone_finetuning: bool = False,
+) -> tuple[str, ...]:
+    """Apply one explicit stage policy and invalidate trainers from prior stages."""
     regime = TrainingRegime(regime)
-    selected = _REGIME_MODULES[regime]
+    if not isinstance(allow_sequence_backbone_finetuning, bool):
+        raise TypeError("allow_sequence_backbone_finetuning must be a boolean")
+    if allow_sequence_backbone_finetuning and regime != TrainingRegime.SEQUENCE:
+        raise ValueError(
+            "allow_sequence_backbone_finetuning is only valid for the sequence regime"
+        )
+    selected = list(_REGIME_MODULES[regime])
+    if allow_sequence_backbone_finetuning:
+        selected.insert(0, "evoformer")
     for parameter in model.parameters():
         parameter.requires_grad_(False)
         parameter.grad = None
@@ -192,7 +205,13 @@ def configure_trainable_components(model, regime: TrainingRegime | str) -> tuple
         model.component_status[name]["frozen"] = not any(
             parameter.requires_grad for parameter in module.parameters()
         )
-    return selected
+    model._training_regime_generation = (
+        int(getattr(model, "_training_regime_generation", 0)) + 1
+    )
+    model._active_training_regime = regime.value
+    model._active_trainable_components = tuple(selected)
+    model._allow_sequence_backbone_finetuning = allow_sequence_backbone_finetuning
+    return tuple(selected)
 
 
 def gradient_flow_report(model) -> dict[str, Any]:
@@ -249,9 +268,13 @@ class CanonicalTrainer:
         random_seed: int | None = None,
         min_validation_examples: int = 30,
         generator: Optional[torch.Generator] = None,
+        allow_sequence_backbone_finetuning: bool = False,
     ):
         self.model = model
         self.regime = TrainingRegime(regime)
+        if not isinstance(allow_sequence_backbone_finetuning, bool):
+            raise TypeError("allow_sequence_backbone_finetuning must be a boolean")
+        self.allow_sequence_backbone_finetuning = allow_sequence_backbone_finetuning
         if isinstance(dataset_manifest, Mapping):
             manifest_data = dict(dataset_manifest)
             self.dataset_manifest = json.dumps(
@@ -303,9 +326,18 @@ class CanonicalTrainer:
                 )
             if model._reference_policy is None:
                 model.init_dpo_reference()
-            selected = configure_trainable_components(model, self.regime)
+            selected = configure_trainable_components(
+                model,
+                self.regime,
+                allow_sequence_backbone_finetuning=self.allow_sequence_backbone_finetuning,
+            )
         else:
-            selected = configure_trainable_components(model, self.regime)
+            selected = configure_trainable_components(
+                model,
+                self.regime,
+                allow_sequence_backbone_finetuning=self.allow_sequence_backbone_finetuning,
+            )
+        self._regime_generation = model._training_regime_generation
         parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
         if not parameters:
             raise ValueError(f"training regime {self.regime.value} has no trainable parameters")
@@ -331,8 +363,22 @@ class CanonicalTrainer:
         self.scheduler = scheduler
         self.optimizer_class, self.optimizer_hash = _optimizer_fingerprint(optimizer, model)
         self.scheduler_class, self.scheduler_hash = _scheduler_fingerprint(scheduler)
-        self.trainable_components = selected
+        self.trainable_components = tuple(selected)
         self._resume_source_manifest: Optional[dict[str, Any]] = None
+
+    def _assert_current_regime(self) -> None:
+        """Reject stale trainers after another stage reconfigures the shared model."""
+        active_generation = getattr(self.model, "_training_regime_generation", None)
+        active_regime = getattr(self.model, "_active_training_regime", None)
+        if (
+            active_generation != self._regime_generation
+            or active_regime != self.regime.value
+        ):
+            raise RuntimeError(
+                f"stale CanonicalTrainer for regime {self.regime.value}; "
+                f"model is now configured for {active_regime!r}. "
+                "Create a new trainer for the active regime."
+            )
 
     @staticmethod
     def _default_bounds(count: int, length: int, batch_size: int, device: torch.device) -> torch.Tensor:
@@ -586,12 +632,22 @@ class CanonicalTrainer:
                 required.append("substrate_conditioner")
             return tuple(required)
         if self.regime == TrainingRegime.SEQUENCE:
-            return ("evoformer", "node_connector", "base_mpnn", "multi_scale_designer", "_seq_to_repr", "sequence_policy")
+            required = [
+                "node_connector",
+                "base_mpnn",
+                "multi_scale_designer",
+                "_seq_to_repr",
+                "sequence_policy",
+            ]
+            if self.allow_sequence_backbone_finetuning:
+                required.insert(0, "evoformer")
+            return tuple(required)
         if self.regime == TrainingRegime.OBJECTIVE:
             return ("objective_feature_encoder", "pareto_head")
         return ("sequence_policy",)
 
     def train_step(self, batch: CanonicalTrainingBatch) -> dict[str, Any]:
+        self._assert_current_regime()
         if self.regime == TrainingRegime.PREFERENCE:
             return self.train_preference_step(batch.preference_batch)
         self.model.train()
@@ -650,6 +706,7 @@ class CanonicalTrainer:
         validation_manifest: str | Mapping[str, Any],
         min_validation_examples: int | None = None,
     ) -> dict[str, Any]:
+        self._assert_current_regime()
         if self.regime == TrainingRegime.PREFERENCE:
             raise ValueError("preference-only validation cannot validate the base policy")
         if not self.dataset_manifest:
@@ -779,6 +836,7 @@ class CanonicalTrainer:
         return float(result["loss"])
 
     def train_preference_step(self, batch: Optional[DPOBatch]) -> dict[str, Any]:
+        self._assert_current_regime()
         if self.regime != TrainingRegime.PREFERENCE:
             raise ValueError("train_preference_step requires the preference regime")
         if batch is None:
@@ -871,6 +929,7 @@ class CanonicalTrainer:
         )
 
     def save_checkpoint(self, path: str | Path) -> None:
+        self._assert_current_regime()
         manifest = self._manifest()
         if not manifest.has_complete_provenance():
             raise ValueError("canonical checkpoints require complete, verified provenance")
@@ -882,6 +941,10 @@ class CanonicalTrainer:
             "manifest": asdict(manifest),
             "training": {
                 "regime": self.regime.value,
+                "trainable_components": list(self.trainable_components),
+                "allow_sequence_backbone_finetuning": (
+                    self.allow_sequence_backbone_finetuning
+                ),
                 "epoch": self.epoch,
                 "global_step": self.global_step,
                 "component_status": self.model.component_status,
@@ -906,6 +969,7 @@ class CanonicalTrainer:
         torch.save(payload, path)
 
     def resume(self, path: str | Path, *, migration_id: str | None = None) -> None:
+        self._assert_current_regime()
         payload = torch.load(path, map_location="cpu", weights_only=False)
         if isinstance(payload, dict) and payload.get("artifact_type") == "component_transfer_checkpoint":
             raise ValueError("component-transfer checkpoints cannot be resumed as canonical training state")
@@ -936,6 +1000,15 @@ class CanonicalTrainer:
             raise ValueError("checkpoint model state schema is incompatible")
         if actual.training_regime != self.regime.value or training["regime"] != self.regime.value:
             raise ValueError("checkpoint training regime does not match this trainer")
+        saved_policy = bool(training.get("allow_sequence_backbone_finetuning", False))
+        if saved_policy != self.allow_sequence_backbone_finetuning:
+            raise ValueError("checkpoint sequence-backbone policy does not match this trainer")
+        saved_components = training.get("trainable_components")
+        if (
+            saved_components is not None
+            and tuple(saved_components) != self.trainable_components
+        ):
+            raise ValueError("checkpoint trainable components do not match this trainer")
         if actual.random_seed != expected.random_seed:
             raise ValueError("checkpoint random seed does not match this trainer")
         self.model.load_state_dict(payload["model_state"], strict=True)
@@ -989,6 +1062,7 @@ class CanonicalTrainer:
         optimizer: Optional[torch.optim.Optimizer] = None,
         scheduler: Optional[Any] = None,
         migration_id: str | None = None,
+        allow_sequence_backbone_finetuning: bool | None = None,
     ) -> "CanonicalTrainer":
         """Construct a regime trainer and strictly restore a saved training state."""
         payload = torch.load(path, map_location="cpu", weights_only=False)
@@ -1018,6 +1092,10 @@ class CanonicalTrainer:
             for parameter in reference_policy.parameters():
                 parameter.requires_grad_(False)
             object.__setattr__(model, "_reference_policy", reference_policy)
+        if allow_sequence_backbone_finetuning is None:
+            allow_sequence_backbone_finetuning = bool(
+                training.get("allow_sequence_backbone_finetuning", False)
+            )
         trainer = cls(
             model,
             regime,
@@ -1025,6 +1103,7 @@ class CanonicalTrainer:
             weight_decay=weight_decay,
             optimizer=optimizer,
             scheduler=scheduler,
+            allow_sequence_backbone_finetuning=allow_sequence_backbone_finetuning,
             dataset_manifest=manifest.dataset_manifest,
             dataset_hash=manifest.dataset_hash,
             dataset_version=manifest.dataset_version,

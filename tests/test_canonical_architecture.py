@@ -780,10 +780,26 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
         source_t=source_t,
         target_sequence=torch.tensor(dataset_record["target_sequence"]).unsqueeze(0),
     )
+    evoformer_before = {
+        name: tensor.detach().clone()
+        for name, tensor in model.evoformer.state_dict().items()
+    }
     result = trainer.train_step(batch)
 
-    for component in ("evoformer", "node_connector", "base_mpnn", "multi_scale_designer", "_seq_to_repr", "sequence_policy"):
+    for component in (
+        "node_connector",
+        "base_mpnn",
+        "multi_scale_designer",
+        "_seq_to_repr",
+        "sequence_policy",
+    ):
         assert result["gradient_flow"]["components"][component]["gradient_parameters"] > 0
+    assert result["gradient_flow"]["components"]["evoformer"]["gradient_parameters"] == 0
+    assert all(not parameter.requires_grad for parameter in model.evoformer.parameters())
+    assert all(
+        torch.equal(evoformer_before[name], tensor)
+        for name, tensor in model.evoformer.state_dict().items()
+    )
     assert all(not p.requires_grad for p in model.flow_model.parameters())
     validation_loss = trainer.validate_sequence_policy([batch], validation_manifest="heldout-v1")
     assert torch.isfinite(torch.tensor(validation_loss))
@@ -1109,3 +1125,49 @@ def test_weight_downloaders_are_atomic():
     assert "& $chimera.Source models fetch $asset --cache-dir $WeightsDir" in ps1
     assert "tempfile.mkdtemp" in model_store
     assert "os.rename(staging, directory)" in model_store
+
+
+
+def test_sequence_stage_freezes_backbone_and_invalidates_previous_trainer():
+    from chimera.training import CanonicalTrainer, TrainingRegime
+
+    model = CHIMERAv2(
+        d_evo_single=32,
+        d_evo_pair=16,
+        d_se3=32,
+        d_pair_out=32,
+        d_mpnn=16,
+        n_flow_blocks=1,
+        n_domains=2,
+        n_modules=2,
+        n_mc_dropout=2,
+    )
+    flow_trainer = CanonicalTrainer(model, TrainingRegime.FLOW)
+    sequence_trainer = CanonicalTrainer(model, TrainingRegime.SEQUENCE)
+    assert sequence_trainer.trainable_components
+    assert all(not parameter.requires_grad for parameter in model.evoformer.parameters())
+    with pytest.raises(RuntimeError, match="stale CanonicalTrainer"):
+        flow_trainer.train_step(None)
+
+
+def test_sequence_backbone_finetuning_requires_explicit_opt_in():
+    from chimera.training import CanonicalTrainer, TrainingRegime
+
+    model = CHIMERAv2(
+        d_evo_single=32,
+        d_evo_pair=16,
+        d_se3=32,
+        d_pair_out=32,
+        d_mpnn=16,
+        n_flow_blocks=1,
+        n_domains=2,
+        n_modules=2,
+        n_mc_dropout=2,
+    )
+    trainer = CanonicalTrainer(
+        model,
+        TrainingRegime.SEQUENCE,
+        allow_sequence_backbone_finetuning=True,
+    )
+    assert "evoformer" in trainer.trainable_components
+    assert all(parameter.requires_grad for parameter in model.evoformer.parameters())

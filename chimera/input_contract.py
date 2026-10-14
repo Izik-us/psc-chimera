@@ -9,6 +9,7 @@ explicit before the neural model is allowed to run.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Any, Mapping
 
 import torch
@@ -143,14 +144,34 @@ class PreparedInferenceInputs:
     def length(self) -> int:
         return int(self.msa_tokens.shape[-1])
 
+    @staticmethod
+    def _tensor_identity(value: torch.Tensor | None) -> str | None:
+        if value is None:
+            return None
+        tensor = value.detach().cpu().contiguous()
+        digest = hashlib.sha256()
+        digest.update(str(tensor.dtype).encode("utf-8"))
+        digest.update(str(tuple(tensor.shape)).encode("utf-8"))
+        digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes())
+        return digest.hexdigest()
+
     @property
     def identity(self) -> str:
+        """Hash both preparation provenance and every tensor's actual contents."""
         payload = {
             "manifest": self.manifest.to_dict(),
-            "msa_shape": list(self.msa_tokens.shape),
-            "pair_shape": list(self.pair_features.shape),
-            "rotation_shape": list(self.source_rotations.shape),
-            "translation_shape": list(self.source_translations.shape),
+            "tensors": {
+                name: self._tensor_identity(getattr(self, name))
+                for name in (
+                    "msa_tokens",
+                    "pair_features",
+                    "source_rotations",
+                    "source_translations",
+                    "msa_padding_mask",
+                    "residue_mask",
+                    "residue_index",
+                )
+            },
         }
         return config_hash(payload)
 
@@ -182,6 +203,28 @@ def prepare_inference_inputs(
         residue_mask=residue_mask,
         residue_index=residue_index,
     )
+
+
+
+def test_prepared_input_identity_tracks_tensor_contents_not_only_shapes():
+    msa, pair, R, t = _inputs()
+    first = prepare_inference_inputs(
+        msa_tokens=msa,
+        pair_features=pair,
+        source_rotations=R,
+        source_translations=t,
+        manifest=_manifest(),
+    )
+    changed_pair = pair.clone()
+    changed_pair[0, 0, 0, 0] = 1.0
+    second = prepare_inference_inputs(
+        msa_tokens=msa,
+        pair_features=changed_pair,
+        source_rotations=R,
+        source_translations=t,
+        manifest=_manifest(),
+    )
+    assert first.identity != second.identity
 
 
 def build_inference_request(prepared: PreparedInferenceInputs, config, **kwargs):

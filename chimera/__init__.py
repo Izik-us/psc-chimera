@@ -73,6 +73,8 @@ from .input_contract import (
     build_inference_request,
     prepare_inference_inputs,
 )
+from .candidate_validation import validate_candidate
+from .composition_manifest import build_composition_manifest, write_composition_manifest
 from .objective_schema import (
     OBJECTIVE_SCHEMA,
     OBJECTIVE_SCHEMA_VERSION,
@@ -128,7 +130,8 @@ __all__ = [
     "CanonicalTrainingBatch", "CanonicalTrainer", "TrainingRegime", "ObjectiveLabelKind",
     "gradient_flow_report",
     "InferenceCandidate", "InferenceRequest", "InferenceResult",
-    "ValidationOptions", "run_inference",
+    "ValidationOptions", "run_inference", "validate_candidate",
+    "build_composition_manifest", "write_composition_manifest",
     "PreparedInputManifest", "PreparedInferenceInputs", "prepare_inference_inputs",
     "build_inference_request",
     "OBJECTIVE_SCHEMA", "OBJECTIVE_SCHEMA_VERSION", "objective_schema_hash",

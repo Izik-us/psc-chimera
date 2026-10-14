@@ -33,6 +33,7 @@ from .errors import (
 )
 from .domain_schema import NRPSConstraints
 from .objective_schema import OBJECTIVE_SCHEMA_VERSION, objective_schema_hash
+from .candidate_validation import validate_candidate
 
 
 OBJECTIVE_NAMES = (
@@ -232,6 +233,33 @@ class InferenceResult:
     approximate_components: tuple[str, ...]
     production_validated: bool
 
+    @property
+    def eligible_candidate_indices(self) -> tuple[int, ...]:
+        """Indices of candidates that passed all applicable computational gates."""
+        return tuple(
+            index
+            for index, row in enumerate(self.validation_results[: len(self.candidates)])
+            if row.get("eligible_for_ranking") is True
+        )
+
+    @property
+    def rejected_candidate_indices(self) -> tuple[int, ...]:
+        """Indices rejected by at least one required computational validation."""
+        return tuple(
+            index
+            for index, row in enumerate(self.validation_results[: len(self.candidates)])
+            if row.get("eligible_for_ranking") is False
+        )
+
+    @property
+    def rankable_evaluation_outputs(self) -> Mapping[str, tuple[float, ...]]:
+        """Scores filtered to candidates that passed applicable validation gates."""
+        indices = self.eligible_candidate_indices
+        return {
+            name: tuple(values[index] for index in indices if index < len(values))
+            for name, values in self.evaluation_outputs.items()
+        }
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "artifact_type": "canonical_inference_result",
@@ -246,6 +274,12 @@ class InferenceResult:
                 for candidate in self.candidates
             ],
             "validation_results": list(self.validation_results),
+            "eligible_candidate_indices": list(self.eligible_candidate_indices),
+            "rejected_candidate_indices": list(self.rejected_candidate_indices),
+            "rankable_evaluation_outputs": {
+                name: list(values)
+                for name, values in self.rankable_evaluation_outputs.items()
+            },
             "evaluation_outputs": {
                 name: list(values) for name, values in self.evaluation_outputs.items()
             },
@@ -681,22 +715,24 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
                         backbone_coordinates=backbone,
                         digest=candidate_digest.hexdigest(),
                     )
-                    if request.validation_options.geometry:
-                        validation = {
-                            "status": "VALIDATED",
-                            "valid": bool(geometry_valid[index]),
-                            "type": "canonical_backbone_geometry_sanity",
-                            "scientific_validation": "NOT ESTABLISHED",
-                            "metrics": geometry_metrics[index],
-                        }
-                    else:
-                        validation = {
-                            "status": "NOT_REQUESTED",
-                            "valid": None,
-                            "type": None,
-                            "scientific_validation": "NOT ESTABLISHED",
-                            "metrics": None,
-                        }
+                    validation = validate_candidate(
+                        sequence_tokens=sequence_tokens,
+                        backbone_coordinates=backbone,
+                        geometry_requested=request.validation_options.geometry,
+                        geometry_valid=(
+                            bool(geometry_valid[index])
+                            if request.validation_options.geometry
+                            and index < len(geometry_valid)
+                            else None
+                        ),
+                        geometry_metrics=(
+                            geometry_metrics[index]
+                            if request.validation_options.geometry
+                            and index < len(geometry_metrics)
+                            else None
+                        ),
+                        constraints=request.constraints,
+                    )
                     values = {
                         name: float(proxy_scores[index, objective_index])
                         for objective_index, name in enumerate(OBJECTIVE_NAMES)
