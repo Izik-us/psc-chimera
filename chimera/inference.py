@@ -37,6 +37,11 @@ from .objective_schema import OBJECTIVE_SCHEMA_VERSION, objective_schema_hash
 from .candidate_validation import validate_candidate
 from .input_contract import validate_rotation_frames
 from .composition_manifest import build_composition_manifest
+from .readiness_policy import (
+    READINESS_POLICIES,
+    apply_inference_readiness_policy,
+    exploratory_readiness_warning,
+)
 
 
 OBJECTIVE_NAMES = (
@@ -98,6 +103,7 @@ class InferenceRequest:
     residue_index: torch.Tensor | None = None
     prepared_input_manifest: Mapping[str, Any] | None = None
     prepared_input_identity: str | None = None
+    readiness_policy: str = "exploratory"
 
     def __post_init__(self) -> None:
         if not isinstance(self.config, InferenceConfig):
@@ -213,6 +219,10 @@ class InferenceRequest:
                 raise InputValidationError("substrate inputs must be finite floating-point tensors")
         if self.target_substrate not in _SUBSTRATE_TOKENS:
             raise InputValidationError(f"unsupported target_substrate {self.target_substrate!r}")
+        if self.readiness_policy not in READINESS_POLICIES:
+            raise InputValidationError(
+                f"readiness_policy must be one of {sorted(READINESS_POLICIES)}"
+            )
         if (self.prepared_input_manifest is None) != (self.prepared_input_identity is None):
             raise InputValidationError(
                 "prepared_input_manifest and prepared_input_identity must be supplied together"
@@ -684,11 +694,14 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
             "prepared-input manifest was not supplied; provenance records tensor contents "
             "and preprocessing_id but not upstream source/structure mapping metadata"
         )
-    readiness_before = model.inference_readiness()
-    if readiness_before["state"] != "TRAINED":
-        warnings_list.append(
-            f"model readiness is {readiness_before['state']}; this result is exploratory, not production-valid"
-        )
+    readiness_before = apply_inference_readiness_policy(
+        model.inference_readiness(),
+        allow_experimental=request.readiness_policy == "exploratory",
+        context="Canonical CHIMERA",
+    )
+    readiness_warning = exploratory_readiness_warning(readiness_before)
+    if readiness_warning is not None:
+        warnings_list.append(readiness_warning)
     if checkpoint_info["compatibility"] == "not-supplied":
         warnings_list.append(
             "no unified trained CHIMERA checkpoint was supplied; checkpoint identity is an unresolved reference"
@@ -701,6 +714,7 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
             "config": config.to_dict(),
             "input_sha256": input_digest,
             "num_candidates": request.num_candidates,
+            "readiness_policy": request.readiness_policy,
             "validation_options": {"geometry": request.validation_options.geometry},
         }
     )
@@ -888,6 +902,7 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
         model_state_sha256=model_state_sha256,
         inference_execution={
             "request_sha256": request_digest,
+            "readiness_policy": request.readiness_policy,
             "effective_seed": seed,
             "candidate_digest_set_sha256": result_hash,
             "candidate_count": len(candidates),
@@ -909,6 +924,7 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
             "sha256": config.config_id,
             "request_sha256": request_digest,
             "num_candidates": request.num_candidates,
+            "readiness_policy": request.readiness_policy,
         },
         "model": {
             "model_id": config.model_id,
