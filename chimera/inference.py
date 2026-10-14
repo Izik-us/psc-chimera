@@ -274,11 +274,26 @@ class InferenceResult:
         )
 
     @property
+    def rankable_candidate_indices_by_objective(
+        self,
+    ) -> Mapping[str, tuple[int, ...]]:
+        """Map each objective to eligible candidate indices with finite scores."""
+        eligible = self.eligible_candidate_indices
+        result: dict[str, tuple[int, ...]] = {}
+        for name, scores in self.evaluation_outputs.items():
+            result[name] = tuple(
+                index
+                for index in eligible
+                if index < len(scores) and math.isfinite(float(scores[index]))
+            )
+        return result
+
+    @property
     def rankable_evaluation_outputs(self) -> Mapping[str, tuple[float, ...]]:
-        """Scores filtered to candidates that passed applicable validation gates."""
-        indices = self.eligible_candidate_indices
+        """Scores aligned with rankable_candidate_indices_by_objective."""
+        indices_by_objective = self.rankable_candidate_indices_by_objective
         return {
-            name: tuple(values[index] for index in indices if index < len(values))
+            name: tuple(values[index] for index in indices_by_objective[name])
             for name, values in self.evaluation_outputs.items()
         }
 
@@ -299,11 +314,7 @@ class InferenceResult:
                 f"objective {objective!r} has {len(scores)} scores for "
                 f"{len(self.candidates)} candidates"
             )
-        eligible = [
-            index
-            for index in self.eligible_candidate_indices
-            if math.isfinite(float(scores[index]))
-        ]
+        eligible = self.rankable_candidate_indices_by_objective[objective]
         return tuple(
             sorted(eligible, key=lambda index: float(scores[index]), reverse=descending)
         )
@@ -324,6 +335,10 @@ class InferenceResult:
             "validation_results": list(self.validation_results),
             "eligible_candidate_indices": list(self.eligible_candidate_indices),
             "rejected_candidate_indices": list(self.rejected_candidate_indices),
+            "rankable_candidate_indices_by_objective": {
+                name: list(indices)
+                for name, indices in self.rankable_candidate_indices_by_objective.items()
+            },
             "rankable_evaluation_outputs": {
                 name: list(values)
                 for name, values in self.rankable_evaluation_outputs.items()

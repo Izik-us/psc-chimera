@@ -260,7 +260,8 @@
       ],
       "tests": [
         "tests/test_se3_invariance.py",
-        "tests/test_schrodinger_bridge_regressions.py"
+        "tests/test_schrodinger_bridge_regressions.py",
+        "tests/test_bridge_math_contracts.py"
       ],
       "verification": {
         "code_exists": true,
@@ -302,7 +303,8 @@
       "tests": [
         "tests/test_schrodinger_bridge_constraints.py",
         "tests/test_schrodinger_bridge_regressions.py",
-        "tests/test_se3_invariance.py"
+        "tests/test_se3_invariance.py",
+        "tests/test_bridge_math_contracts.py"
       ],
       "verification": {
         "code_exists": true,
