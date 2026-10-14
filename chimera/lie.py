@@ -96,7 +96,7 @@ def so3_right_jacobian(omega: torch.Tensor) -> torch.Tensor:
     eps = torch.finfo(omega.dtype).eps
     theta = theta2.clamp_min(eps).sqrt()
     theta2_safe = theta2.clamp_min(eps)
-    theta3_safe = (theta2 * theta2_safe).sqrt().clamp_min(eps)
+    theta3_safe = (theta * theta2_safe).clamp_min(eps)
     W = hat(omega)
     I = torch.eye(3, device=omega.device, dtype=omega.dtype)
     while I.ndim < W.ndim:
