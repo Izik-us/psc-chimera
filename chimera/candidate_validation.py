@@ -55,7 +55,51 @@ def validate_candidate(
     }
 
     fixed_sequence = getattr(constraints, "fixed_sequence", None)
-    if fixed_sequence is None:
+    fixed_mask = getattr(constraints, "fixed_mask", None)
+    if fixed_mask is not None:
+        if (
+            not torch.is_tensor(fixed_mask)
+            or fixed_mask.dtype != torch.bool
+            or fixed_mask.ndim not in {1, 2}
+        ):
+            checks["fixed_sequence_constraints"] = "FAIL"
+        else:
+            mask = fixed_mask
+            if mask.ndim == 2 and mask.shape[0] == 1:
+                mask = mask[0]
+            if mask.shape != (length,):
+                checks["fixed_sequence_constraints"] = "FAIL"
+            elif not tokens_ok:
+                checks["fixed_sequence_constraints"] = "FAIL"
+            elif fixed_sequence is None:
+                checks["fixed_sequence_constraints"] = (
+                    "FAIL" if bool(mask.any()) else "NOT_APPLICABLE"
+                )
+            elif not torch.is_tensor(fixed_sequence):
+                checks["fixed_sequence_constraints"] = "FAIL"
+            else:
+                expected = fixed_sequence.detach().to(
+                    device=sequence_tokens.device, dtype=torch.long
+                )
+                if expected.ndim == 2 and expected.shape[0] == 1:
+                    expected = expected[0]
+                if expected.shape != sequence_tokens.shape:
+                    checks["fixed_sequence_constraints"] = "FAIL"
+                else:
+                    values_valid = bool(torch.all((expected >= -1) & (expected < 20)))
+                    masked_values_defined = bool(torch.all(expected[mask] >= 0))
+                    fixed_positions_match = bool(
+                        torch.equal(
+                            sequence_tokens[mask].long(),
+                            expected[mask],
+                        )
+                    )
+                    checks["fixed_sequence_constraints"] = (
+                        "PASS"
+                        if values_valid and masked_values_defined and fixed_positions_match
+                        else "FAIL"
+                    )
+    elif fixed_sequence is None:
         checks["fixed_sequence_constraints"] = "NOT_APPLICABLE"
     elif not tokens_ok or not torch.is_tensor(fixed_sequence):
         checks["fixed_sequence_constraints"] = "FAIL"
@@ -68,22 +112,13 @@ def validate_candidate(
         if expected.shape != sequence_tokens.shape:
             checks["fixed_sequence_constraints"] = "FAIL"
         else:
-            sentinel_values_valid = bool(torch.all(expected >= -1))
+            sentinel_values_valid = bool(torch.all((expected >= -1) & (expected < 20)))
             fixed_positions = expected >= 0
-            specified_are_valid = sentinel_values_valid and bool(
-                torch.all(
-                    (expected[fixed_positions] >= 0)
-                    & (expected[fixed_positions] < 20)
-                )
-            )
             fixed_positions_match = bool(
-                torch.equal(
-                    sequence_tokens[fixed_positions].long(),
-                    expected[fixed_positions],
-                )
+                torch.equal(sequence_tokens[fixed_positions].long(), expected[fixed_positions])
             )
             checks["fixed_sequence_constraints"] = (
-                "PASS" if specified_are_valid and fixed_positions_match else "FAIL"
+                "PASS" if sentinel_values_valid and fixed_positions_match else "FAIL"
             )
 
     if geometry_requested:

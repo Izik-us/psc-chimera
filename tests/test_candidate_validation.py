@@ -134,3 +134,67 @@ def test_invalid_fixed_sequence_sentinel_is_rejected():
     )
     assert report["checks"]["fixed_sequence_constraints"] == "FAIL"
     assert report["eligible_for_ranking"] is False
+
+
+
+def test_masked_fixed_residue_without_expected_token_is_rejected():
+    tokens, coordinates = _valid_candidate()
+    report = validate_candidate(
+        sequence_tokens=tokens,
+        backbone_coordinates=coordinates,
+        geometry_requested=False,
+        geometry_valid=None,
+        constraints=SimpleNamespace(
+            fixed_mask=torch.tensor([[True, False, False]]),
+            fixed_sequence=None,
+        ),
+    )
+    assert report["checks"]["fixed_sequence_constraints"] == "FAIL"
+    assert report["eligible_for_ranking"] is False
+
+
+def test_fixed_mask_requires_exact_token_preservation_but_allows_free_positions():
+    tokens, coordinates = _valid_candidate()
+    good = validate_candidate(
+        sequence_tokens=tokens,
+        backbone_coordinates=coordinates,
+        geometry_requested=False,
+        geometry_valid=None,
+        constraints=SimpleNamespace(
+            fixed_mask=torch.tensor([[True, False, False]]),
+            fixed_sequence=torch.tensor([[1, 7, 8]]),
+        ),
+    )
+    assert good["checks"]["fixed_sequence_constraints"] == "PASS"
+    assert good["eligible_for_ranking"] is True
+
+    changed = tokens.clone()
+    changed[0] = 2
+    bad = validate_candidate(
+        sequence_tokens=changed,
+        backbone_coordinates=coordinates,
+        geometry_requested=False,
+        geometry_valid=None,
+        constraints=SimpleNamespace(
+            fixed_mask=torch.tensor([[True, False, False]]),
+            fixed_sequence=torch.tensor([[1, 7, 8]]),
+        ),
+    )
+    assert bad["checks"]["fixed_sequence_constraints"] == "FAIL"
+    assert bad["eligible_for_ranking"] is False
+
+
+def test_malformed_fixed_mask_is_rejected():
+    tokens, coordinates = _valid_candidate()
+    report = validate_candidate(
+        sequence_tokens=tokens,
+        backbone_coordinates=coordinates,
+        geometry_requested=False,
+        geometry_valid=None,
+        constraints=SimpleNamespace(
+            fixed_mask=torch.tensor([[True, False]]),
+            fixed_sequence=torch.tensor([[1, -1, -1]]),
+        ),
+    )
+    assert report["checks"]["fixed_sequence_constraints"] == "FAIL"
+    assert report["eligible_for_ranking"] is False
