@@ -10,7 +10,7 @@ from typing import Any, Mapping
 import torch
 
 from ._version import __version__
-from .checkpoint import config_hash, runtime_provenance
+from .checkpoint import config_hash, git_provenance, runtime_provenance
 from .objective_schema import OBJECTIVE_SCHEMA_VERSION, objective_schema_hash
 
 
@@ -52,6 +52,12 @@ def build_composition_manifest(
     if not hasattr(model, "model_configuration") or not hasattr(model, "state_dict"):
         raise TypeError("model must expose canonical model configuration and state")
 
+    if checkpoint_sha256 is not None and (
+        not isinstance(checkpoint_sha256, str)
+        or len(checkpoint_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in checkpoint_sha256)
+    ):
+        raise ValueError("checkpoint_sha256 must be a lowercase SHA-256 hex digest")
     prepared_identity = None
     if prepared_inputs is not None:
         input_manifest = getattr(prepared_inputs, "manifest", None)
@@ -90,10 +96,11 @@ def build_composition_manifest(
         else {}
     )
 
+    source_provenance = git_provenance(root.parent)
     manifest: dict[str, Any] = {
         "artifact_type": "chimera_composition_manifest",
         "schema_version": 1,
-        "software": {"version": __version__},
+        "software": {"version": __version__, "source": source_provenance},
         "objective_schema": {
             "version": OBJECTIVE_SCHEMA_VERSION,
             "sha256": objective_schema_hash(),

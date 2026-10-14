@@ -93,6 +93,8 @@ class InferenceRequest:
     msa_padding_mask: torch.Tensor | None = None
     residue_mask: torch.Tensor | None = None
     residue_index: torch.Tensor | None = None
+    prepared_input_manifest: Mapping[str, Any] | None = None
+    prepared_input_identity: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.config, InferenceConfig):
@@ -207,6 +209,23 @@ class InferenceRequest:
                 raise InputValidationError("substrate inputs must be finite floating-point tensors")
         if self.target_substrate not in _SUBSTRATE_TOKENS:
             raise InputValidationError(f"unsupported target_substrate {self.target_substrate!r}")
+        if (self.prepared_input_manifest is None) != (self.prepared_input_identity is None):
+            raise InputValidationError(
+                "prepared_input_manifest and prepared_input_identity must be supplied together"
+            )
+        if self.prepared_input_manifest is not None:
+            if not isinstance(self.prepared_input_manifest, Mapping):
+                raise InputValidationError("prepared_input_manifest must be a mapping")
+            identity = self.prepared_input_identity
+            if (
+                not isinstance(identity, str)
+                or len(identity) != 64
+                or any(character not in "0123456789abcdef" for character in identity)
+            ):
+                raise InputValidationError(
+                    "prepared_input_identity must be a lowercase SHA-256 hex digest"
+                )
+            object.__setattr__(self, "prepared_input_manifest", dict(self.prepared_input_manifest))
 
 
 @dataclass(frozen=True)
@@ -379,6 +398,8 @@ def _input_hash(request: InferenceRequest) -> str:
         "target_substrate",
         "substrate_coordinates",
         "substrate_types",
+        "prepared_input_manifest",
+        "prepared_input_identity",
     ):
         digest.update(name.encode())
         _hash_input_value(digest, getattr(request, name))
@@ -602,6 +623,11 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
         "The CHIMERA EvoFormer is an untrained-by-default AlphaFold-2 architectural replication, not an AlphaFold/OpenFold model or checkpoint; local ProteinMPNN-inspired sequence recovery is not native ProteinMPNN.",
         f"timeout_seconds={config.timeout_seconds} is checked between microbatches and cannot interrupt an active model kernel.",
     ]
+    if request.prepared_input_manifest is None:
+        warnings_list.append(
+            "prepared-input manifest was not supplied; provenance records tensor contents "
+            "and preprocessing_id but not upstream source/structure mapping metadata"
+        )
     readiness_before = model.inference_readiness()
     if readiness_before["state"] != "TRAINED":
         warnings_list.append(
@@ -806,6 +832,12 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
             "preprocessing_id": config.preprocessing_id,
             "preprocessing_identity_sha256": config_hash(
                 {"preprocessing_id": config.preprocessing_id}
+            ),
+            "prepared_input_identity": request.prepared_input_identity,
+            "prepared_input_manifest": (
+                dict(request.prepared_input_manifest)
+                if request.prepared_input_manifest is not None
+                else None
             ),
             "raw_inputs_stored": False,
         },

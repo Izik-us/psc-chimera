@@ -219,6 +219,11 @@ def build_inference_request(prepared: PreparedInferenceInputs, config, **kwargs)
         raise InputValidationError(
             "InferenceConfig.preprocessing_id does not match the prepared-input manifest"
         )
+    reserved = {"prepared_input_manifest", "prepared_input_identity"} & set(kwargs)
+    if reserved:
+        raise InputValidationError(
+            "prepared-input provenance fields are assigned by build_inference_request"
+        )
     return InferenceRequest(
         msa_tokens=prepared.msa_tokens,
         initial_pair_features=prepared.pair_features,
@@ -228,5 +233,7 @@ def build_inference_request(prepared: PreparedInferenceInputs, config, **kwargs)
         msa_padding_mask=prepared.msa_padding_mask,
         residue_mask=prepared.residue_mask,
         residue_index=prepared.residue_index,
+        prepared_input_manifest=prepared.manifest.to_dict(),
+        prepared_input_identity=prepared.identity,
         **kwargs,
     )
