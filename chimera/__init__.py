@@ -67,6 +67,12 @@ from .inference import (
     ValidationOptions,
     run_inference,
 )
+from .input_contract import (
+    PreparedInputManifest,
+    PreparedInferenceInputs,
+    build_inference_request,
+    prepare_inference_inputs,
+)
 from .objective_schema import (
     OBJECTIVE_SCHEMA,
     OBJECTIVE_SCHEMA_VERSION,
@@ -123,6 +129,8 @@ __all__ = [
     "gradient_flow_report",
     "InferenceCandidate", "InferenceRequest", "InferenceResult",
     "ValidationOptions", "run_inference",
+    "PreparedInputManifest", "PreparedInferenceInputs", "prepare_inference_inputs",
+    "build_inference_request",
     "OBJECTIVE_SCHEMA", "OBJECTIVE_SCHEMA_VERSION", "objective_schema_hash",
     "validate_objective_target", "PreProductionGateEvidence", "preproduction_readiness_report",
     "__version__", "InferenceConfig", "CONFIGURATION_SCHEMA_VERSION",
