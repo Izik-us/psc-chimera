@@ -393,7 +393,7 @@ def test_require_trained_readiness_policy_fails_closed_for_untrained_model():
     request = _request(readiness_policy="require_trained")
     with pytest.raises(
         RuntimeError,
-        match="Canonical CHIMERA is UNTRAINED; production inference requires trained components",
+        match="Canonical CHIMERA is UNINITIALIZED; production inference requires trained components",
     ):
         run_inference(model, request)
 
