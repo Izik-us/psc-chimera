@@ -96,3 +96,50 @@ def test_prepared_input_identity_tracks_tensor_contents_not_only_shapes():
     )
     assert first.identity != second.identity
 
+
+
+
+def test_request_preserves_prepared_manifest_and_content_identity():
+    msa, pair, R, t = _inputs()
+    manifest = _manifest()
+    prepared = prepare_inference_inputs(
+        msa_tokens=msa,
+        pair_features=pair,
+        source_rotations=R,
+        source_translations=t,
+        manifest=manifest,
+    )
+    config = InferenceConfig(
+        model_id="canonical-test",
+        artifact_id="artifact-test",
+        checkpoint_id="checkpoint-test",
+        preprocessing_id="prep-v1",
+        max_sequence_length=32,
+    )
+    request = build_inference_request(prepared, config)
+    assert request.prepared_input_manifest == manifest.to_dict()
+    assert request.prepared_input_identity == prepared.identity
+
+
+def test_request_builder_does_not_allow_overriding_prepared_identity():
+    msa, pair, R, t = _inputs()
+    prepared = prepare_inference_inputs(
+        msa_tokens=msa,
+        pair_features=pair,
+        source_rotations=R,
+        source_translations=t,
+        manifest=_manifest(),
+    )
+    config = InferenceConfig(
+        model_id="canonical-test",
+        artifact_id="artifact-test",
+        checkpoint_id="checkpoint-test",
+        preprocessing_id="prep-v1",
+        max_sequence_length=32,
+    )
+    with pytest.raises(InputValidationError, match="assigned by build_inference_request"):
+        build_inference_request(
+            prepared,
+            config,
+            prepared_input_identity="0" * 64,
+        )
