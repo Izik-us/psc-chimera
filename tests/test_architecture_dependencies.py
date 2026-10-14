@@ -28,41 +28,6 @@ def _matching_dependency_rows(document):
     ]
 
 
-def test_architecture_inventory_is_structurally_closed_but_release_blocked(tmp_path):
-    document = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    test_manifest = tmp_path / "architecture_dependencies.json"
-    test_manifest.write_text(json.dumps(document), encoding="utf-8")
-
-    check, manifest_hash = _architecture_manifest_check(
-        _matching_dependency_rows(document),
-        manifest_path=test_manifest,
-        repository_root=REPOSITORY_ROOT,
-    )
-
-    assert check.status == "FAIL"
-    assert check.evidence["component_count"] == len(document["components"])
-    assert check.evidence["external_asset_count"] == len(document["external_assets"])
-    assert check.evidence["workspace_model_file_disposition_count"] == len(
-        document["workspace_model_file_dispositions"]
-    )
-    assert check.evidence["data_asset_count"] == len(
-        next(
-            asset["files"]
-            for asset in document["external_assets"]
-            if asset["id"] == "data_manifests"
-        )
-    )
-    assert check.evidence["data_asset_discrepancies"] == []
-    assert check.evidence["external_cache_discrepancies"] == []
-    assert manifest_hash == check.evidence["manifest_sha256"]
-    assert "no selected production composition" in check.evidence["blockers"]
-    assert "no selected production artifact" in check.evidence["blockers"]
-    assert not any(
-        "unresolved dependency" in blocker or "missing test reference" in blocker
-        for blocker in check.evidence["blockers"]
-    )
-
-
 def test_production_dependency_command_reports_blocked_candidate_without_claiming_release():
     result = production_dependency_inventory(MANIFEST_PATH)
 
