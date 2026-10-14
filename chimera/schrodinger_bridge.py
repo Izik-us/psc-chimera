@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .lie import so3_exp, so3_log, relative_rotation
+from .lie import so3_exp, so3_log, relative_rotation, so3_right_jacobian
 
 
 class SchrodingerBridge(nn.Module):
@@ -202,14 +202,24 @@ class SE3SchrodingerBridge(nn.Module):
         for step in range(n_steps):
             tau = torch.full((B,), min(step * dt, 1.0 - 1e-4), device=R.device, dtype=x.dtype)
             vr, vt = self._call_drift(self.drift_model, R, x, tau, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn)
-            rot_increment = vr * dt
-            trans_increment = vt * dt
-            rot_increment = rot_increment + noise_scale * torch.randn(
+            # vr is supervised as a derivative in the source-relative chart
+            # omega = log(R0^T R), not as a right-trivialized group velocity.
+            # Convert the chart increment with J_r(omega) before applying the
+            # right-multiplicative SO(3) update. This remains a local-chart
+            # Brownian approximation, not an exact SO(3) heat-kernel process.
+            chart_rotation = relative_rotation(R0, R)
+            chart_increment = vr * dt
+            chart_increment = chart_increment + noise_scale * torch.randn(
                 vr.shape,
                 device=vr.device,
                 dtype=vr.dtype,
                 generator=generator,
             )
+            rot_increment = (
+                so3_right_jacobian(chart_rotation)
+                @ chart_increment.unsqueeze(-1)
+            ).squeeze(-1)
+            trans_increment = vt * dt
             trans_increment = trans_increment + noise_scale * torch.randn(
                 vt.shape,
                 device=vt.device,
