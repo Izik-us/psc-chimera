@@ -83,6 +83,37 @@ def so3_log(R: torch.Tensor) -> torch.Tensor:
     return torch.where(small.unsqueeze(-1), vee, result)
 
 
+def so3_right_jacobian(omega: torch.Tensor) -> torch.Tensor:
+    """Map a source-relative chart derivative to a right-trivialized SO(3) increment.
+
+    For R = R0 Exp(omega^), a small chart change d_omega corresponds to
+    R_new ~= R Exp((J_r(omega) d_omega)^). This Jacobian lets the local-chart
+    bridge sampler use the same rotational drift convention as bridge training.
+    """
+    if omega.shape[-1] != 3:
+        raise ValueError("omega must have final dimension 3")
+    theta2 = (omega * omega).sum(-1, keepdim=True)
+    eps = torch.finfo(omega.dtype).eps
+    theta = theta2.clamp_min(eps).sqrt()
+    theta2_safe = theta2.clamp_min(eps)
+    theta3_safe = (theta2 * theta2_safe).sqrt().clamp_min(eps)
+    W = hat(omega)
+    I = torch.eye(3, device=omega.device, dtype=omega.dtype)
+    while I.ndim < W.ndim:
+        I = I.unsqueeze(0)
+    a = torch.where(
+        theta2 < 1e-8,
+        0.5 - theta2 / 24.0 + theta2 * theta2 / 720.0,
+        (1.0 - torch.cos(theta)) / theta2_safe,
+    )
+    b = torch.where(
+        theta2 < 1e-8,
+        1.0 / 6.0 - theta2 / 120.0 + theta2 * theta2 / 5040.0,
+        (theta - torch.sin(theta)) / theta3_safe,
+    )
+    return I - a.unsqueeze(-1) * W + b.unsqueeze(-1) * (W @ W)
+
+
 def relative_rotation(R0: torch.Tensor, R1: torch.Tensor) -> torch.Tensor:
     """Return log(R0^T R1), the relative rotation in R0's tangent chart."""
     if R0.shape != R1.shape or R0.shape[-2:] != (3, 3):
@@ -90,4 +121,10 @@ def relative_rotation(R0: torch.Tensor, R1: torch.Tensor) -> torch.Tensor:
     return so3_log(R0.transpose(-1, -2) @ R1)
 
 
-__all__ = ["hat", "so3_exp", "so3_log", "relative_rotation"]
+__all__ = [
+    "hat",
+    "so3_exp",
+    "so3_log",
+    "so3_right_jacobian",
+    "relative_rotation",
+]

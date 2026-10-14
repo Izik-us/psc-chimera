@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from chimera.lie import so3_exp, so3_log
+from chimera.lie import relative_rotation, so3_exp, so3_log, so3_right_jacobian
 from chimera.schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 
 
@@ -110,3 +110,30 @@ def test_sampler_is_reproducible_with_explicit_local_generator():
     )
     assert torch.equal(first[0], second[0])
     assert torch.equal(first[1], second[1])
+
+
+
+@pytest.mark.parametrize("chart_angle", [0.1, 0.8, 1.6, 2.4])
+def test_right_jacobian_maps_chart_drift_to_group_increment(chart_angle):
+    axis = torch.tensor([0.3, -0.7, 0.2], dtype=torch.float64)
+    axis = axis / torch.linalg.vector_norm(axis)
+    omega = axis * chart_angle
+    chart_delta = torch.tensor([2e-6, -3e-6, 4e-6], dtype=torch.float64)
+    base = so3_exp(omega)
+    expected = so3_exp(omega + chart_delta)
+    group_increment = so3_right_jacobian(omega) @ chart_delta
+    actual = base @ so3_exp(group_increment)
+    assert torch.allclose(actual, expected, atol=2e-11, rtol=2e-11)
+    assert torch.allclose(
+        relative_rotation(base, actual),
+        group_increment,
+        atol=2e-11,
+        rtol=2e-11,
+    )
+
+
+def test_right_jacobian_is_identity_in_the_zero_angle_limit():
+    omega = torch.zeros(4, 3, dtype=torch.float64)
+    jacobian = so3_right_jacobian(omega)
+    identity = torch.eye(3, dtype=torch.float64).expand(4, 3, 3)
+    assert torch.allclose(jacobian, identity, atol=1e-12, rtol=1e-12)
