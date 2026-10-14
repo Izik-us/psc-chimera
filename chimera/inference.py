@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, fields, is_dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -278,6 +279,32 @@ class InferenceResult:
             name: tuple(values[index] for index in indices if index < len(values))
             for name, values in self.evaluation_outputs.items()
         }
+
+    def rank_candidates(
+        self,
+        objective: str,
+        *,
+        descending: bool = True,
+    ) -> tuple[int, ...]:
+        """Rank only validation-eligible candidates with finite objective scores."""
+        if objective not in self.evaluation_outputs:
+            raise KeyError(f"objective {objective!r} was not evaluated")
+        if not isinstance(descending, bool):
+            raise TypeError("descending must be a boolean")
+        scores = self.evaluation_outputs[objective]
+        if len(scores) != len(self.candidates):
+            raise ValueError(
+                f"objective {objective!r} has {len(scores)} scores for "
+                f"{len(self.candidates)} candidates"
+            )
+        eligible = [
+            index
+            for index in self.eligible_candidate_indices
+            if math.isfinite(float(scores[index]))
+        ]
+        return tuple(
+            sorted(eligible, key=lambda index: float(scores[index]), reverse=descending)
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
