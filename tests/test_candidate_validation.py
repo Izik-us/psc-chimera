@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import torch
 
 from chimera.candidate_validation import validate_candidate
+from chimera.inference import InferenceCandidate, InferenceResult
 
 
 def _valid_candidate():
@@ -76,3 +77,43 @@ def test_geometry_can_be_not_requested_without_misrepresenting_validation():
     assert report["status"] == "NOT_REQUESTED"
     assert report["valid"] is None
     assert report["eligible_for_ranking"] is True
+
+
+
+def test_inference_ranking_excludes_rejected_and_nonfinite_candidates():
+    candidates = tuple(
+        InferenceCandidate(
+            sequence="AAA",
+            sequence_tokens=torch.tensor([0, 0, 0]),
+            backbone_coordinates=torch.zeros(3, 4, 3),
+            digest=f"{index:064x}",
+        )
+        for index in range(4)
+    )
+    result = InferenceResult(
+        candidates=candidates,
+        validation_results=(
+            {"eligible_for_ranking": True},
+            {"eligible_for_ranking": False},
+            {"eligible_for_ranking": True},
+            {"eligible_for_ranking": True},
+        ),
+        evaluation_outputs={
+            "expression_efficiency": (0.4, 0.99, 0.8, float("nan"))
+        },
+        config_hash="a" * 64,
+        checkpoint_identity="test-checkpoint",
+        checkpoint_sha256=None,
+        checkpoint_compatibility="not-supplied",
+        random_seed=7,
+        provenance={},
+        warnings=(),
+        optional_backends={},
+        approximate_components=(),
+        production_validated=False,
+    )
+    assert result.rank_candidates("expression_efficiency") == (2, 0)
+    assert result.rank_candidates("expression_efficiency", descending=False) == (0, 2)
+    assert result.eligible_candidate_indices == (0, 2, 3)
+    with pytest.raises(KeyError, match="was not evaluated"):
+        result.rank_candidates("substrate_selectivity")
