@@ -46,7 +46,7 @@ def test_prepared_inputs_validate_so3_frames():
 def test_prepared_inputs_reject_non_rotation_frames():
     msa, pair, R, t = _inputs()
     R[:, 0, 0, 0] = 2.0
-    with pytest.raises(InputValidationError, match="SO\(3\)"):
+    with pytest.raises(InputValidationError, match=r"SO\(3\)"):
         prepare_inference_inputs(
             msa_tokens=msa,
             pair_features=pair,

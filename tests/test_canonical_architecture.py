@@ -319,7 +319,7 @@ def test_canonical_reports_unavailable_for_unaligned_structural_retrieval():
     )
     model.structural_retriever.build_index(
         torch.zeros(1, 16).numpy(),
-        [{"pocket_coords": torch.zeros(10, 3).tolist()}],
+        [{"pdb_id": "SYNTHETIC-TEST", "substrate": "test-only", "stachelhaus_code": "synthetic", "pocket_coords": torch.zeros(10, 3).tolist()}],
     )
     output = model(
         torch.randint(0, 23, (1, 2, 8)),
