@@ -49,6 +49,7 @@ from .schrodinger_bridge import SchrodingerBridge, SE3SchrodingerBridge
 from .autoregressive_policy import AutoregressiveSequencePolicy
 from .retrieval import StructuralRetriever
 from .sequence_design import MultiScaleNRPSDesigner
+from .readiness_policy import apply_inference_readiness_policy
 
 
 SUBSTRATE_TOKENS = {
@@ -594,13 +595,11 @@ class CanonicalCHIMERAv2(nn.Module):
         return record
 
     def require_inference_ready(self, *, allow_experimental: bool = False) -> dict:
-        readiness = self.inference_readiness()
-        if readiness["state"] != "TRAINED" and not allow_experimental:
-            raise RuntimeError(
-                f"Canonical CHIMERA is {readiness['state']}; production inference requires "
-                "trained components and calibrated objectives. Use explicit experimental mode to proceed."
-            )
-        return readiness
+        return apply_inference_readiness_policy(
+            self.inference_readiness(),
+            allow_experimental=allow_experimental,
+            context="Canonical CHIMERA",
+        )
 
     def count_frozen(self) -> int:
         return sum(parameter.numel() for parameter in self.parameters() if not parameter.requires_grad)

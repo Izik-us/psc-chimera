@@ -385,3 +385,22 @@ def test_inference_request_rejects_finite_nonrotation_frames():
     rotations[0, 0, 0, 0] = 2.0
     with pytest.raises(InputValidationError, match="SO\(3\)"):
         _request(source_rotations=rotations)
+
+
+
+def test_require_trained_readiness_policy_fails_closed_for_untrained_model():
+    model = _model()
+    request = _request(readiness_policy="require_trained")
+    with pytest.raises(
+        RuntimeError,
+        match="Canonical CHIMERA is UNTRAINED; production inference requires trained components",
+    ):
+        run_inference(model, request)
+
+
+def test_exploratory_readiness_policy_is_recorded_and_remains_nonproduction():
+    model = _model()
+    result = run_inference(model, _request(readiness_policy="exploratory"))
+    assert result.provenance["configuration"]["readiness_policy"] == "exploratory"
+    assert result.composition_manifest["inference_execution"]["readiness_policy"] == "exploratory"
+    assert result.production_validated is False
