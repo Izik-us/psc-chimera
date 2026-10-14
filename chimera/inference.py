@@ -35,6 +35,7 @@ from .errors import (
 from .domain_schema import NRPSConstraints
 from .objective_schema import OBJECTIVE_SCHEMA_VERSION, objective_schema_hash
 from .candidate_validation import validate_candidate
+from .input_contract import validate_rotation_frames
 
 
 OBJECTIVE_NAMES = (
@@ -151,6 +152,7 @@ class InferenceRequest:
             raise InputValidationError("source_rotations must have shape (1,L,3,3)")
         if self.source_translations.shape != (1, length, 3):
             raise InputValidationError("source_translations must have shape (1,L,3)")
+        validate_rotation_frames(self.source_rotations)
         if self.msa_padding_mask is not None and (
             not torch.is_tensor(self.msa_padding_mask)
             or self.msa_padding_mask.shape != self.msa_tokens.shape
