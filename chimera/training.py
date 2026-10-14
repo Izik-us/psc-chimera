@@ -71,6 +71,22 @@ def _optimizer_fingerprint(optimizer: torch.optim.Optimizer, model) -> tuple[str
     return payload["class"], config_hash(payload)
 
 
+def _module_state_fingerprint(module: torch.nn.Module) -> str:
+    """Content hash a module state, including buffers, for behavioral ownership checks."""
+    digest = hashlib.sha256()
+    for name, value in sorted(module.state_dict().items()):
+        if not torch.is_tensor(value):
+            raise TypeError(
+                f"module state {name!r} is not a tensor and cannot be fingerprinted"
+            )
+        tensor = value.detach().cpu().contiguous()
+        digest.update(name.encode("utf-8"))
+        digest.update(str(tensor.dtype).encode("utf-8"))
+        digest.update(json.dumps(list(tensor.shape), separators=(",", ":")).encode("utf-8"))
+        digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()
+
+
 def _scheduler_fingerprint(scheduler: Optional[Any]) -> tuple[str, str]:
     if scheduler is None:
         return "none", config_hash({"scheduler": "none"})
@@ -364,6 +380,14 @@ class CanonicalTrainer:
         self.optimizer_class, self.optimizer_hash = _optimizer_fingerprint(optimizer, model)
         self.scheduler_class, self.scheduler_hash = _scheduler_fingerprint(scheduler)
         self.trainable_components = tuple(selected)
+        self._frozen_backbone_fingerprint = (
+            _module_state_fingerprint(model.evoformer)
+            if (
+                self.regime == TrainingRegime.SEQUENCE
+                and not self.allow_sequence_backbone_finetuning
+            )
+            else None
+        )
         self._resume_source_manifest: Optional[dict[str, Any]] = None
 
     def _assert_current_regime(self) -> None:
@@ -379,6 +403,13 @@ class CanonicalTrainer:
                 f"model is now configured for {active_regime!r}. "
                 "Create a new trainer for the active regime."
             )
+        if self._frozen_backbone_fingerprint is not None:
+            current = _module_state_fingerprint(self.model.evoformer)
+            if current != self._frozen_backbone_fingerprint:
+                raise RuntimeError(
+                    "frozen EvoFormer fingerprint changed during the sequence stage; "
+                    "the stage must be restarted from an explicitly selected backbone checkpoint"
+                )
 
     @staticmethod
     def _default_bounds(count: int, length: int, batch_size: int, device: torch.device) -> torch.Tensor:
@@ -669,6 +700,7 @@ class CanonicalTrainer:
         if missing or nonfinite:
             raise RuntimeError(f"gradient contract failed; missing={missing}, nonfinite={nonfinite}")
         self.optimizer.step()
+        self._assert_current_regime()
         for name in self._required_gradient_components(batch):
             state = self.model.component_status[name]
             state["training_status"] = "in_progress"
@@ -945,6 +977,7 @@ class CanonicalTrainer:
                 "allow_sequence_backbone_finetuning": (
                     self.allow_sequence_backbone_finetuning
                 ),
+                "frozen_backbone_fingerprint": self._frozen_backbone_fingerprint,
                 "epoch": self.epoch,
                 "global_step": self.global_step,
                 "component_status": self.model.component_status,
@@ -1012,6 +1045,22 @@ class CanonicalTrainer:
         if actual.random_seed != expected.random_seed:
             raise ValueError("checkpoint random seed does not match this trainer")
         self.model.load_state_dict(payload["model_state"], strict=True)
+        if (
+            self.regime == TrainingRegime.SEQUENCE
+            and not self.allow_sequence_backbone_finetuning
+        ):
+            saved_fingerprint = training.get("frozen_backbone_fingerprint")
+            if not isinstance(saved_fingerprint, str) or not saved_fingerprint:
+                raise ValueError(
+                    "sequence checkpoint is missing its frozen EvoFormer identity; "
+                    "legacy checkpoint ownership is unverified"
+                )
+            actual_fingerprint = _module_state_fingerprint(self.model.evoformer)
+            if actual_fingerprint != saved_fingerprint:
+                raise ValueError(
+                    "checkpoint frozen EvoFormer identity does not match its model state"
+                )
+            self._frozen_backbone_fingerprint = actual_fingerprint
         self.optimizer.load_state_dict(payload["optimizer_state"])
         saved_scheduler = payload.get("scheduler_state")
         if (saved_scheduler is None) != (self.scheduler is None):
