@@ -116,5 +116,21 @@ def test_inference_ranking_excludes_rejected_and_nonfinite_candidates():
     assert result.rank_candidates("expression_efficiency") == (2, 0)
     assert result.rank_candidates("expression_efficiency", descending=False) == (0, 2)
     assert result.eligible_candidate_indices == (0, 2, 3)
+    assert result.rankable_candidate_indices_by_objective["expression_efficiency"] == (0, 2)
+    assert result.rankable_evaluation_outputs["expression_efficiency"] == (0.4, 0.8)
     with pytest.raises(KeyError, match="was not evaluated"):
         result.rank_candidates("substrate_selectivity")
+
+
+
+def test_invalid_fixed_sequence_sentinel_is_rejected():
+    tokens, coordinates = _valid_candidate()
+    report = validate_candidate(
+        sequence_tokens=tokens,
+        backbone_coordinates=coordinates,
+        geometry_requested=False,
+        geometry_valid=None,
+        constraints=SimpleNamespace(fixed_sequence=torch.tensor([[-2, -1, 3]])),
+    )
+    assert report["checks"]["fixed_sequence_constraints"] == "FAIL"
+    assert report["eligible_for_ranking"] is False
