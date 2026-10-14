@@ -68,8 +68,9 @@ def validate_candidate(
         if expected.shape != sequence_tokens.shape:
             checks["fixed_sequence_constraints"] = "FAIL"
         else:
+            sentinel_values_valid = bool(torch.all(expected >= -1))
             fixed_positions = expected >= 0
-            specified_are_valid = bool(
+            specified_are_valid = sentinel_values_valid and bool(
                 torch.all(
                     (expected[fixed_positions] >= 0)
                     & (expected[fixed_positions] < 20)

@@ -19,6 +19,29 @@ from .errors import InputValidationError
 
 
 @dataclass(frozen=True)
+def validate_rotation_frames(rotations: torch.Tensor, *, tolerance: float = 5e-3) -> None:
+    """Require finite, proper rotation matrices rather than shape-compatible tensors."""
+    if not torch.is_tensor(rotations) or rotations.ndim < 2 or rotations.shape[-2:] != (3, 3):
+        raise InputValidationError("source_rotations must end in (3,3)")
+    if not torch.is_floating_point(rotations) or not torch.isfinite(rotations).all():
+        raise InputValidationError("source_rotations must contain finite floating-point values")
+    check_dtype = torch.float64 if rotations.dtype == torch.float64 else torch.float32
+    value = rotations.detach().to(dtype=check_dtype)
+    identity = torch.eye(3, dtype=value.dtype, device=value.device).expand_as(value)
+    gram_error = torch.linalg.matrix_norm(
+        value.transpose(-1, -2) @ value - identity, dim=(-2, -1)
+    )
+    determinant = torch.linalg.det(value)
+    if torch.any(gram_error > tolerance) or torch.any(
+        torch.abs(determinant - 1.0) > tolerance
+    ):
+        raise InputValidationError(
+            "source_rotations must be numerically valid SO(3) frames "
+            "(orthogonality and determinant checks failed)"
+        )
+
+
+@dataclass(frozen=True)
 class PreparedInputManifest:
     """Identity of the upstream artifacts used to construct an inference request."""
 
@@ -125,16 +148,8 @@ class PreparedInferenceInputs:
         self._validate_frames()
 
     def _validate_frames(self) -> None:
-        """Check that source rotations are valid SO(3) matrices, not merely finite tensors."""
-        R = self.source_rotations
-        identity = torch.eye(3, dtype=R.dtype, device=R.device).expand_as(R)
-        gram_error = torch.linalg.matrix_norm(R.transpose(-1, -2) @ R - identity, dim=(-2, -1))
-        det = torch.linalg.det(R)
-        if torch.any(gram_error > 5e-3) or torch.any(torch.abs(det - 1.0) > 5e-3):
-            raise InputValidationError(
-                "source_rotations must be numerically valid SO(3) frames "
-                "(orthogonality and determinant checks failed)"
-            )
+        """Check that source rotations are proper SO(3) matrices."""
+        validate_rotation_frames(self.source_rotations)
 
     @property
     def batch_size(self) -> int:

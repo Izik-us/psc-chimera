@@ -365,3 +365,11 @@ def test_validation_can_be_explicitly_not_requested():
 
     assert all(row["status"] == "NOT_REQUESTED" for row in result.validation_results)
     assert result.as_evidence()["all_geometry_valid"] is None
+
+
+
+def test_inference_request_rejects_finite_nonrotation_frames():
+    rotations = torch.eye(3).reshape(1, 1, 3, 3).expand(1, 8, 3, 3).clone()
+    rotations[0, 0, 0, 0] = 2.0
+    with pytest.raises(InputValidationError, match="SO\(3\)"):
+        _request(source_rotations=rotations)
