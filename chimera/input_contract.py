@@ -18,7 +18,6 @@ from .checkpoint import config_hash
 from .errors import InputValidationError
 
 
-@dataclass(frozen=True)
 def validate_rotation_frames(rotations: torch.Tensor, *, tolerance: float = 5e-3) -> None:
     """Require finite, proper rotation matrices rather than shape-compatible tensors."""
     if not torch.is_tensor(rotations) or rotations.ndim < 2 or rotations.shape[-2:] != (3, 3):
