@@ -23,12 +23,15 @@
       "autoregressive_policy",
       "objective_prediction",
       "deterministic_objectives",
+      "candidate_validation",
       "structured_design_result"
     ],
     "retrieval": "OPTIONAL_DISABLED_BY_DEFAULT; enabled retrieval currently reports RAG_UNAVAILABLE",
     "codon_optimization": "PROXY_ONLY in architecture.forward; standalone ESM-backed codon workflow is optional",
     "native_models": "ESM-2 and ProteinMPNN native adapters are not the canonical CHIMERAv2 MSA/sequence-generation modules",
-    "readiness": "RESEARCH_ONLY_UNTRAINED; CanonicalCHIMERAv2.require_inference_ready rejects production design without validated component and objective evidence"
+    "readiness": "RESEARCH_ONLY_UNTRAINED; CanonicalCHIMERAv2.require_inference_ready rejects production design without validated component and objective evidence",
+    "preprocessing": "PREPARED_INPUT_CONTRACT_AVAILABLE; upstream raw-sequence MSA, pair-feature, and source-frame generation remains caller-owned",
+    "validation": "CANDIDATE_SANITY_GATE_INTEGRATED; geometry and sequence constraint checks are computational proxies, not folding or biological validation"
   },
   "status_vocabulary": [
     "NATIVE_VERIFIED",
@@ -48,29 +51,43 @@
   "components": [
     {
       "id": "input_contract",
-      "name": "MSA, pair-feature, source-frame, constraint input contract",
-      "source": "chimera/architecture.py",
-      "symbol": "CanonicalCHIMERAv2.forward",
+      "name": "Prepared input, tensor validation, and inference request contract",
+      "source": "chimera/input_contract.py; chimera/inference.py; chimera/architecture.py",
+      "symbol": "PreparedInputManifest; PreparedInferenceInputs; prepare_inference_inputs; build_inference_request; CanonicalCHIMERAv2.forward",
       "status": "INTEGRATED_NOT_VERIFIED",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["preprocessing_identity"],
+      "dependencies": [
+        "preprocessing_identity",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["model_constructor_arguments"],
-      "tests": ["tests/test_canonical_architecture.py"],
+      "configuration": [
+        "prepared-input schema v1",
+        "SO(3) tolerances",
+        "preprocessing_id",
+        "model tensor dimensions"
+      ],
+      "tests": [
+        "tests/test_input_contract.py",
+        "tests/test_inference_contract.py",
+        "tests/test_canonical_architecture.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
         "instantiated": true,
-        "runtime_assets_present": null,
-        "configuration_present": false,
-        "compatible": false,
+        "runtime_assets_present": true,
+        "configuration_present": true,
+        "compatible": true,
         "executed": true,
         "tested": true,
-        "identity_recorded": false,
+        "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "blockers": ["No authoritative preprocessing identity or public request schema is selected."]
+      "blockers": [
+        "Prepared inputs are validated and identified, but no authoritative pipeline creates the MSA, pair features, and source frames from raw sequence/domain annotations."
+      ]
     },
     {
       "id": "canonical_composition",
@@ -93,8 +110,12 @@
         "deterministic_objectives"
       ],
       "external_assets": [],
-      "configuration": ["model_constructor_arguments"],
-      "tests": ["tests/test_canonical_architecture.py"],
+      "configuration": [
+        "model_constructor_arguments"
+      ],
+      "tests": [
+        "tests/test_canonical_architecture.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -107,7 +128,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["All learned components are randomly initialized or lack validated training/calibration provenance."]
+      "blockers": [
+        "All learned components are randomly initialized or lack validated training/calibration provenance."
+      ]
     },
     {
       "id": "msa_backbone",
@@ -117,10 +140,20 @@
       "status": "VERIFIED_APPROXIMATION",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["pair_representation", "python_torch"],
+      "dependencies": [
+        "pair_representation",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["d_evo_single", "d_evo_pair", "n_blocks"],
-      "tests": ["tests/test_evoformer_masking.py", "tests/test_canonical_architecture.py"],
+      "configuration": [
+        "d_evo_single",
+        "d_evo_pair",
+        "n_blocks"
+      ],
+      "tests": [
+        "tests/test_evoformer_masking.py",
+        "tests/test_canonical_architecture.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -133,7 +166,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Local randomly initialized approximation; not native EvoFormer and no validated model checkpoint."]
+      "blockers": [
+        "Local randomly initialized approximation; not native EvoFormer and no validated model checkpoint."
+      ]
     },
     {
       "id": "pair_representation",
@@ -143,10 +178,18 @@
       "status": "LOCAL_VERIFIED",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["python_torch"],
+      "dependencies": [
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["d_evo_pair", "d_pair_out"],
-      "tests": ["tests/test_canonical_architecture.py", "tests/test_evoformer_masking.py"],
+      "configuration": [
+        "d_evo_pair",
+        "d_pair_out"
+      ],
+      "tests": [
+        "tests/test_canonical_architecture.py",
+        "tests/test_evoformer_masking.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -159,7 +202,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Parameters are not part of a selected, validated production checkpoint."]
+      "blockers": [
+        "Parameters are not part of a selected, validated production checkpoint."
+      ]
     },
     {
       "id": "conditioning_constraints",
@@ -169,10 +214,18 @@
       "status": "LOCAL_VERIFIED",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["python_torch"],
+      "dependencies": [
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["constraint tensor schemas", "substrate vocabulary"],
-      "tests": ["tests/test_canonical_architecture.py", "tests/test_architecture_contract.py"],
+      "configuration": [
+        "constraint tensor schemas",
+        "substrate vocabulary"
+      ],
+      "tests": [
+        "tests/test_canonical_architecture.py",
+        "tests/test_architecture_contract.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -185,7 +238,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Schema/config identities are not linked to a release artifact."]
+      "blockers": [
+        "Schema/config identities are not linked to a release artifact."
+      ]
     },
     {
       "id": "se3_geometry",
@@ -195,10 +250,18 @@
       "status": "LOCAL_VERIFIED",
       "scope": "candidate_inference_and_training",
       "required_by_candidate": true,
-      "dependencies": ["python_torch"],
+      "dependencies": [
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["N/CA/C/O atom order", "left/right relative-rotation convention"],
-      "tests": ["tests/test_se3_invariance.py", "tests/test_schrodinger_bridge_regressions.py"],
+      "configuration": [
+        "N/CA/C/O atom order",
+        "left/right relative-rotation convention"
+      ],
+      "tests": [
+        "tests/test_se3_invariance.py",
+        "tests/test_schrodinger_bridge_regressions.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -211,7 +274,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["No model artifact captures the exact geometry/configuration identity."]
+      "blockers": [
+        "No model artifact captures the exact geometry/configuration identity."
+      ]
     },
     {
       "id": "se3_bridge",
@@ -221,10 +286,24 @@
       "status": "VERIFIED_APPROXIMATION",
       "scope": "candidate_inference_and_training",
       "required_by_candidate": true,
-      "dependencies": ["se3_geometry", "python_torch", "python_einops"],
+      "dependencies": [
+        "se3_geometry",
+        "python_torch",
+        "python_einops"
+      ],
       "external_assets": [],
-      "configuration": ["diffusion", "sinkhorn iterations", "flow blocks", "sampler steps", "seed"],
-      "tests": ["tests/test_schrodinger_bridge_constraints.py", "tests/test_schrodinger_bridge_regressions.py", "tests/test_se3_invariance.py"],
+      "configuration": [
+        "diffusion",
+        "sinkhorn iterations",
+        "flow blocks",
+        "sampler steps",
+        "seed"
+      ],
+      "tests": [
+        "tests/test_schrodinger_bridge_constraints.py",
+        "tests/test_schrodinger_bridge_regressions.py",
+        "tests/test_se3_invariance.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -237,7 +316,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Local Schrödinger-bridge approximation; learned drift is untrained and not RFdiffusion."]
+      "blockers": [
+        "Local Schrödinger-bridge approximation; learned drift is untrained and not RFdiffusion."
+      ]
     },
     {
       "id": "structure_validation",
@@ -247,10 +328,18 @@
       "status": "LOCAL_VERIFIED",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["se3_geometry", "python_torch"],
+      "dependencies": [
+        "se3_geometry",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["backbone atom order and geometric thresholds"],
-      "tests": ["tests/test_structure_utils.py", "tests/test_canonical_architecture.py"],
+      "configuration": [
+        "backbone atom order and geometric thresholds"
+      ],
+      "tests": [
+        "tests/test_structure_utils.py",
+        "tests/test_canonical_architecture.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -263,7 +352,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Geometric sanity checks are not a molecular-mechanics or biological validation."]
+      "blockers": [
+        "Geometric sanity checks are not a molecular-mechanics or biological validation."
+      ]
     },
     {
       "id": "protein_graph",
@@ -273,10 +364,19 @@
       "status": "LOCAL_VERIFIED",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["se3_geometry", "python_torch"],
+      "dependencies": [
+        "se3_geometry",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["k_neighbors", "28-D edge feature contract"],
-      "tests": ["tests/test_proteinmpnn_constraints.py", "tests/test_canonical_architecture.py"],
+      "configuration": [
+        "k_neighbors",
+        "28-D edge feature contract"
+      ],
+      "tests": [
+        "tests/test_proteinmpnn_constraints.py",
+        "tests/test_canonical_architecture.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -289,7 +389,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Only synthetic/unit inputs are recorded; no trained production artifact uses this graph."]
+      "blockers": [
+        "Only synthetic/unit inputs are recorded; no trained production artifact uses this graph."
+      ]
     },
     {
       "id": "local_sequence_recovery",
@@ -299,10 +401,19 @@
       "status": "VERIFIED_APPROXIMATION",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["protein_graph", "python_torch"],
+      "dependencies": [
+        "protein_graph",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["node features", "28-D edges"],
-      "tests": ["tests/test_proteinmpnn_constraints.py", "tests/test_canonical_architecture.py"],
+      "configuration": [
+        "node features",
+        "28-D edges"
+      ],
+      "tests": [
+        "tests/test_proteinmpnn_constraints.py",
+        "tests/test_canonical_architecture.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -315,7 +426,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["This is a local approximation, not native ProteinMPNN; model weights are random."]
+      "blockers": [
+        "This is a local approximation, not native ProteinMPNN; model weights are random."
+      ]
     },
     {
       "id": "hierarchical_designer",
@@ -325,10 +438,21 @@
       "status": "INTEGRATED_NOT_VERIFIED",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["local_sequence_recovery", "conditioning_constraints", "python_torch"],
+      "dependencies": [
+        "local_sequence_recovery",
+        "conditioning_constraints",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["domain and module boundaries", "icosahedral face", "edge feature width"],
-      "tests": ["tests/test_canonical_architecture.py", "tests/test_proteinmpnn_constraints.py"],
+      "configuration": [
+        "domain and module boundaries",
+        "icosahedral face",
+        "edge feature width"
+      ],
+      "tests": [
+        "tests/test_canonical_architecture.py",
+        "tests/test_proteinmpnn_constraints.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -341,7 +465,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Trainable parameters have no validated production checkpoint."]
+      "blockers": [
+        "Trainable parameters have no validated production checkpoint."
+      ]
     },
     {
       "id": "autoregressive_policy",
@@ -351,10 +477,20 @@
       "status": "INTEGRATED_NOT_VERIFIED",
       "scope": "candidate_inference_and_training",
       "required_by_candidate": true,
-      "dependencies": ["hierarchical_designer", "python_torch"],
+      "dependencies": [
+        "hierarchical_designer",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["amino-acid vocabulary", "causal mask", "maximum sequence length"],
-      "tests": ["tests/test_canonical_autoregressive_policy.py", "tests/test_canonical_architecture.py"],
+      "configuration": [
+        "amino-acid vocabulary",
+        "causal mask",
+        "maximum sequence length"
+      ],
+      "tests": [
+        "tests/test_canonical_autoregressive_policy.py",
+        "tests/test_canonical_architecture.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -367,7 +503,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Randomly initialized; no trained policy or released checkpoint."]
+      "blockers": [
+        "Randomly initialized; no trained policy or released checkpoint."
+      ]
     },
     {
       "id": "objective_prediction",
@@ -377,10 +515,23 @@
       "status": "INTEGRATED_NOT_VERIFIED",
       "scope": "candidate_inference_and_training",
       "required_by_candidate": true,
-      "dependencies": ["autoregressive_policy", "structure_validation", "conditioning_constraints", "python_torch"],
+      "dependencies": [
+        "autoregressive_policy",
+        "structure_validation",
+        "conditioning_constraints",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["objective-schema-v2", "objective feature plan", "normalization and label kinds"],
-      "tests": ["tests/test_objective_contracts.py", "tests/test_canonical_architecture.py", "tests/test_scientific_contracts.py"],
+      "configuration": [
+        "objective-schema-v2",
+        "objective feature plan",
+        "normalization and label kinds"
+      ],
+      "tests": [
+        "tests/test_objective_contracts.py",
+        "tests/test_canonical_architecture.py",
+        "tests/test_scientific_contracts.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -393,7 +544,9 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Four learned objective predictors are untrained and uncalibrated; no validated label provenance."]
+      "blockers": [
+        "Four learned objective predictors are untrained and uncalibrated; no validated label provenance."
+      ]
     },
     {
       "id": "deterministic_objectives",
@@ -403,10 +556,21 @@
       "status": "LOCAL_VERIFIED",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["structure_validation", "se3_geometry", "python_torch"],
+      "dependencies": [
+        "structure_validation",
+        "se3_geometry",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["objective-schema-v2", "target GC interval", "optional target profile"],
-      "tests": ["tests/test_objective_contracts.py", "tests/test_structure_utils.py"],
+      "configuration": [
+        "objective-schema-v2",
+        "target GC interval",
+        "optional target profile"
+      ],
+      "tests": [
+        "tests/test_objective_contracts.py",
+        "tests/test_structure_utils.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -419,7 +583,9 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Outputs are deterministic proxies, not biological measurements."]
+      "blockers": [
+        "Outputs are deterministic proxies, not biological measurements."
+      ]
     },
     {
       "id": "uncertainty_optimization",
@@ -429,10 +595,21 @@
       "status": "RESEARCH_ONLY",
       "scope": "research_candidate",
       "required_by_candidate": false,
-      "dependencies": ["objective_prediction", "deterministic_objectives", "python_torch"],
+      "dependencies": [
+        "objective_prediction",
+        "deterministic_objectives",
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": ["objective weights", "historical best", "MC sample count"],
-      "tests": ["tests/test_probabilistic_optimization.py", "tests/test_objective_contracts.py"],
+      "configuration": [
+        "objective weights",
+        "historical best",
+        "MC sample count"
+      ],
+      "tests": [
+        "tests/test_probabilistic_optimization.py",
+        "tests/test_objective_contracts.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -445,7 +622,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Uncertainty and EI are conditional on validated calibrated surrogate heads, currently absent."]
+      "blockers": [
+        "Uncertainty and EI are conditional on validated calibrated surrogate heads, currently absent."
+      ]
     },
     {
       "id": "retrieval",
@@ -455,10 +634,20 @@
       "status": "UNAVAILABLE",
       "scope": "optional",
       "required_by_candidate": false,
-      "dependencies": ["python_faiss_cpu"],
-      "external_assets": ["retrieval_index"],
-      "configuration": ["retrieval identity", "shared encoder identity", "bounded K"],
-      "tests": ["tests/test_probabilistic_optimization.py"],
+      "dependencies": [
+        "python_faiss_cpu"
+      ],
+      "external_assets": [
+        "retrieval_index"
+      ],
+      "configuration": [
+        "retrieval identity",
+        "shared encoder identity",
+        "bounded K"
+      ],
+      "tests": [
+        "tests/test_probabilistic_optimization.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -471,7 +660,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["No compatible retrieval index/encoder provenance; the canonical forward path reports RAG_UNAVAILABLE."]
+      "blockers": [
+        "No compatible retrieval index/encoder provenance; the canonical forward path reports RAG_UNAVAILABLE."
+      ]
     },
     {
       "id": "codon_optimization",
@@ -481,10 +672,22 @@
       "status": "OPTIONAL",
       "scope": "optional_inference_workflow",
       "required_by_candidate": false,
-      "dependencies": ["native_esm2", "python_torch"],
-      "external_assets": ["esm2_t30_150m", "esm2_t30_150m_contact_regression"],
-      "configuration": ["amino-acid/codon vocabularies", "sequence-length limits"],
-      "tests": ["tests/test_codon_optimizer_training.py", "tests/test_native_model_smoke.py"],
+      "dependencies": [
+        "native_esm2",
+        "python_torch"
+      ],
+      "external_assets": [
+        "esm2_t30_150m",
+        "esm2_t30_150m_contact_regression"
+      ],
+      "configuration": [
+        "amino-acid/codon vocabularies",
+        "sequence-length limits"
+      ],
+      "tests": [
+        "tests/test_codon_optimizer_training.py",
+        "tests/test_native_model_smoke.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -497,7 +700,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Independent workflow; not the canonical CHIMERAv2 output path."]
+      "blockers": [
+        "Independent workflow; not the canonical CHIMERAv2 output path."
+      ]
     },
     {
       "id": "native_esm2",
@@ -507,10 +712,22 @@
       "status": "NATIVE_VERIFIED",
       "scope": "optional_inference_workflow",
       "required_by_candidate": false,
-      "dependencies": ["python_fair_esm", "python_torch"],
-      "external_assets": ["esm2_t30_150m", "esm2_t30_150m_contact_regression"],
-      "configuration": ["ESM-2 t30 150M UR50D", "30 layers", "640 embedding dimensions"],
-      "tests": ["tests/test_native_model_smoke.py"],
+      "dependencies": [
+        "python_fair_esm",
+        "python_torch"
+      ],
+      "external_assets": [
+        "esm2_t30_150m",
+        "esm2_t30_150m_contact_regression"
+      ],
+      "configuration": [
+        "ESM-2 t30 150M UR50D",
+        "30 layers",
+        "640 embedding dimensions"
+      ],
+      "tests": [
+        "tests/test_native_model_smoke.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -523,8 +740,13 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "artifact_ids": ["esm2-t30-150m-ur50d", "esm2-t30-150m-contact-regression"],
-      "blockers": ["Native smoke is a local cache record; upstream published checkpoint digest is not available."]
+      "artifact_ids": [
+        "esm2-t30-150m-ur50d",
+        "esm2-t30-150m-contact-regression"
+      ],
+      "blockers": [
+        "Native smoke is a local cache record; upstream published checkpoint digest is not available."
+      ]
     },
     {
       "id": "native_proteinmpnn",
@@ -534,10 +756,20 @@
       "status": "NATIVE_VERIFIED",
       "scope": "optional_adapter",
       "required_by_candidate": false,
-      "dependencies": ["python_torch", "proteinmpnn_source_checkout"],
-      "external_assets": ["proteinmpnn_v48_020"],
-      "configuration": ["upstream revision 8907e6671bfbfc92303b5f79c4b5e6ce47cdef57", "v_48_020"],
-      "tests": ["tests/test_native_model_smoke.py"],
+      "dependencies": [
+        "python_torch",
+        "proteinmpnn_source_checkout"
+      ],
+      "external_assets": [
+        "proteinmpnn_v48_020"
+      ],
+      "configuration": [
+        "upstream revision 8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
+        "v_48_020"
+      ],
+      "tests": [
+        "tests/test_native_model_smoke.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -550,8 +782,12 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "artifact_ids": ["proteinmpnn-v-48-020"],
-      "blockers": ["Not invoked by CanonicalCHIMERAv2; source checkout is an external cache dependency."]
+      "artifact_ids": [
+        "proteinmpnn-v-48-020"
+      ],
+      "blockers": [
+        "Not invoked by CanonicalCHIMERAv2; source checkout is an external cache dependency."
+      ]
     },
     {
       "id": "native_openfold",
@@ -561,10 +797,19 @@
       "status": "PRESENT_NOT_INTEGRATED",
       "scope": "optional_adapter",
       "required_by_candidate": false,
-      "dependencies": ["python_openfold_runtime", "openfold_runner"],
-      "external_assets": ["alphafold2_params_v23"],
-      "configuration": ["runner-specific checkpoint and representation conversion"],
-      "tests": ["tests/test_backends.py"],
+      "dependencies": [
+        "python_openfold_runtime",
+        "openfold_runner"
+      ],
+      "external_assets": [
+        "alphafold2_params_v23"
+      ],
+      "configuration": [
+        "runner-specific checkpoint and representation conversion"
+      ],
+      "tests": [
+        "tests/test_backends.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -577,7 +822,9 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Direct adapter raises BackendUnavailable; CLI boundary requires an external runner and has no native smoke."]
+      "blockers": [
+        "Direct adapter raises BackendUnavailable; CLI boundary requires an external runner and has no native smoke."
+      ]
     },
     {
       "id": "native_rfdiffusion",
@@ -587,10 +834,19 @@
       "status": "UNAVAILABLE",
       "scope": "optional_adapter",
       "required_by_candidate": false,
-      "dependencies": ["python_rfdiffusion_runtime", "rfdiffusion_source_checkout"],
-      "external_assets": ["rfdiffusion_base"],
-      "configuration": ["pinned runtime requires Python 3.9, PyTorch 1.9, CUDA 11.1, DGL CUDA 11.1"],
-      "tests": ["tests/test_backends.py"],
+      "dependencies": [
+        "python_rfdiffusion_runtime",
+        "rfdiffusion_source_checkout"
+      ],
+      "external_assets": [
+        "rfdiffusion_base"
+      ],
+      "configuration": [
+        "pinned runtime requires Python 3.9, PyTorch 1.9, CUDA 11.1, DGL CUDA 11.1"
+      ],
+      "tests": [
+        "tests/test_backends.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -603,8 +859,12 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "artifact_ids": ["rfdiffusion-base"],
-      "blockers": ["This host lacks the pinned CUDA/DGL runtime; the CHIMERA local SE(3) bridge is not RFdiffusion."]
+      "artifact_ids": [
+        "rfdiffusion-base"
+      ],
+      "blockers": [
+        "This host lacks the pinned CUDA/DGL runtime; the CHIMERA local SE(3) bridge is not RFdiffusion."
+      ]
     },
     {
       "id": "esmfold",
@@ -614,9 +874,16 @@
       "status": "MISSING",
       "scope": "optional",
       "required_by_candidate": false,
-      "dependencies": ["python_fair_esm", "python_torch"],
-      "external_assets": ["esmfold_v1"],
-      "configuration": ["ESMFold v1 3B"],
+      "dependencies": [
+        "python_fair_esm",
+        "python_torch"
+      ],
+      "external_assets": [
+        "esmfold_v1"
+      ],
+      "configuration": [
+        "ESMFold v1 3B"
+      ],
       "tests": [],
       "verification": {
         "code_exists": false,
@@ -630,8 +897,12 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "artifact_ids": ["esmfold-v1-3b"],
-      "blockers": ["Optional dependency not shown required by canonical composition; checkpoint is missing."]
+      "artifact_ids": [
+        "esmfold-v1-3b"
+      ],
+      "blockers": [
+        "Optional dependency not shown required by canonical composition; checkpoint is missing."
+      ]
     },
     {
       "id": "alphafold_parameters",
@@ -641,9 +912,15 @@
       "status": "INCOMPATIBLE",
       "scope": "research_only",
       "required_by_candidate": false,
-      "dependencies": ["python_torch"],
-      "external_assets": ["alphafold2_params_v23"],
-      "configuration": ["AlphaFold2 parameter archive format"],
+      "dependencies": [
+        "python_torch"
+      ],
+      "external_assets": [
+        "alphafold2_params_v23"
+      ],
+      "configuration": [
+        "AlphaFold2 parameter archive format"
+      ],
       "tests": [],
       "verification": {
         "code_exists": false,
@@ -657,8 +934,12 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "artifact_ids": ["alphafold2-params-2022-12-06"],
-      "blockers": ["Not a standalone EvoFormer checkpoint; native AF2/OpenFold inference was not attempted."]
+      "artifact_ids": [
+        "alphafold2-params-2022-12-06"
+      ],
+      "blockers": [
+        "Not a standalone EvoFormer checkpoint; native AF2/OpenFold inference was not attempted."
+      ]
     },
     {
       "id": "inference_config",
@@ -668,10 +949,16 @@
       "status": "PRESENT_NOT_INTEGRATED",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["objective_schema"],
+      "dependencies": [
+        "objective_schema"
+      ],
       "external_assets": [],
-      "configuration": ["configuration schema version 1"],
-      "tests": ["tests/test_inference_configuration.py"],
+      "configuration": [
+        "configuration schema version 1"
+      ],
+      "tests": [
+        "tests/test_inference_configuration.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -684,7 +971,9 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "blockers": ["CanonicalCHIMERAv2.design does not consume InferenceConfig."]
+      "blockers": [
+        "CanonicalCHIMERAv2.design does not consume InferenceConfig."
+      ]
     },
     {
       "id": "objective_schema",
@@ -696,8 +985,13 @@
       "required_by_candidate": true,
       "dependencies": [],
       "external_assets": [],
-      "configuration": ["objective-schema-v2"],
-      "tests": ["tests/test_objective_contracts.py", "tests/test_scientific_contracts.py"],
+      "configuration": [
+        "objective-schema-v2"
+      ],
+      "tests": [
+        "tests/test_objective_contracts.py",
+        "tests/test_scientific_contracts.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -710,7 +1004,9 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Schema hash is not bound to a production checkpoint/artifact."]
+      "blockers": [
+        "Schema hash is not bound to a production checkpoint/artifact."
+      ]
     },
     {
       "id": "checkpoint_provenance",
@@ -720,10 +1016,20 @@
       "status": "PRESENT_NOT_INTEGRATED",
       "scope": "training_and_candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["objective_schema", "inference_config", "training_data"],
+      "dependencies": [
+        "objective_schema",
+        "inference_config",
+        "training_data"
+      ],
       "external_assets": [],
-      "configuration": ["checkpoint format versions 1-4"],
-      "tests": ["tests/test_checkpoint_contract.py", "tests/test_provenance_contracts.py", "tests/test_split_and_resume_contracts.py"],
+      "configuration": [
+        "checkpoint format versions 1-4"
+      ],
+      "tests": [
+        "tests/test_checkpoint_contract.py",
+        "tests/test_provenance_contracts.py",
+        "tests/test_split_and_resume_contracts.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -736,33 +1042,46 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["No selected trained checkpoint or complete provenance chain exists."]
+      "blockers": [
+        "No selected trained checkpoint or complete provenance chain exists."
+      ]
     },
     {
       "id": "preprocessing_identity",
-      "name": "Production preprocessing and input feature provenance",
-      "source": "No selected preprocessing implementation/configuration",
-      "symbol": "No production preprocessing API",
-      "status": "MISSING",
+      "name": "Prepared-input identity and upstream preprocessing provenance",
+      "source": "chimera/input_contract.py; chimera/configuration.py",
+      "symbol": "PreparedInputManifest; PreparedInferenceInputs.identity; InferenceConfig.preprocessing_id",
+      "status": "PRESENT_NOT_INTEGRATED",
       "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": [],
+      "dependencies": [
+        "python_torch"
+      ],
       "external_assets": [],
-      "configuration": [],
-      "tests": [],
+      "configuration": [
+        "preprocessing_id",
+        "prepared-input manifest schema v1",
+        "tensor-content identity"
+      ],
+      "tests": [
+        "tests/test_input_contract.py",
+        "tests/test_composition_manifest.py"
+      ],
       "verification": {
-        "code_exists": false,
-        "imported": false,
-        "instantiated": false,
-        "runtime_assets_present": false,
-        "configuration_present": false,
-        "compatible": false,
-        "executed": false,
-        "tested": false,
-        "identity_recorded": false,
+        "code_exists": true,
+        "imported": true,
+        "instantiated": true,
+        "runtime_assets_present": true,
+        "configuration_present": true,
+        "compatible": true,
+        "executed": true,
+        "tested": true,
+        "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Caller supplies MSA tokens, pair features and source frames without an authoritative production preprocessing identity."]
+      "blockers": [
+        "Identity matching is implemented, but the identifier is caller-supplied and no selected raw-sequence preprocessing implementation produces these artifacts."
+      ]
     },
     {
       "id": "artifact_registry",
@@ -772,7 +1091,11 @@
       "status": "MISSING",
       "scope": "production_release",
       "required_by_candidate": true,
-      "dependencies": ["checkpoint_provenance", "inference_config", "preprocessing_identity"],
+      "dependencies": [
+        "checkpoint_provenance",
+        "inference_config",
+        "preprocessing_identity"
+      ],
       "external_assets": [],
       "configuration": [],
       "tests": [],
@@ -788,33 +1111,49 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Model store registers only external upstream files, not CHIMERA production artifacts."]
+      "blockers": [
+        "Model store registers only external upstream files, not CHIMERA production artifacts."
+      ]
     },
     {
       "id": "structured_design_result",
-      "name": "Stable public inference result, serialization and telemetry contract",
-      "source": "chimera/architecture.py",
-      "symbol": "CanonicalCHIMERAv2.design",
-      "status": "MISSING",
-      "scope": "production_inference",
+      "name": "Stable public inference result, serialization, validation, and provenance contract",
+      "source": "chimera/inference.py",
+      "symbol": "InferenceRequest; InferenceCandidate; InferenceResult; run_inference; InferenceResult.write_json",
+      "status": "INTEGRATED_NOT_VERIFIED",
+      "scope": "candidate_inference",
       "required_by_candidate": true,
-      "dependencies": ["canonical_composition", "objective_prediction", "artifact_registry"],
+      "dependencies": [
+        "canonical_composition",
+        "objective_prediction",
+        "candidate_validation",
+        "artifact_registry"
+      ],
       "external_assets": [],
-      "configuration": [],
-      "tests": ["tests/test_canonical_architecture.py"],
+      "configuration": [
+        "inference configuration schema v1",
+        "result schema canonical-inference-result-v1",
+        "candidate validation disposition"
+      ],
+      "tests": [
+        "tests/test_inference_contract.py",
+        "tests/test_canonical_architecture.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
         "instantiated": true,
-        "runtime_assets_present": false,
-        "configuration_present": false,
-        "compatible": false,
+        "runtime_assets_present": true,
+        "configuration_present": true,
+        "compatible": true,
         "executed": true,
         "tested": true,
-        "identity_recorded": false,
+        "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Legacy design returns an ad-hoc mapping; no artifact-resolving public production inference/result API."]
+      "blockers": [
+        "The public result contract is tested, but no selected production checkpoint or artifact registry makes a released model composition resolvable."
+      ]
     },
     {
       "id": "training_data",
@@ -824,10 +1163,21 @@
       "status": "TRAINING_ONLY",
       "scope": "training",
       "required_by_candidate": false,
-      "dependencies": ["python_torch", "python_numpy", "python_biopython"],
-      "external_assets": ["data_manifests"],
-      "configuration": ["dataset/split manifests"],
-      "tests": ["tests/test_dataset_contracts.py", "tests/test_split_and_resume_contracts.py"],
+      "dependencies": [
+        "python_torch",
+        "python_numpy",
+        "python_biopython"
+      ],
+      "external_assets": [
+        "data_manifests"
+      ],
+      "configuration": [
+        "dataset/split manifests"
+      ],
+      "tests": [
+        "tests/test_dataset_contracts.py",
+        "tests/test_split_and_resume_contracts.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -840,7 +1190,9 @@
         "identity_recorded": true,
         "represented_in_production_artifact": false
       },
-      "blockers": ["No training run/checkpoint links a selected dataset and held-out validation to a production model."]
+      "blockers": [
+        "No training run/checkpoint links a selected dataset and held-out validation to a production model."
+      ]
     },
     {
       "id": "legacy_implementations",
@@ -853,7 +1205,10 @@
       "dependencies": [],
       "external_assets": [],
       "configuration": [],
-      "tests": ["tests/test_canonical_architecture.py", "tests/test_chimera_v2.py"],
+      "tests": [
+        "tests/test_canonical_architecture.py",
+        "tests/test_chimera_v2.py"
+      ],
       "verification": {
         "code_exists": true,
         "imported": true,
@@ -866,7 +1221,88 @@
         "identity_recorded": false,
         "represented_in_production_artifact": false
       },
-      "blockers": ["Not part of the public canonical composition; must not be used to claim production capability."]
+      "blockers": [
+        "Not part of the public canonical composition; must not be used to claim production capability."
+      ]
+    },
+    {
+      "id": "candidate_validation",
+      "name": "Candidate sequence/coordinate validation and ranking eligibility gate",
+      "source": "chimera/candidate_validation.py; chimera/inference.py",
+      "symbol": "validate_candidate; InferenceResult.eligible_candidate_indices; InferenceResult.rankable_evaluation_outputs",
+      "status": "LOCAL_VERIFIED",
+      "scope": "candidate_inference",
+      "required_by_candidate": true,
+      "dependencies": [
+        "structure_validation",
+        "autoregressive_policy",
+        "python_torch"
+      ],
+      "external_assets": [],
+      "configuration": [
+        "amino-acid token range",
+        "backbone N/CA/C/O coordinate shape",
+        "geometry validation policy",
+        "fixed-sequence constraints"
+      ],
+      "tests": [
+        "tests/test_candidate_validation.py",
+        "tests/test_inference_contract.py"
+      ],
+      "verification": {
+        "code_exists": true,
+        "imported": true,
+        "instantiated": true,
+        "runtime_assets_present": true,
+        "configuration_present": true,
+        "compatible": true,
+        "executed": true,
+        "tested": true,
+        "identity_recorded": true,
+        "represented_in_production_artifact": false
+      },
+      "blockers": []
+    },
+    {
+      "id": "composition_manifest",
+      "name": "Content-addressed research composition manifest",
+      "source": "chimera/composition_manifest.py",
+      "symbol": "build_composition_manifest; write_composition_manifest",
+      "status": "PRESENT_NOT_INTEGRATED",
+      "scope": "optional_release_evidence",
+      "required_by_candidate": false,
+      "dependencies": [
+        "canonical_composition",
+        "input_contract",
+        "checkpoint_provenance",
+        "structured_design_result",
+        "objective_schema",
+        "python_torch"
+      ],
+      "external_assets": [],
+      "configuration": [
+        "composition manifest schema v1",
+        "canonical inference configuration",
+        "dependency inventory identity"
+      ],
+      "tests": [
+        "tests/test_composition_manifest.py"
+      ],
+      "verification": {
+        "code_exists": true,
+        "imported": true,
+        "instantiated": true,
+        "runtime_assets_present": true,
+        "configuration_present": true,
+        "compatible": true,
+        "executed": true,
+        "tested": true,
+        "identity_recorded": true,
+        "represented_in_production_artifact": false
+      },
+      "blockers": [
+        "Manifest creation is an explicit caller action; each inference result does not yet automatically emit or reference a composition manifest."
+      ]
     }
   ],
   "external_assets": [
@@ -1406,16 +1842,17 @@
       "checkpoint_provenance",
       "preprocessing_identity",
       "artifact_registry",
-      "structured_design_result"
+      "structured_design_result",
+      "candidate_validation"
     ],
     "blockers": [
       "No selected trained and validated CHIMERA checkpoint.",
       "No production composition/artifact or independently resolvable artifact registry.",
-      "InferenceConfig is not consumed by the canonical design path.",
-      "No authoritative production preprocessing/input identity.",
+      "InferenceConfig is consumed by the public run_inference wrapper but not directly by CanonicalCHIMERAv2.design.",
+      "A prepared-input identity contract exists, but no authoritative pipeline generates MSA, pair features, and source frames from raw sequence/domain annotations.",
       "No complete checkpoint-to-data/config/source/dependency provenance chain.",
-      "No stable public structured inference result and serialization contract.",
-      "No end-to-end inference or deterministic production smoke."
+      "A stable public result contract exists, but no selected production checkpoint or artifact registry makes a released model composition resolvable.",
+      "No clean-install smoke runs a selected validated checkpoint through the authoritative production preprocessing, generation, validation, and release path."
     ]
   }
 }
