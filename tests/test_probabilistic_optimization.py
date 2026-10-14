@@ -101,7 +101,12 @@ def test_structural_retriever_handles_empty_and_bounded_k():
     for database_size, expected_k in ((1, 1), (5, 5), (10, 5)):
         embeddings = torch.arange(database_size * 4, dtype=torch.float32).reshape(database_size, 4)
         metadata = [
-            {"pocket_coords": torch.full((10, 3), float(index)).tolist()}
+            {
+                "pdb_id": f"SYNTHETIC-TEST-{index}",
+                "substrate": "test-only",
+                "stachelhaus_code": "synthetic",
+                "pocket_coords": torch.full((10, 3), float(index)).tolist(),
+            }
             for index in range(database_size)
         ]
         retriever.build_index(embeddings.numpy(), metadata)
@@ -128,7 +133,7 @@ def test_structural_retriever_forward_fails_closed_without_index_alignment():
 
     retriever.build_index(
         torch.zeros(1, 4).numpy(),
-        [{"pocket_coords": torch.zeros(10, 3).tolist()}],
+        [{"pdb_id": "SYNTHETIC-TEST", "substrate": "test-only", "stachelhaus_code": "synthetic", "pocket_coords": torch.zeros(10, 3).tolist()}],
     )
-    with pytest.raises(RuntimeError, match="query encoder is not trained"):
+    with pytest.raises(RuntimeError, match="aligned query embedding"):
         retriever(design, substrate)
