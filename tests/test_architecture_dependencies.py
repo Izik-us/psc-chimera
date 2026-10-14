@@ -37,7 +37,7 @@ def test_production_dependency_command_reports_blocked_candidate_without_claimin
     assert result["candidate_composition"]["composition_id"] == (
         "canonical-chimerav2-research-candidate"
     )
-    assert len(result["candidate_composition"]["required_components"]) == 20
+    assert len(result["candidate_composition"]["required_components"]) == 21
     assert len(result["candidate_composition"]["required_runtime_dependencies"]) == 4
     assert "No selected trained and validated CHIMERA checkpoint." in result["blockers"]
 
