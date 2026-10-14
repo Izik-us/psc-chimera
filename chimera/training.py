@@ -403,6 +403,7 @@ class CanonicalTrainer:
                 f"model is now configured for {active_regime!r}. "
                 "Create a new trainer for the active regime."
             )
+
     def _assert_frozen_backbone_integrity(self) -> None:
         """Audit the frozen representation at validation/checkpoint boundaries."""
         if self._frozen_backbone_fingerprint is None:
