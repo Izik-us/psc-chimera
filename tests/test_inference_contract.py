@@ -231,6 +231,16 @@ def test_inference_preserves_caller_rng_and_reports_proxy_validation():
     assert after_numpy_state[2:] == numpy_state[2:]
     assert torch.equal(torch.get_rng_state(), torch_state)
     assert result.validation_results[0]["type"] == "canonical_backbone_geometry_sanity"
+    assert result.composition_manifest is not None
+    assert result.composition_manifest["release_decision"]["status"] == "RESEARCH_ONLY"
+    assert result.composition_manifest["release_decision"]["production_eligible"] is False
+    assert result.composition_manifest["composition"]["model_state_sha256"] == (
+        result.provenance["model"]["model_weights_sha256"]
+    )
+    assert (
+        result.provenance["composition_manifest_sha256"]
+        == result.composition_manifest["composition_sha256"]
+    )
     assert result.optional_backends["retrieval"] == "requested_but_unavailable"
     assert result.provenance["inputs"]["sha256"]
     assert result.provenance["runtime"]["torch_version"]
@@ -365,6 +375,8 @@ def test_validation_can_be_explicitly_not_requested():
 
     assert all(row["status"] == "NOT_REQUESTED" for row in result.validation_results)
     assert result.as_evidence()["all_geometry_valid"] is None
+    assert result.composition_manifest is not None
+    assert result.composition_manifest["validation"]["policy"]["geometry"] is False
 
 
 

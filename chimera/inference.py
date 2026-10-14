@@ -36,6 +36,7 @@ from .domain_schema import NRPSConstraints
 from .objective_schema import OBJECTIVE_SCHEMA_VERSION, objective_schema_hash
 from .candidate_validation import validate_candidate
 from .input_contract import validate_rotation_frames
+from .composition_manifest import build_composition_manifest
 
 
 OBJECTIVE_NAMES = (
@@ -254,6 +255,7 @@ class InferenceResult:
     optional_backends: Mapping[str, str]
     approximate_components: tuple[str, ...]
     production_validated: bool
+    composition_manifest: Mapping[str, Any] | None = None
 
     @property
     def eligible_candidate_indices(self) -> tuple[int, ...]:
@@ -356,6 +358,11 @@ class InferenceResult:
             "optional_backends": dict(self.optional_backends),
             "approximate_components": list(self.approximate_components),
             "production_validated": self.production_validated,
+            "composition_manifest": (
+                dict(self.composition_manifest)
+                if self.composition_manifest is not None
+                else None
+            ),
         }
 
     def write_json(self, path: str | Path) -> str:
@@ -394,6 +401,11 @@ class InferenceResult:
             ),
             "production_validated": self.production_validated,
             "scientific_validation": "NOT ESTABLISHED",
+            "composition_manifest_sha256": (
+                self.composition_manifest.get("composition_sha256")
+                if self.composition_manifest is not None
+                else None
+            ),
             "optional_backends": dict(self.optional_backends),
         }
 
@@ -843,6 +855,48 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
     git = git_provenance(Path(__file__).resolve().parents[1])
     readiness = model.inference_readiness()
     production_validated = False
+    model_state_sha256 = _state_dict_sha256(model.state_dict())
+    optional_backends = {
+        "native_proteinmpnn": "not_used",
+        "rfdiffusion": "not_used",
+        "openfold": "not_used",
+        "esmfold": "not_used",
+        "retrieval": "requested_but_unavailable" if retrieval_warning else "not_requested",
+    }
+    validation_summary = {
+        "candidate_count": len(candidates),
+        "eligible_candidate_indices": [
+            index for index, row in enumerate(validations)
+            if row.get("eligible_for_ranking") is True
+        ],
+        "rejected_candidate_indices": [
+            index for index, row in enumerate(validations)
+            if row.get("eligible_for_ranking") is False
+        ],
+        "validation_status_counts": {
+            status: sum(row.get("status") == status for row in validations)
+            for status in sorted({row.get("status") for row in validations})
+        },
+        "experimental_validation": "NOT ESTABLISHED",
+    }
+    composition_manifest = build_composition_manifest(
+        model,
+        config,
+        prepared_input_manifest=request.prepared_input_manifest,
+        prepared_input_identity=request.prepared_input_identity,
+        checkpoint_sha256=checkpoint_info["sha256"],
+        model_state_sha256=model_state_sha256,
+        inference_execution={
+            "request_sha256": request_digest,
+            "effective_seed": seed,
+            "candidate_digest_set_sha256": result_hash,
+            "candidate_count": len(candidates),
+            "requested_objectives": list(config.objective_set),
+        },
+        validation_policy={"geometry": request.validation_options.geometry},
+        validation_evidence=validation_summary,
+        optional_backends=optional_backends,
+    )
     provenance = {
         "schema": "chimera-inference-provenance-v1",
         "software": {
@@ -860,7 +914,7 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
             "model_id": config.model_id,
             "artifact_id": config.artifact_id,
             "architecture_config_sha256": config_hash(model.model_configuration()),
-            "model_weights_sha256": _state_dict_sha256(model.state_dict()),
+            "model_weights_sha256": model_state_sha256,
             "checkpoint_id": checkpoint_identity,
             "checkpoint_sha256": checkpoint_info["sha256"],
             "checkpoint_kind": checkpoint_info["kind"],
@@ -936,6 +990,7 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
             },
         },
         "result_sha256": result_hash,
+        "composition_manifest_sha256": composition_manifest["composition_sha256"],
         "production_evidence": {
             "inference_executed": True,
             "checkpoint_provenance_complete": checkpoint_info["compatibility"]
@@ -944,13 +999,6 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
             "production_validated": False,
             "release_gate_decision": "not evaluated; production gate remains authoritative",
         },
-    }
-    optional_backends = {
-        "native_proteinmpnn": "not_used",
-        "rfdiffusion": "not_used",
-        "openfold": "not_used",
-        "esmfold": "not_used",
-        "retrieval": "requested_but_unavailable" if retrieval_warning else "not_requested",
     }
     return InferenceResult(
         candidates=candidates,
@@ -966,6 +1014,7 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
         optional_backends=optional_backends,
         approximate_components=tuple(provenance["components"]["approximate_components_used"]),
         production_validated=production_validated,
+        composition_manifest=composition_manifest,
     )
 
 
