@@ -403,13 +403,16 @@ class CanonicalTrainer:
                 f"model is now configured for {active_regime!r}. "
                 "Create a new trainer for the active regime."
             )
-        if self._frozen_backbone_fingerprint is not None:
-            current = _module_state_fingerprint(self.model.evoformer)
-            if current != self._frozen_backbone_fingerprint:
-                raise RuntimeError(
-                    "frozen EvoFormer fingerprint changed during the sequence stage; "
-                    "the stage must be restarted from an explicitly selected backbone checkpoint"
-                )
+    def _assert_frozen_backbone_integrity(self) -> None:
+        """Audit the frozen representation at validation/checkpoint boundaries."""
+        if self._frozen_backbone_fingerprint is None:
+            return
+        current = _module_state_fingerprint(self.model.evoformer)
+        if current != self._frozen_backbone_fingerprint:
+            raise RuntimeError(
+                "frozen EvoFormer fingerprint changed during the sequence stage; "
+                "the stage must be restarted from an explicitly selected backbone checkpoint"
+            )
 
     @staticmethod
     def _default_bounds(count: int, length: int, batch_size: int, device: torch.device) -> torch.Tensor:
@@ -700,7 +703,6 @@ class CanonicalTrainer:
         if missing or nonfinite:
             raise RuntimeError(f"gradient contract failed; missing={missing}, nonfinite={nonfinite}")
         self.optimizer.step()
-        self._assert_current_regime()
         for name in self._required_gradient_components(batch):
             state = self.model.component_status[name]
             state["training_status"] = "in_progress"
@@ -739,6 +741,7 @@ class CanonicalTrainer:
         min_validation_examples: int | None = None,
     ) -> dict[str, Any]:
         self._assert_current_regime()
+        self._assert_frozen_backbone_integrity()
         if self.regime == TrainingRegime.PREFERENCE:
             raise ValueError("preference-only validation cannot validate the base policy")
         if not self.dataset_manifest:
@@ -962,6 +965,7 @@ class CanonicalTrainer:
 
     def save_checkpoint(self, path: str | Path) -> None:
         self._assert_current_regime()
+        self._assert_frozen_backbone_integrity()
         manifest = self._manifest()
         if not manifest.has_complete_provenance():
             raise ValueError("canonical checkpoints require complete, verified provenance")
