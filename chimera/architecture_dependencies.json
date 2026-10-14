@@ -14,6 +14,7 @@
     "entrypoint": "chimera.architecture.CHIMERAv2",
     "pipeline": [
       "input_contract",
+      "inference_readiness_policy",
       "msa_backbone",
       "pair_representation",
       "conditioning_constraints",
@@ -31,7 +32,8 @@
     "native_models": "ESM-2 and ProteinMPNN native adapters are not the canonical CHIMERAv2 MSA/sequence-generation modules",
     "readiness": "RESEARCH_ONLY_UNTRAINED; CanonicalCHIMERAv2.require_inference_ready rejects production design without validated component and objective evidence",
     "preprocessing": "PREPARED_INPUT_CONTRACT_AVAILABLE; upstream raw-sequence MSA, pair-feature, and source-frame generation remains caller-owned",
-    "validation": "CANDIDATE_SANITY_GATE_INTEGRATED; geometry and sequence constraint checks are computational proxies, not folding or biological validation"
+    "validation": "CANDIDATE_SANITY_GATE_INTEGRATED; geometry and sequence constraint checks are computational proxies, not folding or biological validation",
+    "readiness_policy": "SHARED; direct design and run_inference use the same readiness enforcement. Public InferenceRequest defaults to exploratory for backward compatibility and can require_trained."
   },
   "status_vocabulary": [
     "NATIVE_VERIFIED",
@@ -107,7 +109,8 @@
         "local_sequence_recovery",
         "autoregressive_policy",
         "objective_prediction",
-        "deterministic_objectives"
+        "deterministic_objectives",
+        "inference_readiness_policy"
       ],
       "external_assets": [],
       "configuration": [
@@ -1308,6 +1311,40 @@
       "blockers": [
         "Every inference result now embeds a content-addressed run composition manifest, but no selected release artifact or artifact registry grants production approval."
       ]
+    },
+    {
+      "id": "inference_readiness_policy",
+      "name": "Shared direct/wrapped inference readiness policy",
+      "source": "chimera/readiness_policy.py; chimera/architecture.py; chimera/inference.py",
+      "symbol": "apply_inference_readiness_policy; CanonicalCHIMERAv2.require_inference_ready; InferenceRequest.readiness_policy",
+      "status": "INTEGRATED_NOT_VERIFIED",
+      "scope": "candidate_inference",
+      "required_by_candidate": true,
+      "dependencies": [],
+      "external_assets": [],
+      "configuration": [
+        "exploratory",
+        "require_trained"
+      ],
+      "tests": [
+        "tests/test_inference_contract.py",
+        "tests/test_canonical_architecture.py"
+      ],
+      "verification": {
+        "code_exists": true,
+        "imported": true,
+        "instantiated": true,
+        "runtime_assets_present": true,
+        "configuration_present": true,
+        "compatible": true,
+        "executed": true,
+        "tested": true,
+        "identity_recorded": true,
+        "represented_in_production_artifact": false
+      },
+      "blockers": [
+        "Recent shared readiness-policy integration must pass branch CI before being promoted to a verified contract."
+      ]
     }
   ],
   "external_assets": [
@@ -1848,7 +1885,8 @@
       "preprocessing_identity",
       "artifact_registry",
       "structured_design_result",
-      "candidate_validation"
+      "candidate_validation",
+      "inference_readiness_policy"
     ],
     "blockers": [
       "No selected trained and validated CHIMERA checkpoint.",
