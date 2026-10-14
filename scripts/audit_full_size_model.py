@@ -92,7 +92,13 @@ def main() -> None:
         target_sequence=target_sequence,
     )
 
-    before = next(parameter for parameter in model.sequence_policy.parameters()).detach().clone()
+    evoformer_before = {
+        name: parameter.detach().clone()
+        for name, parameter in model.evoformer.named_parameters()
+    }
+    before = next(
+        parameter for parameter in model.sequence_policy.parameters()
+    ).detach().clone()
     result = trainer.train_step(batch)
     loss = result["loss"]
     if not torch.isfinite(torch.tensor(loss)):
@@ -100,7 +106,6 @@ def main() -> None:
 
     component_report = result["gradient_flow"]["components"]
     required = (
-        "evoformer",
         "node_connector",
         "base_mpnn",
         "multi_scale_designer",
@@ -113,6 +118,17 @@ def main() -> None:
             raise AssertionError(f"trainer reported no gradients for required component {name}")
         if not row.get("all_gradients_finite", False):
             raise AssertionError(f"trainer reported non-finite gradients for {name}")
+
+    evoformer_gradients = component_report.get("evoformer", {})
+    if evoformer_gradients.get("gradient_parameters", 0) != 0:
+        raise AssertionError("sequence regime must not backpropagate into the shared EvoFormer")
+    if any(parameter.requires_grad for parameter in model.evoformer.parameters()):
+        raise AssertionError("sequence regime must keep EvoFormer frozen by default")
+    if any(
+        not torch.equal(evoformer_before[name], parameter)
+        for name, parameter in model.evoformer.named_parameters()
+    ):
+        raise AssertionError("sequence optimizer step changed the frozen EvoFormer")
 
     after = next(parameter for parameter in model.sequence_policy.parameters()).detach()
     changed = not torch.equal(before, after)
