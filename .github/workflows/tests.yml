@@ -2,9 +2,9 @@ name: CHIMERA Test Suite
 
 on:
   push:
-    branches: [ main, dev, chimera-repair ]
+    branches: [ chimera-main, dev ]
   pull_request:
-    branches: [ main, dev, chimera-repair ]
+    branches: [ chimera-main, dev ]
 
 jobs:
   test:
