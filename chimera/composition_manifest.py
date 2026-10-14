@@ -68,6 +68,10 @@ def build_composition_manifest(
         raise ValueError(
             "supply either prepared_inputs or explicit prepared-input provenance, not both"
         )
+    if (prepared_input_manifest is None) != (prepared_input_identity is None):
+        raise ValueError(
+            "prepared_input_manifest and prepared_input_identity must be supplied together"
+        )
     prepared_identity = prepared_input_identity
     canonical_input_manifest = (
         dict(prepared_input_manifest) if prepared_input_manifest is not None else None
