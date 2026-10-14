@@ -1268,9 +1268,9 @@
     {
       "id": "composition_manifest",
       "name": "Content-addressed research composition manifest",
-      "source": "chimera/composition_manifest.py",
-      "symbol": "build_composition_manifest; write_composition_manifest",
-      "status": "PRESENT_NOT_INTEGRATED",
+      "source": "chimera/composition_manifest.py; chimera/inference.py",
+      "symbol": "build_composition_manifest; InferenceResult.composition_manifest; InferenceResult.as_dict",
+      "status": "INTEGRATED_NOT_VERIFIED",
       "scope": "optional_release_evidence",
       "required_by_candidate": false,
       "dependencies": [
@@ -1285,10 +1285,13 @@
       "configuration": [
         "composition manifest schema v1",
         "canonical inference configuration",
-        "dependency inventory identity"
+        "prepared input identity",
+        "candidate validation evidence",
+        "release decision policy"
       ],
       "tests": [
-        "tests/test_composition_manifest.py"
+        "tests/test_composition_manifest.py",
+        "tests/test_inference_contract.py"
       ],
       "verification": {
         "code_exists": true,
@@ -1303,7 +1306,7 @@
         "represented_in_production_artifact": false
       },
       "blockers": [
-        "Manifest creation is an explicit caller action; each inference result does not yet automatically emit or reference a composition manifest."
+        "Every inference result now embeds a content-addressed run composition manifest, but no selected release artifact or artifact registry grants production approval."
       ]
     }
   ],

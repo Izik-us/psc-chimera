@@ -41,7 +41,11 @@ def build_composition_manifest(
     config: Any,
     *,
     prepared_inputs: Any | None = None,
+    prepared_input_manifest: Mapping[str, Any] | None = None,
+    prepared_input_identity: str | None = None,
     checkpoint_sha256: str | None = None,
+    model_state_sha256: str | None = None,
+    inference_execution: Mapping[str, Any] | None = None,
     validation_policy: Mapping[str, Any] | None = None,
     validation_evidence: Mapping[str, Any] | None = None,
     optional_backends: Mapping[str, str] | None = None,
@@ -58,17 +62,50 @@ def build_composition_manifest(
         or any(character not in "0123456789abcdef" for character in checkpoint_sha256)
     ):
         raise ValueError("checkpoint_sha256 must be a lowercase SHA-256 hex digest")
-    prepared_identity = None
+    if prepared_inputs is not None and (
+        prepared_input_manifest is not None or prepared_input_identity is not None
+    ):
+        raise ValueError(
+            "supply either prepared_inputs or explicit prepared-input provenance, not both"
+        )
+    prepared_identity = prepared_input_identity
+    canonical_input_manifest = (
+        dict(prepared_input_manifest) if prepared_input_manifest is not None else None
+    )
     if prepared_inputs is not None:
         input_manifest = getattr(prepared_inputs, "manifest", None)
+        if not hasattr(input_manifest, "to_dict"):
+            raise ValueError("prepared_inputs must expose a serializable input manifest")
+        canonical_input_manifest = input_manifest.to_dict()
         prepared_preprocessing_id = getattr(input_manifest, "preprocessing_id", None)
         if prepared_preprocessing_id != config.preprocessing_id:
             raise ValueError(
                 "InferenceConfig.preprocessing_id does not match prepared-input provenance"
             )
         prepared_identity = getattr(prepared_inputs, "identity", None)
-        if not isinstance(prepared_identity, str) or not prepared_identity:
-            raise ValueError("prepared_inputs must expose a stable identity")
+    if canonical_input_manifest is not None:
+        if not isinstance(canonical_input_manifest, Mapping):
+            raise ValueError("prepared_input_manifest must be a mapping")
+        declared_preprocessing_id = canonical_input_manifest.get("preprocessing_id")
+        if declared_preprocessing_id != config.preprocessing_id:
+            raise ValueError(
+                "InferenceConfig.preprocessing_id does not match prepared-input provenance"
+            )
+        canonical_input_manifest = dict(canonical_input_manifest)
+    if prepared_identity is not None and (
+        not isinstance(prepared_identity, str)
+        or len(prepared_identity) != 64
+        or any(character not in "0123456789abcdef" for character in prepared_identity)
+    ):
+        raise ValueError("prepared_input_identity must be a lowercase SHA-256 hex digest")
+    if model_state_sha256 is not None and (
+        not isinstance(model_state_sha256, str)
+        or len(model_state_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in model_state_sha256)
+    ):
+        raise ValueError("model_state_sha256 must be a lowercase SHA-256 hex digest")
+    if inference_execution is not None and not isinstance(inference_execution, Mapping):
+        raise TypeError("inference_execution must be a mapping")
 
     root = Path(__file__).resolve().parent
     dependency_path = root / "architecture_dependencies.json"
@@ -114,10 +151,15 @@ def build_composition_manifest(
             "architecture_configuration_sha256": config_hash(
                 model.model_configuration()
             ),
-            "model_state_sha256": _state_dict_digest(model.state_dict()),
+            "model_state_sha256": (
+                model_state_sha256
+                if model_state_sha256 is not None
+                else _state_dict_digest(model.state_dict())
+            ),
             "inference_configuration": config.to_dict(),
             "inference_configuration_sha256": config.config_id,
             "preprocessing_id": config.preprocessing_id,
+            "prepared_input_manifest": canonical_input_manifest,
             "prepared_input_identity": prepared_identity,
             "checkpoint_id": config.checkpoint_id,
             "checkpoint_sha256": checkpoint_sha256,
@@ -153,6 +195,7 @@ def build_composition_manifest(
                 else "OPTIONAL_UNAVAILABLE"
             ),
         },
+        "inference_execution": dict(inference_execution or {}),
         "validation": {
             "policy": dict(validation_policy or {}),
             "evidence": dict(validation_evidence or {}),
