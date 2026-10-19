@@ -175,9 +175,8 @@ def test_canonical_sequence_loss_uses_pair_connector_and_assigns_gradients():
         residue_mask=torch.ones(1, length, dtype=torch.bool),
         residue_index=torch.arange(length).unsqueeze(0),
     )
-    loss = trainer._sequence_loss(batch)
-    assert torch.isfinite(loss)
-    loss.backward()
+    result = trainer.train_step(batch)
+    assert torch.isfinite(torch.tensor(result["loss"]))
 
     pair_gradients = [
         parameter.grad
