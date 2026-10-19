@@ -31,13 +31,6 @@ Structure
   │         ├── geometric derivatives
   │         └── evidence-typed NRPS domains/modules
   └── CCD ligand instances and chain-aware binding-site contacts
-
-### Canonical model-input adapter
-
-`data/canonical_inputs.py` closes the adapter boundary from a `build_dataset_sample()`/`SQLiteChimeraDataset` sample to `PreparedInferenceInputs` and `CanonicalTrainingBatch`. It checks the sequence/MSA/geometry lengths, creates masked geometric pair features with the versioned `geometry-pair-v1` schema, retains residue and MSA masks, validates proper source rotations, and binds the inference tensors to a preprocessing manifest and residue-mapping identity. Import it directly from `data.canonical_inputs`.
-
-The pair channels are deterministic descriptors built from the supplied structure's distances, local relative directions/rotations, sequence separation, torsions and contacts. They are not learned EvoFormer embeddings. The adapter requires an MSA and structure geometry that have already passed upstream ingestion; it does not run homolog search or predict a missing structure. For sequence recovery, the sample's canonical structure provides target frames. For flow training, an explicit source frame pair must be accompanied by source pair features or a matching `source_geometry`; target-structure pair features are deliberately not silently reused as source conditioning.
-
 NRPSDomain
   ├── DomainType
   ├── Module
@@ -45,6 +38,12 @@ NRPSDomain
   ├── SubstrateAssociation
   └── StructuralRegion
 ```
+
+### Canonical model-input adapter
+
+`data/canonical_inputs.py` closes the adapter boundary from a `build_dataset_sample()`/`SQLiteChimeraDataset` sample to `PreparedInferenceInputs` and `CanonicalTrainingBatch`. It checks the sequence/MSA/geometry lengths, creates masked geometric pair features with the versioned `geometry-pair-v1` schema, retains residue and MSA masks, validates proper source rotations, and binds the inference tensors to a preprocessing manifest and residue-mapping identity. Import it directly from `data.canonical_inputs`.
+
+The pair channels are deterministic descriptors built from the supplied structure's distances, local relative directions/rotations, sequence separation, torsions and contacts. They are not learned EvoFormer embeddings. The adapter requires an MSA and structure geometry that have already passed upstream ingestion; it does not run homolog search or predict a missing structure. For sequence recovery, the sample's canonical structure provides target frames. For flow training, an explicit source frame pair must be accompanied by source pair features or a matching `source_geometry`; target-structure pair features are deliberately not silently reused as source conditioning.
 
 The schema/provenance contracts live in [data/dataset_engine.py](../data/dataset_engine.py); the executable sample and storage API lives in [data/dataset_api.py](../data/dataset_api.py). `sample = dataset[i]` contains tensors, metadata, linkage, annotations, MSA, masks, geometry and provenance.
 
