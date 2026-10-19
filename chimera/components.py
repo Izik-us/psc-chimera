@@ -258,14 +258,22 @@ class EvolCrossAttentionConnector(nn.Module):
         return self.combine(torch.cat([path1, path2], dim=-1))
 
 class NodeProjectionConnector(nn.Module):
-    """Project evolutionary residue features into the local sequence-model width.
+    """Project EvoFormer residue states and optionally fuse conditioned pair context.
 
-    An optional pocket mask adds a learned feature bias at marked positions;
-    it does not encode residue identity or perform attention.
+    Pair features are reduced over valid partner residues, projected into node
+    width, and added through a learned gate. This gives the sequence pathway a
+    direct route for domain/module/substrate relationships instead of relying
+    on those relationships being expressed only indirectly through geometry.
     """
 
-    def __init__(self, evo_dim: int = 256, mpnn_dim: int = 512):
+    def __init__(
+        self,
+        evo_dim: int = 256,
+        mpnn_dim: int = 512,
+        pair_dim: Optional[int] = None,
+    ):
         super().__init__()
+        self.pair_dim = pair_dim
         self.proj = nn.Sequential(
             nn.LayerNorm(evo_dim),
             nn.Linear(evo_dim, evo_dim),
@@ -277,16 +285,81 @@ class NodeProjectionConnector(nn.Module):
         )
         # Learned additive bias for caller-marked pocket positions.
         self.pocket_scale = nn.Linear(mpnn_dim, mpnn_dim)
+        if pair_dim is None:
+            self.pair_norm = None
+            self.pair_proj = None
+            self.pair_gate = None
+            self.pair_fusion_norm = None
+        else:
+            self.pair_norm = nn.LayerNorm(pair_dim)
+            self.pair_proj = nn.Sequential(
+                nn.Linear(pair_dim, mpnn_dim),
+                nn.GELU(),
+                nn.Linear(mpnn_dim, mpnn_dim),
+            )
+            self.pair_gate = nn.Sequential(
+                nn.LayerNorm(mpnn_dim * 2),
+                nn.Linear(mpnn_dim * 2, mpnn_dim),
+                nn.Sigmoid(),
+            )
+            self.pair_fusion_norm = nn.LayerNorm(mpnn_dim)
 
     def forward(
         self,
-        evo_single: torch.Tensor,  # (B, L, 256)
+        evo_single: torch.Tensor,  # (B, L, evo_dim)
         pocket_mask: Optional[torch.Tensor] = None,  # (B, L) bool: near pocket
+        *,
+        pair_features: Optional[torch.Tensor] = None,  # (B, L, L, pair_dim)
+        residue_mask: Optional[torch.Tensor] = None,  # (B, L) bool: true for valid residues
     ) -> torch.Tensor:
+        if evo_single.ndim != 3:
+            raise ValueError("evo_single must have shape (B,L,C)")
+        batch, length, _ = evo_single.shape
+        if residue_mask is not None and (
+            residue_mask.shape != (batch, length) or residue_mask.dtype != torch.bool
+        ):
+            raise ValueError("residue_mask must be bool with shape (B,L)")
+        if pocket_mask is not None and (
+            pocket_mask.shape != (batch, length) or pocket_mask.dtype != torch.bool
+        ):
+            raise ValueError("pocket_mask must be bool with shape (B,L)")
+
         projected = self.proj(evo_single)
         if pocket_mask is not None:
             pocket_bias = self.pocket_scale(projected)
-            projected = projected + pocket_mask.float().unsqueeze(-1) * pocket_bias
+            projected = projected + pocket_mask.to(projected.dtype).unsqueeze(-1) * pocket_bias
+
+        if pair_features is not None:
+            if self.pair_proj is None:
+                raise ValueError(
+                    "pair_features were supplied but this connector was not configured with pair_dim"
+                )
+            if pair_features.shape != (batch, length, length, self.pair_dim):
+                raise ValueError(
+                    f"pair_features must have shape (B,L,L,{self.pair_dim})"
+                )
+            if pair_features.device != evo_single.device:
+                raise ValueError("pair_features and evo_single must be on the same device")
+            pair_values = self.pair_norm(pair_features)
+            if residue_mask is None:
+                denominator = pair_values.new_full((batch, 1, 1), float(length))
+            else:
+                valid_partners = residue_mask[:, None, :, None]
+                pair_values = pair_values.masked_fill(~valid_partners, 0.0)
+                denominator = residue_mask.sum(dim=-1).clamp_min(1).to(
+                    pair_values.dtype
+                ).view(batch, 1, 1)
+            pair_summary = pair_values.sum(dim=2) / denominator
+            if residue_mask is not None:
+                pair_summary = pair_summary * residue_mask.to(
+                    pair_summary.dtype
+                ).unsqueeze(-1)
+            pair_context = self.pair_proj(pair_summary)
+            gate = self.pair_gate(torch.cat((projected, pair_context), dim=-1))
+            projected = self.pair_fusion_norm(projected + gate * pair_context)
+
+        if residue_mask is not None:
+            projected = projected * residue_mask.to(projected.dtype).unsqueeze(-1)
         return projected
 
 class NRPSConstraintEncoder(nn.Module):

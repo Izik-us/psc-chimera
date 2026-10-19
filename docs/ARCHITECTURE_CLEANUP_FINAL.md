@@ -339,7 +339,7 @@ checked; none of the model layers was safe to delete.
 | `TriangularAttention` | Outgoing/incoming pair attention used by the connector. | Keep; instantiated by canonical and legacy connector constructors. |
 | `TriangularMultiplicativeUpdate` | Outgoing/incoming triangle-indexed pair update used by the connector. | Keep; instantiated by canonical and legacy connector constructors. |
 | `EvolCrossAttentionConnector` | Flow-time-conditioned evolutionary cross-attention in the structural flow. | Keep; canonical/legacy composition and flow training use it. |
-| `NodeProjectionConnector` | Projects MSA single representation for local sequence recovery. | Keep; canonical inference and sequence training use it; legacy composition also constructs it. |
+| `NodeProjectionConnector` | Projects MSA single states for local sequence recovery and optionally fuses a masked summary of conditioned pair states through a learned gate. | Keep; canonical generation, sequence scoring, sequence training and preference-context construction use the pair-aware path; legacy composition retains the no-pair compatibility form. |
 | `NRPSConstraintEncoder` | Encodes domain, PPant and Stachelhaus annotations into conditioning features. | Keep; canonical constraint/flow conditioning and legacy composition use it. |
 | `MSARepresentationBackbone` | Local row/column attention representation and masked reconstruction. | Keep; canonical inference and representation training use it. |
 | `EvoFormerBackbone` | Historical alias for `MSARepresentationBackbone`. | Keep as compatibility: `chimera_v2.py` and masking tests import it, with an explicit identity contract. |

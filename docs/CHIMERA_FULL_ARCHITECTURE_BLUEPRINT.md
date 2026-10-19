@@ -44,7 +44,7 @@ The current canonical constructor defaults are:
 
 **External-model boundary:** the canonical EvoFormer is a CHIMERA-owned implementation of the EvoFormer information-flow pattern, not a trained AlphaFold/OpenFold model. The SE(3) generator is CHIMERA's local Schrödinger-bridge/velocity architecture, not native RFdiffusion. The geometric sequence recovery model is ProteinMPNN-inspired, not native ProteinMPNN. Optional native adapters and external command-line folders are separate components, not silently substituted into the canonical model.
 
-**Input boundary:** canonical structure generation consumes caller-prepared MSA tokens, pair features, source backbone rotations/translations, and optional NRPS constraints and substrate data. CHIMERA does not automatically create all of those inputs from a raw sequence. Input preprocessing, mapping, masking, and preprocessing identity must be supplied and tracked by the calling pipeline.
+**Input boundary:** canonical structure generation consumes validated MSA tokens, geometric initial pair features, source backbone rotations/translations, and optional NRPS constraints and substrate data. `data.canonical_inputs.dataset_sample_to_prepared_inputs()` converts an already-ingested dataset sample into this contract and records preprocessing identity. It does not conduct homologue retrieval or infer a missing structure from a raw sequence; those upstream capabilities remain separate.
 
 **Readiness boundary:** source code, tests, weights, training provenance, objective calibration, scientific validation, and biological validation are different claims. The canonical composition is research-only unless the required component and objective statuses carry validated training/validation provenance and calibration evidence.
 
@@ -61,7 +61,7 @@ flowchart TD
     B --> C["TriangularPairUpdateConnector\n128 -> 512 pair channels"]
     B --> D["flow_evo_projection\n256 -> 768 flow channels"]
     B --> E["EvolCrossAttentionConnector\nflow nodes query EvoFormer single states"]
-    B --> F["NodeProjectionConnector\n256 -> 512 residue features"]
+    B --> F["NodeProjectionConnector\n256 -> 512 residue features + gated summary of conditioned pair context"]
 
     G["NRPSConstraints\nfixed residues / Stachelhaus sites\ndomain & module boundaries\nicosahedral face / PPT serine"] --> H["NRPSConstraintEncoder"]
 
@@ -130,7 +130,7 @@ Tokenization and MSA construction are upstream responsibilities. Padding masks i
 
 ### 3.2 Initial pair features
 
-The caller provides `initial_pair_features` with shape `(B,L,L,128)` in the canonical default. The model validates the exact expected dimensions. These features seed the pair representation and are refined by the EvoFormer and then the triangular pair connector. They are not synthesized automatically from raw sequences by the public inference API.
+The caller or the versioned `data.canonical_inputs.dataset_sample_to_prepared_inputs()` adapter provides `initial_pair_features` with shape `(B,L,L,128)` in the canonical default. The adapter builds deterministic geometric descriptors from an already ingested structure's distances, local directions/rotations, sequence separation, torsions and contacts, with an explicit schema identifier. These are not learned EvoFormer embeddings. The adapter does not perform homologue retrieval or predict a missing structure from a raw sequence. The model then refines this input through EvoFormer and the triangular pair connector.
 
 ### 3.3 Source backbone frames
 
@@ -468,7 +468,7 @@ The retriever supports building an embedding index and returning context. In the
 
 The audit script is `scripts/audit_full_size_model.py`. It constructs the actual `CanonicalCHIMERAv2()` with the constructor's default dimensions and counts all unique registered model parameters. It also reports each top-level component and runs a bounded teacher-forced sequence-policy optimizer smoke step on the full-size model instance.
 
-The first independent GitHub Actions audit produced the following source-level count before it stopped on a comparison against the old planning estimate:
+The earlier independent audit measured the unchanged baseline components below. This branch's node pair-fusion count and total are derived from declared layer dimensions; they remain estimates until the updated full-size CI audit verifies them:
 
 | Top-level component | Observed parameters |
 |---|---:|
@@ -478,7 +478,7 @@ The first independent GitHub Actions audit produced the following source-level c
 | `base_mpnn` | 57,257,996 |
 | `pair_connector` | 9,005,056 |
 | `evol_cross_attn` | 4,386,944 |
-| `node_connector` | 1,117,952 |
+| `node_connector` (including gated pair-context fusion) | 2,172,160 |
 | `constraint_encoder` | 1,027,584 |
 | `structural_retriever` | 1,190,080 |
 | `substrate_conditioner` | 747,648 |
@@ -488,13 +488,13 @@ The first independent GitHub Actions audit produced the following source-level c
 | `_seq_to_repr` | 10,752 |
 | `sequence_policy` | 31,807,508 |
 | `ret_proj` | 15,872 |
-| **Total** | **767,740,533** |
+| **Total** | **768,794,741 (derived estimate for the interface-closure branch; CI audit pending)** |
 
-Raw FP32 parameter storage is about 2.86 GiB. This excludes gradients, optimizer state, activation tensors, temporary workspaces, data, and the Python runtime.
+At the audited baseline, raw FP32 parameter storage was about 2.86 GiB. The interface-closure branch adds 1,054,208 pair-fusion parameters to the node connector, making the source-derived total estimate 768,794,741 parameters (about 2.86 GiB of raw FP32 weights); the full-size audit must confirm this estimate on CI. These memory figures exclude gradients, optimizer state, activations, temporary workspaces, data, and the Python runtime.
 
-The earlier 749,197,845 value was a planning estimate, not the actual instantiated count. The authoritative count for this source revision is 767,740,533. The audited default is therefore a roughly 768M-parameter architecture, not exactly 750M. The count does not include the separate CHIMERAFold model, optional external ESM/ProteinMPNN models, external folding backends, or the standalone CodonOptimizer.
+The earlier 749,197,845 value was a planning estimate, not the actual instantiated count. The pre-interface-closure baseline was audited at 767,740,533 parameters. This branch's node pair-fusion module raises the derived estimate to 768,794,741, subject to the updated full-size audit and CI. The count does not include the separate CHIMERAFold model, optional external ESM/ProteinMPNN models, external folding backends, or the standalone CodonOptimizer.
 
-The audit's training update is a **synthetic one-step `CanonicalTrainer` SEQUENCE-regime smoke test**. It instantiates the full 767,740,533-parameter model, selects the sequence-stage components (approximately 397,186,510 trainable parameters), executes the staged sequence loss through the EvoFormer, node connector, geometric base, multi-scale designer, sequence projection, and autoregressive policy, and checks the trainer's finite-loss/gradient contract plus a real optimizer update. This audit step completed successfully in [GitHub Actions run 37943814258](https://github.com/Izik-us/psc-chimera/actions/runs/37943814258). The batch is synthetic and only five residues long. This confirms that the full-size model's canonical staged sequence-training path executes, not that the model has completed a meaningful multi-epoch run on biological data, produced a trained full-system checkpoint, or demonstrated scientific performance. The same audit then runs the full canonical forward/generation path on a synthetic two-row, five-residue MSA, with two flow integration steps and one candidate. It verifies output sequence shape `(1, 1, 5)`, backbone coordinate shape `(1, 5, 4, 3)`, and finite coordinates. The combined full-size parameter, training, and inference smoke step passed in [GitHub Actions run 37944021841](https://github.com/Izik-us/psc-chimera/actions/runs/37944021841). This confirms code-path execution only; outputs from randomly initialized weights are not useful design evidence.
+Before the interface-closure changes, the audit ran a **synthetic one-step `CanonicalTrainer` SEQUENCE-regime smoke test** with the pre-change parameter and trainable-component counts. This branch adds the pair connector and NRPS/substrate conditioning modules to the sequence-stage ownership set, and adds gated pair fusion to the node connector. Its derived trainable-parameter estimate is approximately 409,021,006, compared with the pre-change estimate of 397,186,510; both the parameter count and gradient contract require re-verification by the updated CI audit. The batch remains synthetic and only five residues long, so even a passing audit confirms code-path execution rather than meaningful multi-epoch training, a trained biological model, or scientific performance. The same audit also exercises a synthetic forward/generation path; outputs from randomly initialized weights are not useful design evidence.
 
 ---
 
