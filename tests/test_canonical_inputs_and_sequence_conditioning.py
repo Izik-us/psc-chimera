@@ -114,3 +114,64 @@ def test_node_projection_masks_invalid_partner_pairs_and_invalid_query_residues(
     output_b = connector(single, pair_features=pair_b, residue_mask=mask)
     assert torch.allclose(output_a, output_b, atol=1e-6, rtol=1e-6)
     assert torch.count_nonzero(output_a[:, 2:]) == 0
+
+
+def test_canonical_sequence_loss_uses_pair_connector_and_assigns_gradients():
+    from chimera import CHIMERAv2
+    from chimera.training import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime
+
+    torch.manual_seed(37)
+    model = CHIMERAv2(
+        d_evo_single=32,
+        d_evo_pair=16,
+        d_se3=32,
+        d_pair_out=32,
+        d_mpnn=16,
+        n_flow_blocks=1,
+        n_flow_steps=2,
+        n_mpnn_seqs=1,
+        n_domains=2,
+        n_modules=2,
+        n_mc_dropout=1,
+        evoformer_n_blocks=1,
+        evoformer_attention_chunk_size=None,
+        evoformer_opm_chunk_size=None,
+    )
+    trainer = CanonicalTrainer(model, TrainingRegime.SEQUENCE)
+    assert "pair_connector" in trainer.trainable_components
+    assert "substrate_conditioner" in trainer.trainable_components
+    assert "constraint_encoder" in trainer.trainable_components
+    assert not any(parameter.requires_grad for parameter in model.evoformer.parameters())
+
+    length = 8
+    msa = torch.randint(0, 20, (1, 2, length))
+    pair = torch.randn(1, length, length, 16)
+    rotations = torch.eye(3).reshape(1, 1, 3, 3).expand(1, length, 3, 3).clone()
+    translations = torch.zeros(1, length, 3)
+    translations[0, :, 0] = torch.arange(length, dtype=torch.float32) * 3.8
+    batch = CanonicalTrainingBatch(
+        msa_tokens=msa,
+        pair_features=pair,
+        target_R=rotations,
+        target_t=translations,
+        target_sequence=torch.randint(0, 20, (1, length)),
+        substrate_id=torch.tensor([3]),
+        msa_padding_mask=msa.eq(22),
+        residue_mask=torch.ones(1, length, dtype=torch.bool),
+        residue_index=torch.arange(length).unsqueeze(0),
+    )
+    loss = trainer._sequence_loss(batch)
+    assert torch.isfinite(loss)
+    loss.backward()
+
+    pair_gradients = [
+        parameter.grad
+        for parameter in model.pair_connector.parameters()
+        if parameter.requires_grad
+    ]
+    assert any(gradient is not None and torch.isfinite(gradient).all()
+               and gradient.abs().sum() > 0 for gradient in pair_gradients)
+    pair_projection_grad = model.node_connector.pair_proj[0].weight.grad
+    assert pair_projection_grad is not None
+    assert torch.isfinite(pair_projection_grad).all()
+    assert pair_projection_grad.abs().sum() > 0
