@@ -136,7 +136,7 @@ def test_canonical_sequence_loss_uses_pair_connector_and_assigns_gradients():
         n_mpnn_seqs=1,
         n_domains=2,
         n_modules=2,
-        n_mc_dropout=1,
+        n_mc_dropout=2,
         evoformer_n_blocks=1,
         evoformer_attention_chunk_size=None,
         evoformer_opm_chunk_size=None,
