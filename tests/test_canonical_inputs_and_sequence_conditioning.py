@@ -1,3 +1,5 @@
+import hashlib
+
 import torch
 
 from chimera.components import NodeProjectionConnector
@@ -31,7 +33,7 @@ def _sample(sequence="ACDEFGHI"):
         "sample_id": "test:chain:entity",
         "structure_id": "TEST",
         "sequence": sequence,
-        "sequence_sha256": "a" * 64,
+        "sequence_sha256": hashlib.sha256(sequence.encode("ascii")).hexdigest(),
         "msa_tokens": torch.stack((query, homolog)),
         "geometry": geometry,
         "residue_mask": residue_mask,
