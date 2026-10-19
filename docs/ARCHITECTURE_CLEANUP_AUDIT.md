@@ -133,7 +133,7 @@ the presence of a class or README table alone is not evidence of a run.
 | `representation` | `CanonicalTrainer(..., REPRESENTATION)`; `evoformer` component (the model's local representation in `components.py`) | Masked-token representation objective; trainer's held-out `validate()` path. |
 | `flow` | `FLOW`; representation, pair connector, flow model, evolutionary cross-attention, constraint encoder and substrate conditioner | Supervised Schrödinger-bridge drift regression; held-out trainer validation. Inference stochastic bridge sampling is separate from differentiable training. |
 | `constraint` | `CONSTRAINT`; same flow set with constraint conditioning | Constrained bridge drift regression; held-out trainer validation. |
-| `sequence` | `SEQUENCE`; representation, node connector, local ProteinMPNN trunk, multiscale designer/projection and autoregressive policy | Teacher-forced causal amino-acid cross-entropy; held-out trainer validation. |
+| `sequence` | `SEQUENCE`; frozen EvoFormer by default, pair connector, gated pair-context node connector, substrate/constraint conditioners, local ProteinMPNN trunk, multiscale designer/projection and autoregressive policy | Teacher-forced causal amino-acid cross-entropy; held-out trainer validation. Pair features now have a direct gradient path into sequence recovery. |
 | `objective` | `OBJECTIVE`; objective feature encoder and Pareto head | Per-objective supervised losses with canonical conflict handling; typed objective sources/labels and held-out validation. |
 | `preference` | `PREFERENCE`; autoregressive sequence policy only | DPO against a frozen reference; rejected until supervised sequence training and separate held-out validation preconditions are met. |
 
