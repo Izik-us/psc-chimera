@@ -685,12 +685,17 @@ class CanonicalTrainer:
             return tuple(required)
         if self.regime == TrainingRegime.SEQUENCE:
             required = [
+                "pair_connector",
                 "node_connector",
                 "base_mpnn",
                 "multi_scale_designer",
                 "_seq_to_repr",
                 "sequence_policy",
             ]
+            if batch.constraints is not None:
+                required.append("constraint_encoder")
+            if batch.substrate_id is not None:
+                required.append("substrate_conditioner")
             if self.allow_sequence_backbone_finetuning:
                 required.insert(0, "evoformer")
             return tuple(required)
