@@ -167,6 +167,19 @@ def _sample_tensors(sample: Mapping[str, Any], pair_channels: int):
         raise ValueError("msa_tokens must have shape (N,L) aligned to the canonical sequence")
     if torch.any((msa < 0) | (msa > PAD_TOKEN)):
         raise ValueError(f"msa_tokens must contain token IDs in [0,{PAD_TOKEN}]")
+    expected_query = torch.tensor(
+        [AA_TO_TOKEN.get(residue, 20) for residue in sequence],
+        dtype=torch.long,
+        device=msa.device,
+    )
+    if not torch.equal(msa[0], expected_query):
+        raise ValueError(
+            "the first MSA row must match the canonical sample sequence residue-by-residue"
+        )
+    computed_sequence_hash = hashlib.sha256(sequence.encode("ascii")).hexdigest()
+    declared_sequence_hash = sample.get("sequence_sha256")
+    if declared_sequence_hash is not None and str(declared_sequence_hash).lower() != computed_sequence_hash:
+        raise ValueError("sequence_sha256 does not match the canonical sample sequence")
 
     geometry = sample["geometry"]
     rotations = _tensor(_field(geometry, "residue_frames"), torch.float32)
