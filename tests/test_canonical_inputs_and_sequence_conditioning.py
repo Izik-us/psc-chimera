@@ -120,6 +120,7 @@ def test_node_projection_masks_invalid_partner_pairs_and_invalid_query_residues(
 
 def test_canonical_sequence_loss_uses_pair_connector_and_assigns_gradients():
     from chimera import CHIMERAv2
+    from chimera.domain_schema import NRPSConstraints
     from chimera.training import CanonicalTrainer, CanonicalTrainingBatch, TrainingRegime
 
     torch.manual_seed(37)
@@ -158,6 +159,17 @@ def test_canonical_sequence_loss_uses_pair_connector_and_assigns_gradients():
         target_t=translations,
         target_sequence=torch.randint(0, 20, (1, length)),
         substrate_id=torch.tensor([3]),
+        constraints=NRPSConstraints(
+            fixed_mask=torch.zeros(1, length, dtype=torch.bool),
+            stachelhaus_positions=torch.tensor([2]),
+            domain_boundaries=torch.tensor([[[0, 4], [4, 8]]]),
+            module_boundaries=torch.tensor([[[0, 4], [4, 8]]]),
+            icosahedral_face=torch.tensor([1]),
+            ppt_serine_position=3,
+            hotspot_coords=None,
+            hotspot_indices=None,
+            target_substrate="ASP",
+        ),
         msa_padding_mask=msa.eq(22),
         residue_mask=torch.ones(1, length, dtype=torch.bool),
         residue_index=torch.arange(length).unsqueeze(0),
@@ -177,6 +189,18 @@ def test_canonical_sequence_loss_uses_pair_connector_and_assigns_gradients():
     assert pair_projection_grad is not None
     assert torch.isfinite(pair_projection_grad).all()
     assert pair_projection_grad.abs().sum() > 0
+    for component in ("substrate_conditioner", "constraint_encoder"):
+        gradients = [
+            parameter.grad
+            for parameter in getattr(model, component).parameters()
+            if parameter.requires_grad
+        ]
+        assert any(
+            gradient is not None
+            and torch.isfinite(gradient).all()
+            and gradient.abs().sum() > 0
+            for gradient in gradients
+        ), f"{component} did not receive sequence-loss gradients"
 
 
 def test_explicit_source_frames_cannot_reuse_target_geometry_pair_features():
