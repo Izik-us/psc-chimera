@@ -19,7 +19,7 @@ from chimera.training import (
 )
 
 
-EXPECTED_PARAMETERS = 749_197_845  # historical planning estimate, not an assertion
+EXPECTED_PARAMETERS = 768_794_741  # derived pair-aware estimate; CI output verifies the instantiated count
 AA_VOCAB_SIZE = 20
 BATCH_SIZE = 1
 MSA_DEPTH = 2
