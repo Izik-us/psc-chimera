@@ -468,7 +468,7 @@ The retriever supports building an embedding index and returning context. In the
 
 The audit script is `scripts/audit_full_size_model.py`. It constructs the actual `CanonicalCHIMERAv2()` with the constructor's default dimensions and counts all unique registered model parameters. It also reports each top-level component and runs a bounded teacher-forced sequence-policy optimizer smoke step on the full-size model instance.
 
-The first independent GitHub Actions audit produced the following source-level count before it stopped on a comparison against the old planning estimate:
+The earlier independent audit measured the unchanged baseline components below. This branch's node pair-fusion count and total are derived from declared layer dimensions; they remain estimates until the updated full-size CI audit verifies them:
 
 | Top-level component | Observed parameters |
 |---|---:|
