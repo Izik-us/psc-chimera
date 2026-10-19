@@ -157,7 +157,7 @@ class CanonicalCHIMERAv2(nn.Module):
         )
         self.pair_connector = TriangularPairUpdateConnector(d_evo_pair, d_pair_out, n_heads=4)
         self.evol_cross_attn = EvolCrossAttentionConnector(d_se3, d_evo_single, n_heads=8)
-        self.node_connector = NodeProjectionConnector(d_evo_single, d_mpnn)
+        self.node_connector = NodeProjectionConnector(d_evo_single, d_mpnn, pair_dim=d_pair_out)
         self.constraint_encoder = NRPSConstraintEncoder(d=d_pair_out)
         self.structural_retriever = StructuralRetriever(
             d_embed=d_evo_pair,
@@ -834,7 +834,12 @@ class CanonicalCHIMERAv2(nn.Module):
             pocket_mask = torch.zeros(B, L, dtype=torch.bool, device=device)
             for position in constraints.stachelhaus_positions:
                 pocket_mask[:, max(0, int(position) - 2):min(L, int(position) + 3)] = True
-        evol_nodes = self.node_connector(single_repr, pocket_mask)
+        evol_nodes = self.node_connector(
+            single_repr,
+            pocket_mask,
+            pair_features=pair_cond,
+            residue_mask=residue_mask,
+        )
         base_nodes = self.base_mpnn(
             backbone_coords, evol_nodes, residue_mask=residue_mask
         )
@@ -1019,8 +1024,12 @@ class CanonicalCHIMERAv2(nn.Module):
     def sequence_logprob(self, sequence_tokens, msa_tokens, pair_features, source_R, source_t):
         """Score candidate sequence under a deterministic MSA conditioning context."""
         with torch.no_grad():
-            single, _ = self.evoformer(msa_tokens, pair_features)
-            context = self.node_connector(single)
+            single, pair = self.evoformer(msa_tokens, pair_features)
+            pair_cond = self.pair_connector(pair)
+            residue_mask = msa_tokens.ne(22).any(dim=1)
+            context = self.node_connector(
+                single, pair_features=pair_cond, residue_mask=residue_mask
+            )
         return self.sequence_policy.logprob(context, sequence_tokens)
 
     def update_from_proteus(self, survivors, failures, msa, pair_features, n_dpo_steps=50, learning_rate=1e-5, best_context_batch_index=0):
@@ -1038,8 +1047,14 @@ class CanonicalCHIMERAv2(nn.Module):
         if not 0 <= best_context_batch_index < msa.shape[0]:
             raise ValueError("best_context_batch_index is outside the MSA batch")
         with torch.no_grad():
-            single, _ = self.evoformer(msa, pair_features)
-            context = self.node_connector(single[best_context_batch_index:best_context_batch_index + 1])
+            single, pair = self.evoformer(msa, pair_features)
+            pair_cond = self.pair_connector(pair)
+            residue_mask = msa.ne(22).any(dim=1)
+            context = self.node_connector(
+                single[best_context_batch_index:best_context_batch_index + 1],
+                pair_features=pair_cond[best_context_batch_index:best_context_batch_index + 1],
+                residue_mask=residue_mask[best_context_batch_index:best_context_batch_index + 1],
+            )
         alphabet = "ACDEFGHIKLMNPQRSTVWY"
         if len({len(seq) for seq in survivors + failures}) != 1:
             raise ValueError("all PROTEUS sequences must have the same length")
