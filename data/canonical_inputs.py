@@ -252,6 +252,8 @@ def dataset_sample_to_training_batch(
     *,
     pair_channels: int = 128,
     source_frames: tuple[torch.Tensor, torch.Tensor] | None = None,
+    source_pair_features: torch.Tensor | None = None,
+    source_geometry: Any | None = None,
     constraints: Any | None = None,
     substrate_id: torch.Tensor | int | None = None,
     substrate_coords: torch.Tensor | None = None,
@@ -260,9 +262,11 @@ def dataset_sample_to_training_batch(
 ):
     """Build a CanonicalTrainingBatch from a sample's MSA and target structure.
 
-    Flow training requires a distinct source frame pair and therefore needs an
-    explicit source_frames argument. The adapter never fabricates noisy frames.
-    Unsupported target residues are masked from sequence-recovery supervision.
+    Flow training requires distinct source frames plus pair features derived
+    from that same source (source_pair_features or source_geometry). This avoids
+    leaking target-structure geometry into the flow-conditioning input. The
+    adapter never fabricates noisy frames. Unsupported target residues are masked
+    from sequence-recovery supervision.
     """
     from chimera.training import CanonicalTrainingBatch
 
@@ -280,6 +284,7 @@ def dataset_sample_to_training_batch(
 
     source_rotations = None
     source_translations = None
+    training_pair_features = prepared.pair_features
     if source_frames is not None:
         if not isinstance(source_frames, (tuple, list)) or len(source_frames) != 2:
             raise ValueError("source_frames must be a (rotations, translations) pair")
@@ -296,6 +301,62 @@ def dataset_sample_to_training_batch(
         validate_rotation_frames(source_rotations)
         if not torch.isfinite(source_translations).all():
             raise ValueError("source translations contain non-finite values")
+        if (source_pair_features is None) == (source_geometry is None):
+            raise ValueError(
+                "source_frames require exactly one matching source_pair_features or source_geometry; "
+                "target-derived pair features must not be reused as source conditioning"
+            )
+        if source_geometry is not None:
+            source_ca = _tensor(_field(source_geometry, "ca_coordinates"), torch.float32)
+            source_geom_mask = _tensor(_field(source_geometry, "frame_mask"), torch.bool)
+            if source_ca.shape != (prepared.length, 3) or source_geom_mask.shape != (prepared.length,):
+                raise ValueError("source_geometry must describe the same (L,3) source frame set")
+            if not torch.allclose(
+                source_ca.to(source_translations.device),
+                source_translations[0],
+                atol=5e-3,
+                rtol=5e-3,
+            ):
+                raise ValueError("source_geometry CA coordinates do not match source_translations")
+            source_geom_R = _tensor(_field(source_geometry, "residue_frames"), torch.float32)
+            if source_geom_R.shape != (prepared.length, 3, 3):
+                raise ValueError("source_geometry residue_frames must have shape (L,3,3)")
+            valid_frames = source_geom_mask.to(source_rotations.device)
+            if valid_frames.any() and not torch.allclose(
+                source_geom_R.to(source_rotations.device)[valid_frames],
+                source_rotations[0, valid_frames],
+                atol=5e-3,
+                rtol=5e-3,
+            ):
+                raise ValueError("source_geometry frames do not match source_rotations")
+            training_pair_features = pair_features_from_geometry(
+                source_geometry,
+                channels=pair_channels,
+                residue_index=prepared.residue_index[0].to(
+                    _field(source_geometry, "distances").device
+                ),
+            ).unsqueeze(0).to(
+                device=prepared.pair_features.device,
+                dtype=prepared.pair_features.dtype,
+            )
+        else:
+            source_pair_features = _tensor(source_pair_features, torch.float32)
+            if source_pair_features.shape == (
+                prepared.length, prepared.length, prepared.pair_features.shape[-1]
+            ):
+                source_pair_features = source_pair_features.unsqueeze(0)
+            if source_pair_features.shape != prepared.pair_features.shape:
+                raise ValueError(
+                    "source_pair_features must have shape (L,L,C) or (1,L,L,C) matching prepared inputs"
+                )
+            if not torch.isfinite(source_pair_features).all():
+                raise ValueError("source_pair_features contains non-finite values")
+            training_pair_features = source_pair_features.to(
+                device=prepared.pair_features.device,
+                dtype=prepared.pair_features.dtype,
+            )
+    elif source_pair_features is not None or source_geometry is not None:
+        raise ValueError("source pair features/geometry require an explicit source_frames pair")
 
     if substrate_id is not None:
         substrate_id = _tensor(substrate_id, torch.long)
@@ -308,7 +369,7 @@ def dataset_sample_to_training_batch(
 
     return CanonicalTrainingBatch(
         msa_tokens=prepared.msa_tokens,
-        pair_features=prepared.pair_features,
+        pair_features=training_pair_features,
         source_R=source_rotations,
         source_t=source_translations,
         target_R=prepared.source_rotations,
