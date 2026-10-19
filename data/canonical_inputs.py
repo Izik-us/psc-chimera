@@ -18,7 +18,7 @@ from chimera.input_contract import (
     prepare_inference_inputs,
     validate_rotation_frames,
 )
-from data.msa import AA_TO_TOKEN, PAD_TOKEN
+from data.msa import AA_ALPHABET, AA_TO_TOKEN, PAD_TOKEN
 
 PAIR_FEATURE_SCHEMA = "geometry-pair-v1"
 PREPROCESSING_ID = "canonical-dataset-sample-v1"
@@ -298,7 +298,7 @@ def dataset_sample_to_training_batch(
     unsupported = torch.zeros((len(sequence),), dtype=torch.bool, device=target.device)
     for index, residue in enumerate(sequence):
         token = AA_TO_TOKEN.get(residue)
-        if token is None:
+        if residue not in AA_ALPHABET:
             unsupported[index] = True
         else:
             target[index] = token
