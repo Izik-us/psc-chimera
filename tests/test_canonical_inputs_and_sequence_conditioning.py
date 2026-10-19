@@ -175,3 +175,38 @@ def test_canonical_sequence_loss_uses_pair_connector_and_assigns_gradients():
     assert pair_projection_grad is not None
     assert torch.isfinite(pair_projection_grad).all()
     assert pair_projection_grad.abs().sum() > 0
+
+
+def test_explicit_source_frames_cannot_reuse_target_geometry_pair_features():
+    import pytest
+
+    sample = _sample()
+    length = len(sample["sequence"])
+    source_R = torch.eye(3).reshape(1, 1, 3, 3).expand(1, length, 3, 3).clone()
+    source_t = torch.zeros(1, length, 3)
+    source_t[0, :, 0] = torch.arange(length, dtype=torch.float32) * 3.8
+    with pytest.raises(ValueError, match="must not be reused as source conditioning"):
+        dataset_sample_to_training_batch(
+            sample,
+            pair_channels=128,
+            source_frames=(source_R, source_t),
+        )
+
+
+def test_explicit_source_frames_accept_explicitly_paired_source_features():
+    sample = _sample()
+    length = len(sample["sequence"])
+    source_R = torch.eye(3).reshape(1, 1, 3, 3).expand(1, length, 3, 3).clone()
+    source_t = sample["geometry"].ca_coordinates.unsqueeze(0).clone()
+    source_pair = torch.full((1, length, length, 128), 0.125)
+
+    batch = dataset_sample_to_training_batch(
+        sample,
+        pair_channels=128,
+        source_frames=(source_R, source_t),
+        source_pair_features=source_pair,
+    )
+    assert torch.equal(batch.source_R, source_R)
+    assert torch.equal(batch.source_t, source_t)
+    assert torch.equal(batch.pair_features, source_pair)
+    assert not torch.equal(batch.pair_features, dataset_sample_to_prepared_inputs(sample).pair_features)
