@@ -4,7 +4,7 @@ import torch
 
 from chimera.components import NodeProjectionConnector
 from data.canonical_inputs import (
-    PREPROCESSING_ID,
+    preprocessing_id_for,
     dataset_sample_to_prepared_inputs,
     dataset_sample_to_training_batch,
     pair_features_from_geometry,
@@ -61,7 +61,7 @@ def test_dataset_sample_adapter_builds_provenance_bound_canonical_inference_inpu
     assert prepared.msa_padding_mask.shape == (1, 2, 8)
     assert prepared.msa_padding_mask[0, 1, 4:].all()
     assert prepared.residue_mask.all()
-    assert prepared.manifest.preprocessing_id == PREPROCESSING_ID
+    assert prepared.manifest.preprocessing_id == preprocessing_id_for(128)
     assert prepared.identity
 
 
