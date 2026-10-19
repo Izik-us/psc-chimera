@@ -123,8 +123,8 @@ _REGIME_MODULES = {
         "constraint_encoder", "substrate_conditioner",
     ),
     TrainingRegime.SEQUENCE: (
-        "node_connector", "base_mpnn", "multi_scale_designer",
-        "_seq_to_repr", "sequence_policy",
+        "node_connector", "pair_connector", "constraint_encoder", "substrate_conditioner",
+        "base_mpnn", "multi_scale_designer", "_seq_to_repr", "sequence_policy",
     ),
     TrainingRegime.CONSTRAINT: (
         "evoformer", "pair_connector", "flow_model", "evol_cross_attn",
@@ -427,11 +427,14 @@ class CanonicalTrainer:
     def _conditioning(self, batch: CanonicalTrainingBatch):
         model = self.model
         batch_size, _, length = batch.msa_tokens.shape
+        residue_mask = batch.residue_mask
+        if residue_mask is None:
+            residue_mask = batch.msa_tokens.ne(22).any(dim=1)
         single, pair = model.evoformer(
             batch.msa_tokens,
             batch.pair_features,
             msa_padding_mask=batch.msa_padding_mask,
-            residue_mask=batch.residue_mask,
+            residue_mask=residue_mask,
             residue_index=batch.residue_index,
         )
         pair_cond = model.pair_connector(pair)
@@ -483,12 +486,26 @@ class CanonicalTrainer:
         structure_t = batch.target_t if batch.target_t is not None else batch.source_t
         if structure_R is None or structure_t is None:
             raise ValueError("sequence recovery training requires ground-truth backbone frames")
-        single, _, constraints = self._conditioning(batch)
+        single, pair_cond, constraints = self._conditioning(batch)
         batch_size, _, length = batch.msa_tokens.shape
-        node_features = self.model.node_connector(single)
+        residue_mask = batch.residue_mask
+        if residue_mask is None:
+            residue_mask = batch.msa_tokens.ne(22).any(dim=1)
+        node_features = self.model.node_connector(
+            single,
+            pair_features=pair_cond,
+            residue_mask=residue_mask,
+        )
         coords = self.model._frames_to_coords(structure_R, structure_t)
-        residue_features = self.model.base_mpnn(coords, node_features)
+        residue_features = self.model.base_mpnn(
+            coords, node_features, residue_mask=residue_mask
+        )
         edge_index, edge_features, edge_mask = get_protein_graph(structure_t, structure_R, k_neighbors=32)
+        if residue_mask is not None:
+            valid_neighbors = residue_mask.unsqueeze(1).expand(-1, length, -1).gather(
+                2, edge_index
+            )
+            edge_mask = edge_mask & valid_neighbors & residue_mask.unsqueeze(-1)
         edge_features = edge_features * edge_mask.unsqueeze(-1).to(edge_features.dtype)
         if constraints is None:
             domain_bounds = self._default_bounds(self.model.n_domains, length, batch_size, single.device)
