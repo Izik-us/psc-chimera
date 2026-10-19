@@ -524,6 +524,7 @@ class CanonicalTrainer:
             module_bounds,
             face,
             edge_mask=edge_mask,
+            residue_mask=residue_mask,
         )
         context = self.model._seq_to_repr(logits)
         return self.model.sequence_policy_loss(
