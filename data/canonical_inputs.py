@@ -21,7 +21,16 @@ from chimera.input_contract import (
 from data.msa import AA_TO_TOKEN, PAD_TOKEN
 
 PAIR_FEATURE_SCHEMA = "geometry-pair-v1"
-PREPROCESSING_ID = "canonical-dataset-sample-v1/geometry-pair-v1"
+PREPROCESSING_ID = "canonical-dataset-sample-v1"
+
+
+def preprocessing_id_for(pair_channels: int) -> str:
+    """Identify the preprocessing algorithm and exact pair-feature width."""
+    if isinstance(pair_channels, bool) or not isinstance(pair_channels, int):
+        raise TypeError("pair_channels must be an integer")
+    if pair_channels < _MIN_PAIR_CHANNELS:
+        raise ValueError(f"pair_channels must be >= {_MIN_PAIR_CHANNELS}")
+    return f"{PREPROCESSING_ID}/{PAIR_FEATURE_SCHEMA}/channels-{pair_channels}"
 _DISTANCE_BINS = 32
 _SEQUENCE_FREQUENCIES = 8
 _MIN_PAIR_CHANNELS = _DISTANCE_BINS + 3 + 9 + 16 + 12 + 4
@@ -240,10 +249,10 @@ def dataset_sample_to_prepared_inputs(
         or hashlib.sha256(str(sample["sequence"]).upper().encode("ascii")).hexdigest()
     )
     manifest = PreparedInputManifest(
-        preprocessing_id=PREPROCESSING_ID,
+        preprocessing_id=preprocessing_id_for(pair_channels),
         sequence_id=sequence_hash,
         msa_source=msa_source,
-        pair_feature_source=PAIR_FEATURE_SCHEMA,
+        pair_feature_source=f"{PAIR_FEATURE_SCHEMA}/channels-{pair_channels}",
         structure_source=structure_source,
         structure_id=structure_id,
         residue_mapping_id=_stable_identity(sample.get("residue_mappings", [])),
