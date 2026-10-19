@@ -106,6 +106,7 @@ def main() -> None:
 
     component_report = result["gradient_flow"]["components"]
     required = (
+        "pair_connector",
         "node_connector",
         "base_mpnn",
         "multi_scale_designer",
