@@ -1,5 +1,6 @@
 import hashlib
 
+import pytest
 import torch
 
 from chimera.components import NodeProjectionConnector
@@ -236,3 +237,16 @@ def test_explicit_source_frames_accept_explicitly_paired_source_features():
     assert torch.equal(batch.source_t, source_t)
     assert torch.equal(batch.pair_features, source_pair)
     assert not torch.equal(batch.pair_features, dataset_sample_to_prepared_inputs(sample).pair_features)
+
+
+def test_dataset_adapter_rejects_sequence_msa_or_hash_mismatch():
+    bad_msa = _sample()
+    bad_msa["msa_tokens"] = bad_msa["msa_tokens"].clone()
+    bad_msa["msa_tokens"][0, 0] = (bad_msa["msa_tokens"][0, 0] + 1) % 20
+    with pytest.raises(ValueError, match="first MSA row"):
+        dataset_sample_to_prepared_inputs(bad_msa)
+
+    bad_hash = _sample()
+    bad_hash["sequence_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="sequence_sha256"):
+        dataset_sample_to_prepared_inputs(bad_hash)
