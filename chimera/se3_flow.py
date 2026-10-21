@@ -27,24 +27,29 @@ class InvariantPointAttention(nn.Module):
     """
     Local geometric attention using scalar, pair, and residue-frame features.
 
-    This CHIMERA component is not a native AlphaFold/OpenFold EvoFormer
-    implementation. Optional substrate coordinates provide a proximity bias.
+    CHIMERA-specific scalar/pair/point attention with substrate conditioning.
+    Learned point values are aggregated globally and transformed back to the
+    query residue's local frame. This is not a drop-in numerical reproduction
+    of AlphaFold/OpenFold IPA.
     """
 
     def __init__(
         self,
         d_single: int = 256,
-        d_pair: int = 256,  # after PairProjection: 256 dim
+        d_pair: int = 256,
         n_head: Optional[int] = None,
-        n_qk_pts: int = 4,  # number of 3D point queries/keys per head
-        n_v_pts: int = 8,  # number of 3D point values per head
+        n_qk_pts: int = 4,
+        n_v_pts: int = 8,
         inf: float = 1e9,
     ):
         super().__init__()
         n_head = _resolve_ipa_heads(d_single, n_head)
+        if n_qk_pts <= 0 or n_v_pts <= 0:
+            raise ValueError("n_qk_pts and n_v_pts must be positive")
         self.n_head = n_head
         self.n_qk_pts = n_qk_pts
         self.n_v_pts = n_v_pts
+        self.inf = float(inf)
         d_head = d_single // n_head
 
         # Scalar attention projections
@@ -63,8 +68,13 @@ class InvariantPointAttention(nn.Module):
         # Learnable per-head weight for 3D vs scalar attention
         self.gamma = nn.Parameter(torch.ones(n_head))
 
-        # Output projection
-        d_out = n_head * (d_head + 3 + d_pair)
+        # Variance control for the squared point-distance logits.
+        self.scale_scalar = d_head ** -0.5
+        self.scale_point = 1.0 / (2.0 * 3.0 * n_qk_pts)
+
+        # Each head contributes scalar values, 3 coordinates per value point,
+        # one invariant norm per value point, and pair values.
+        d_out = n_head * (d_head + (n_v_pts * 3) + n_v_pts + d_pair)
         self.out = nn.Linear(d_out, d_single)
 
         # When pocket coordinates are supplied, bias attention toward nearby residues.
@@ -72,112 +82,100 @@ class InvariantPointAttention(nn.Module):
 
     def forward(
         self,
-        s: torch.Tensor,  # (B, L, d_single) single repr
-        z: torch.Tensor,  # (B, L, L, d_pair) projected evolutionary pair features
-        R: torch.Tensor,  # (B, L, 3, 3) rotation frames
-        t: torch.Tensor,  # (B, L, 3)     translation (Cα positions)
-        substrate_coords: Optional[torch.Tensor] = None,  # (B, K, 3) pocket atoms
+        s: torch.Tensor,
+        z: torch.Tensor,
+        R: torch.Tensor,
+        t: torch.Tensor,
+        substrate_coords: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         B, L, _ = s.shape
 
-        # ── Scalar Q, K, V ───────────────────────────────────────────────
-        def split_heads(x, n):
-            return x.view(B, L, n, -1).permute(0, 2, 1, 3)  # (B, H, L, d)
+        if z.shape[:3] != (B, L, L):
+            raise ValueError("z must have shape (B, L, L, d_pair)")
+        if R.shape != (B, L, 3, 3) or t.shape != (B, L, 3):
+            raise ValueError("R must be (B,L,3,3) and t must be (B,L,3)")
 
-        Q_s = split_heads(self.q_s(s), self.n_head)  # (B, H, L, d_head)
+        def split_heads(x: torch.Tensor, n: int) -> torch.Tensor:
+            return x.view(B, L, n, -1).permute(0, 2, 1, 3)
+
+        Q_s = split_heads(self.q_s(s), self.n_head)
         K_s = split_heads(self.k_s(s), self.n_head)
         V_s = split_heads(self.v_s(s), self.n_head)
 
-        # ── 3D Point Q, K, V — local to each residue frame ───────────────
-        def transform_points(pts_local, R_frames, t_frames):
-            # pts_local: (B, L, H*n_pts, 3) in local frame
-            # Returns:   (B, L, H*n_pts, 3) in global frame
-            pts = pts_local.view(B, L, -1, 3)
-            R_exp = R_frames.unsqueeze(2).expand(-1, -1, pts.shape[2], -1, -1)
-            t_exp = t_frames.unsqueeze(2).expand(-1, -1, pts.shape[2], -1)
-            return torch.einsum("blnij,blnj->blni", R_exp, pts) + t_exp
+        def transform_points(pts_local, R_frames, t_frames, n_pts):
+            # pts_local is (B,L,H,n_pts,3) in residue-local coordinates.
+            pts = pts_local.view(B, L, self.n_head, n_pts, 3)
+            # x_global = R x_local + t. Return (B,H,L,n_pts,3).
+            pts_global = torch.einsum(
+                "blij,bhlvj->bhlvi",
+                R_frames,
+                pts.permute(0, 2, 1, 3, 4),
+            )
+            return pts_global + t_frames.unsqueeze(1).unsqueeze(3)
 
-        Q_p = transform_points(
-            self.q_p(s).view(B, L, self.n_head * self.n_qk_pts, 3), R, t
-        ).view(
-            B, L, self.n_head, self.n_qk_pts, 3
-        )  # (B, L, H, n_qk, 3)
+        Q_p = transform_points(self.q_p(s), R, t, self.n_qk_pts)
+        K_p = transform_points(self.k_p(s), R, t, self.n_qk_pts)
+        V_p = transform_points(self.v_p(s), R, t, self.n_v_pts)
 
-        K_p = transform_points(
-            self.k_p(s).view(B, L, self.n_head * self.n_qk_pts, 3), R, t
-        ).view(B, L, self.n_head, self.n_qk_pts, 3)
+        # Scalar attention logits.
+        attn_s = torch.einsum("bhid,bhjd->bhij", Q_s, K_s) * self.scale_scalar
 
-        V_p = transform_points(
-            self.v_p(s).view(B, L, self.n_head * self.n_v_pts, 3), R, t
-        ).view(B, L, self.n_head, self.n_v_pts, 3)
+        # Point attention logits: sum squared distances across coordinates and
+        # query/key point slots, with variance control before softmax.
+        diff_p = Q_p.unsqueeze(3) - K_p.unsqueeze(2)
+        attn_p = -0.5 * diff_p.square().sum(dim=-1).sum(dim=-1) * self.scale_point
 
-        # ── Attention logits ──────────────────────────────────────────────
-        # Scalar: (B, H, L, L)
-        scale = Q_s.shape[-1] ** -0.5
-        attn_s = torch.einsum("bhid,bhjd->bhij", Q_s, K_s) * scale
+        # Pair bias.
+        attn_z = self.pair_bias(z).permute(0, 3, 1, 2)
 
-        # Point: sum of squared distances, summed over query points
-        # (B, H, L, L, n_qk, 3) → (B, H, L, L)
-        # Rearrange point representations to (B, H, L, n_qk_pts, 3)
-        Q_p_h = Q_p.permute(0, 2, 1, 3, 4)
-        K_p_h = K_p.permute(0, 2, 1, 3, 4)
-
-        # Pairwise query-key point distances
-        # (B, H, L_query, 1, n_qk_pts, 3)
-        # -
-        # (B, H, 1, L_key,   n_qk_pts, 3)
-        # =
-        # (B, H, L_query, L_key, n_qk_pts, 3)
-        diff_p = (
-            Q_p_h.unsqueeze(3)
-            - K_p_h.unsqueeze(2)
-        )
-
-        # Squared Euclidean distance for each point,
-        # then sum over the point queries.
-        attn_p = -(diff_p.norm(dim=-1) ** 2).sum(dim=-1)
-
-        # Pair bias
-        attn_z = self.pair_bias(z).permute(0, 3, 1, 2)  # (B,H,L,L)
-
-        # Substrate proximity gate (NEW)
+        # Substrate proximity gate.
         if substrate_coords is not None:
-            # Bias attention toward substrate pocket residues
-            diff_sub = t.unsqueeze(2) - substrate_coords.unsqueeze(1)  # (B,L,K,3)
-            min_dist = (
-                diff_sub.norm(dim=-1).min(dim=-1).values
-            )  # (B,L) min dist to pocket
-            prox_bias = torch.exp(-min_dist / 5.0)  # (B,L) decay ~5Å
-            gate = self.substrate_gate(s).permute(0, 2, 1).unsqueeze(-1)  # (B,H,L,1)
-            attn_z = attn_z + gate * prox_bias.unsqueeze(1).unsqueeze(-1)
+            if (
+                substrate_coords.ndim != 3
+                or substrate_coords.shape[0] != B
+                or substrate_coords.shape[1] == 0
+                or substrate_coords.shape[-1] != 3
+            ):
+                raise ValueError("substrate_coords must have shape (B,K,3) with K > 0")
+            diff_sub = t.unsqueeze(2) - substrate_coords.unsqueeze(1)
+            # Proximity is a key-residue property. Bias the key axis so the
+            # term survives softmax; a constant across keys would cancel out.
+            min_dist = diff_sub.norm(dim=-1).min(dim=-1).values
+            prox_bias = torch.exp(-min_dist / 5.0)
+            gate = self.substrate_gate(s).permute(0, 2, 1).unsqueeze(2)
+            attn_z = attn_z + gate * prox_bias.unsqueeze(1).unsqueeze(1)
 
-        # Weight balance between scalar, point, pair terms
-        w = F.softplus(self.gamma)  # (H,)
-        w = w.view(1, self.n_head, 1, 1)
-        logits = attn_s + w * attn_p + attn_z
-        attn = F.softmax(logits, dim=-1)  # (B, H, L, L)
+        gamma_soft = F.softplus(self.gamma).view(1, self.n_head, 1, 1)
+        logits = attn_s + gamma_soft * attn_p + attn_z
+        attn = F.softmax(logits, dim=-1)
 
-        # ── Aggregate ─────────────────────────────────────────────────────
-        # Scalar output
-        out_s = torch.einsum("bhij,bhjd->bhid", attn, V_s)  # (B,H,L,d_head)
+        # Scalar value aggregation.
+        out_s = torch.einsum("bhij,bhjd->bhid", attn, V_s)
 
-        # Use relative coordinates for the point value. This avoids injecting
-        # the global origin and makes the vector representation equivariant by
-        # construction under a shared rigid transform.
-        relative = t.unsqueeze(1) - t.unsqueeze(2)  # (B, L_query, L_key, 3)
-        out_p = torch.einsum("bhij,bijc->bhic", attn, relative)  # (B,H,L,3)
-        # Transform back to local frame of each residue
-        out_p_local = torch.einsum("blji,bhlj->bhli", R, out_p)  # (B, H, L, 3)
+        # Correct IPA point-value aggregation: V_p is mixed over the key
+        # residue axis in global coordinates, rather than replacing V_p with
+        # raw C-alpha displacement vectors.
+        out_p_global = torch.einsum("bhij,bhjvc->bhivc", attn, V_p)
 
-        # Pair output (weighted sum of pair features)
-        out_z = torch.einsum("bhij,bijc->bhic", attn, z)  # (B,H,L,d_pair)
+        # Convert the aggregated global points into the query residue's local
+        # frame: x_local = R^T (x_global - t).
+        out_p_shifted = out_p_global - t.unsqueeze(1).unsqueeze(3)
+        out_p_local = torch.einsum("blji,bhlvj->bhlvi", R, out_p_shifted)
 
-        # Concatenate and project
+        # Point norms are invariant to global rigid transforms and retain
+        # radial information associated with each learned value point.
+        out_p_norm = out_p_local.norm(dim=-1)
+
+        # Pair value aggregation remains CHIMERA's explicit pair-to-single
+        # output pathway.
+        out_z = torch.einsum("bhij,bijc->bhic", attn, z)
+
         out_s_ = out_s.permute(0, 2, 1, 3).reshape(B, L, -1)
-        out_p_ = out_p_local.permute(0, 2, 1, 3).reshape(B, L, -1)
+        out_p_ = out_p_local.permute(0, 2, 1, 3, 4).reshape(B, L, -1)
+        out_p_norm_ = out_p_norm.permute(0, 2, 1, 3).reshape(B, L, -1)
         out_z_ = out_z.permute(0, 2, 1, 3).reshape(B, L, -1)
-        out = torch.cat([out_s_, out_p_, out_z_], dim=-1)
-        return self.out(out)  # (B, L, d_single)
+        out = torch.cat([out_s_, out_p_, out_p_norm_, out_z_], dim=-1)
+        return self.out(out)
 
 
 # ── Canonical SE(3) drift field ───────────────────────────────────────────────

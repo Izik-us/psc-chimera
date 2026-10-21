@@ -270,14 +270,14 @@ class CanonicalCHIMERAv2(nn.Module):
 
     @staticmethod
     def _migrate_flow_state_dict(state: Dict[str, torch.Tensor], target_state: Dict[str, torch.Tensor]):
-        """Migrate historical flow keys and the former floor-divided IPA layout.
+        """Migrate historical flow keys and legacy IPA output layouts.
 
-        Old IPA checkpoints could use 12 heads even when ``d_single`` was not
-        divisible by 12. Their per-head scalar features were truncated. The
-        migration preserves overlapping heads/features, zero-pads newly valid
-        scalar dimensions, and initializes new heads from the target module.
-        The old frozen bridge was random, frozen, and dimension preserving; the
-        canonical backbone replaces it with Identity, so those keys are dropped.
+        Legacy IPA emitted concatenated scalar values, one 3-vector per head,
+        and pair values. The repaired IPA emits scalar values, multiple learned
+        point coordinates, point norms, and pair values. Scalar and pair
+        projection columns are preserved. The old geometric 3-vector is copied
+        into the first learned value-point slot as a lossy warm start; added
+        point slots and norm channels retain the target module initialization.
         """
         migrated = dict(state)
         removed_bridge_keys = [
@@ -294,6 +294,8 @@ class CanonicalCHIMERAv2(nn.Module):
                 stacklevel=2,
             )
 
+        # Older checkpoints may name the same drift module through flow_model;
+        # populate the canonical Schrödinger-bridge alias before migration.
         prefix = "flow_model.velocity_field."
         alias_prefix = "sb_model.drift_model."
         for key, value in tuple(migrated.items()):
@@ -307,74 +309,213 @@ class CanonicalCHIMERAv2(nn.Module):
                 continue
             module_prefix = target_gamma_key[:-len("gamma")]
             source_gamma = migrated.get(target_gamma_key)
-            if source_gamma is None or source_gamma.shape == target_gamma.shape:
+            if source_gamma is None:
                 continue
+
+            source_q = migrated.get(module_prefix + "q_s.weight")
+            target_q = target_state.get(module_prefix + "q_s.weight")
+            source_out = migrated.get(module_prefix + "out.weight")
+            target_out = target_state.get(module_prefix + "out.weight")
+            source_pair_projection = migrated.get(module_prefix + "pair_bias.weight")
+            target_pair_projection = target_state.get(module_prefix + "pair_bias.weight")
+            source_vp = migrated.get(module_prefix + "v_p.weight")
+            target_vp = target_state.get(module_prefix + "v_p.weight")
+            required = (
+                source_q, target_q, source_out, target_out,
+                source_pair_projection, target_pair_projection, source_vp, target_vp,
+            )
+            if any(value is None for value in required):
+                # A partial checkpoint remains subject to strict-load validation.
+                continue
+
             old_heads = int(source_gamma.numel())
             new_heads = int(target_gamma.numel())
-            copy_heads = min(old_heads, new_heads)
-            source_q = migrated[module_prefix + "q_s.weight"]
-            target_q = target_state[module_prefix + "q_s.weight"]
+            if old_heads <= 0 or new_heads <= 0:
+                raise ValueError(f"invalid IPA head count at {module_prefix}")
+            if source_q.shape[0] % old_heads or target_q.shape[0] % new_heads:
+                raise ValueError(f"IPA scalar projection is incompatible with head counts at {module_prefix}")
+
             old_head_dim = source_q.shape[0] // old_heads
             new_head_dim = target_q.shape[0] // new_heads
-            pair_dim = target_state[module_prefix + "pair_bias.weight"].shape[1]
+            old_pair_dim = int(source_pair_projection.shape[1])
+            new_pair_dim = int(target_pair_projection.shape[1])
+            copy_heads = min(old_heads, new_heads)
 
+            projection_names = (
+                "q_s.weight", "k_s.weight", "v_s.weight",
+                "q_p.weight", "k_p.weight", "v_p.weight",
+                "pair_bias.weight", "substrate_gate.weight", "substrate_gate.bias",
+            )
+            needs_migration = source_gamma.shape != target_gamma.shape
+            for name in projection_names:
+                source = migrated.get(module_prefix + name)
+                target = target_state.get(module_prefix + name)
+                if source is not None and target is not None and source.shape != target.shape:
+                    needs_migration = True
+            if source_out.shape != target_out.shape:
+                needs_migration = True
+            if not needs_migration:
+                continue
+
+            # Scalar Q/K/V projection migration: preserve overlapping heads,
+            # scalar channels, and input channels; leave new channels initialized.
             for name in ("q_s.weight", "k_s.weight", "v_s.weight"):
-                source = migrated[module_prefix + name]
-                target = target_state[module_prefix + name].clone()
-                source = source.reshape(old_heads, old_head_dim, source.shape[1])
-                target_view = target.reshape(new_heads, new_head_dim, target.shape[1])
+                key = module_prefix + name
+                source = migrated.get(key)
+                target = target_state.get(key)
+                if source is None or target is None:
+                    continue
+                if source.shape[0] % old_heads or target.shape[0] % new_heads:
+                    raise ValueError(f"invalid scalar projection shape at {key}")
+                source_head_dim = source.shape[0] // old_heads
+                target_head_dim = target.shape[0] // new_heads
+                source_view = source.reshape(old_heads, source_head_dim, source.shape[1])
+                target_view = target.clone().reshape(new_heads, target_head_dim, target.shape[1])
+                head_width = min(source_head_dim, target_head_dim)
+                input_width = min(source.shape[1], target.shape[1])
                 for head in range(copy_heads):
-                    width = min(old_head_dim, new_head_dim)
-                    target_view[head, :width] = source[head, :width]
-                migrated[module_prefix + name] = target
+                    target_view[head, :head_width, :input_width] = source_view[
+                        head, :head_width, :input_width
+                    ]
+                migrated[key] = target_view.reshape_as(target)
 
+            # Point Q/K/V projections: point counts can differ independently
+            # from head counts; preserve overlapping heads and point slots.
             for name in ("q_p.weight", "k_p.weight", "v_p.weight"):
-                source = migrated[module_prefix + name]
-                target = target_state[module_prefix + name].clone()
-                points = source.shape[0] // (old_heads * 3)
-                source_view = source.reshape(old_heads, points, 3, source.shape[1])
-                target_view = target.reshape(new_heads, points, 3, target.shape[1])
-                target_view[:copy_heads] = source_view[:copy_heads]
-                migrated[module_prefix + name] = target
+                key = module_prefix + name
+                source = migrated.get(key)
+                target = target_state.get(key)
+                if source is None or target is None:
+                    continue
+                if source.shape[0] % (old_heads * 3) or target.shape[0] % (new_heads * 3):
+                    raise ValueError(f"invalid point projection shape at {key}")
+                source_points = source.shape[0] // (old_heads * 3)
+                target_points = target.shape[0] // (new_heads * 3)
+                source_view = source.reshape(old_heads, source_points, 3, source.shape[1])
+                target_view = target.clone().reshape(new_heads, target_points, 3, target.shape[1])
+                point_count = min(source_points, target_points)
+                input_width = min(source.shape[1], target.shape[1])
+                target_view[:copy_heads, :point_count, :, :input_width] = source_view[
+                    :copy_heads, :point_count, :, :input_width
+                ]
+                migrated[key] = target_view.reshape_as(target)
 
+            # Pair and substrate projections are head-row layouts.
             for name in ("pair_bias.weight", "substrate_gate.weight"):
-                source = migrated[module_prefix + name]
-                target = target_state[module_prefix + name].clone()
-                target[:copy_heads] = source[:copy_heads]
-                migrated[module_prefix + name] = target
+                key = module_prefix + name
+                source = migrated.get(key)
+                target = target_state.get(key)
+                if source is None or target is None:
+                    continue
+                target_view = target.clone()
+                rows = min(source.shape[0], target.shape[0], copy_heads)
+                cols = min(source.shape[1], target.shape[1])
+                target_view[:rows, :cols] = source[:rows, :cols]
+                migrated[key] = target_view
 
             substrate_bias_key = module_prefix + "substrate_gate.bias"
-            source_substrate_bias = migrated[substrate_bias_key]
-            target_substrate_bias = target_state[substrate_bias_key].clone()
-            target_substrate_bias[:copy_heads] = source_substrate_bias[:copy_heads]
-            migrated[substrate_bias_key] = target_substrate_bias
+            source_substrate_bias = migrated.get(substrate_bias_key)
+            target_substrate_bias = target_state.get(substrate_bias_key)
+            if source_substrate_bias is not None and target_substrate_bias is not None:
+                bias = target_substrate_bias.clone()
+                rows = min(source_substrate_bias.numel(), bias.numel(), copy_heads)
+                bias[:rows] = source_substrate_bias[:rows]
+                migrated[substrate_bias_key] = bias
 
-            source_gamma = migrated[module_prefix + "gamma"]
-            target_gamma_value = target_state[module_prefix + "gamma"].clone()
+            target_gamma_value = target_gamma.clone()
             target_gamma_value[:copy_heads] = source_gamma[:copy_heads]
             migrated[module_prefix + "gamma"] = target_gamma_value
 
+            # The old output was concatenated by track, not interleaved by head:
+            # [all scalar heads | one 3-vector/head | all pair heads].
+            # The new layout is [all scalar | all Vp coordinates | all Vp norms | all pair].
+            # Trigger this conversion even when head counts match, since output
+            # width changed independently of gamma's shape.
             source_out = migrated[module_prefix + "out.weight"]
             target_out = target_state[module_prefix + "out.weight"].clone()
-            old_width = old_head_dim + 3 + pair_dim
-            new_width = new_head_dim + 3 + pair_dim
-            source_view = source_out.reshape(source_out.shape[0], old_heads, old_width)
-            target_view = target_out.reshape(target_out.shape[0], new_heads, new_width)
-            for head in range(copy_heads):
-                target_view[:, head, :min(old_head_dim, new_head_dim)] = source_view[
-                    :, head, :min(old_head_dim, new_head_dim)
-                ]
-                target_view[:, head, new_head_dim:new_head_dim + 3] = source_view[
-                    :, head, old_head_dim:old_head_dim + 3
-                ]
-                target_view[:, head, new_head_dim + 3:] = source_view[
-                    :, head, old_head_dim + 3:old_width
-                ]
-            migrated[module_prefix + "out.weight"] = target_out
+            if source_out.shape[0] != target_out.shape[0]:
+                raise ValueError(
+                    f"IPA output projection row mismatch at {module_prefix}: "
+                    f"{tuple(source_out.shape)} -> {tuple(target_out.shape)}"
+                )
 
+            old_scalar_width = source_q.shape[0]
+            old_point_width = old_heads * 3
+            old_pair_width = old_heads * old_pair_dim
+            legacy_width = old_scalar_width + old_point_width + old_pair_width
+
+            new_scalar_width = target_q.shape[0]
+            if target_vp.shape[0] % (new_heads * 3):
+                raise ValueError(f"invalid Vp projection shape at {module_prefix}")
+            new_v_points = target_vp.shape[0] // (new_heads * 3)
+            new_point_width = target_vp.shape[0]
+            new_norm_width = new_heads * new_v_points
+            new_pair_width = new_heads * new_pair_dim
+            canonical_width = (
+                new_scalar_width + new_point_width + new_norm_width + new_pair_width
+            )
+            if target_out.shape[1] != canonical_width:
+                raise ValueError(
+                    f"canonical IPA output width mismatch at {module_prefix}: "
+                    f"expected {canonical_width}, got {target_out.shape[1]}"
+                )
+
+            if source_out.shape[1] == legacy_width:
+                out_rows = source_out.shape[0]
+                # Preserve scalar track head by head.
+                source_scalar = source_out[:, :old_scalar_width].reshape(
+                    out_rows, old_heads, old_head_dim
+                )
+                target_scalar = target_out[:, :new_scalar_width].reshape(
+                    out_rows, new_heads, new_head_dim
+                )
+                scalar_width = min(old_head_dim, new_head_dim)
+                for head in range(copy_heads):
+                    target_scalar[:, head, :scalar_width] = source_scalar[
+                        :, head, :scalar_width
+                    ]
+
+                # Warm-start the first learned value point from the old geometric
+                # vector projection. This is explicitly lossy because the old
+                # feature was a relative displacement, not a learned Vp point.
+                source_point = source_out[
+                    :, old_scalar_width:old_scalar_width + old_point_width
+                ].reshape(out_rows, old_heads, 3)
+                target_point = target_out[
+                    :, new_scalar_width:new_scalar_width + new_point_width
+                ].reshape(out_rows, new_heads, new_v_points, 3)
+                for head in range(copy_heads):
+                    target_point[:, head, 0, :] = source_point[:, head, :]
+
+                # New point slots and norm channels keep target initialization.
+                source_pair_start = old_scalar_width + old_point_width
+                source_pair = source_out[
+                    :, source_pair_start:source_pair_start + old_pair_width
+                ].reshape(out_rows, old_heads, old_pair_dim)
+                target_pair_start = new_scalar_width + new_point_width + new_norm_width
+                target_pair = target_out[
+                    :, target_pair_start:target_pair_start + new_pair_width
+                ].reshape(out_rows, new_heads, new_pair_dim)
+                pair_heads = copy_heads
+                pair_width = min(old_pair_dim, new_pair_dim)
+                for head in range(pair_heads):
+                    target_pair[:, head, :pair_width] = source_pair[:, head, :pair_width]
+                migrated[module_prefix + "out.weight"] = target_out
+            elif source_out.shape != target_out.shape:
+                raise ValueError(
+                    f"unrecognized legacy IPA output layout at {module_prefix}: "
+                    f"{source_out.shape[1]} input features; expected {legacy_width} "
+                    f"for legacy or {target_out.shape[1]} for canonical layout"
+                )
+
+            head_note = (
+                f"from {old_heads} to {new_heads} heads; "
+                if old_heads != new_heads else ""
+            )
             warnings.warn(
-                f"Migrated truncated IPA heads at {module_prefix[:-1]} from "
-                f"{old_heads} to {new_heads} divisible heads; overlapping head features were preserved.",
+                f"Migrated legacy IPA output/projection layout at {module_prefix[:-1]} "
+                f"({head_note}old geometric vector mapped to the first Vp slot; "
+                "new Vp slots and norm channels retain target initialization).",
                 UserWarning,
                 stacklevel=2,
             )
