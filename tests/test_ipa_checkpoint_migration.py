@@ -15,6 +15,7 @@ def test_legacy_ipa_output_projection_migrates_by_track(old_heads, old_head_dim)
     backbone = FlowMatchingBackbone(d_single=64, d_pair=16, n_blocks=1)
     target_state = backbone.state_dict()
     prefix = "flow_model.velocity_field.ipa_blocks.0.ipa."
+    initial_out = target_state[prefix + "out.weight"].clone()
     historical = {
         key: value.clone()
         for key, value in target_state.items()
@@ -75,7 +76,7 @@ def test_legacy_ipa_output_projection_migrates_by_track(old_heads, old_head_dim)
         assert torch.equal(point_target[:, head, 0, :], point_source[:, head, :])
 
     # Added point slots and point norms retain the target initialization.
-    original_out = target_state[prefix + "out.weight"]
+    original_out = initial_out
     original_points = original_out[:, new_scalar_width:new_scalar_width + new_point_width]
     original_points = original_points.reshape(64, new_heads, new_v_points, 3)
     for head in range(new_heads):
