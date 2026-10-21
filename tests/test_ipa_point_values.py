@@ -1,6 +1,7 @@
 import math
 
 import torch
+import pytest
 
 from chimera.se3_flow import InvariantPointAttention
 
@@ -87,3 +88,49 @@ def test_ipa_supports_independent_qk_and_value_point_counts():
     output = model(s, z, R, t)
     assert output.shape == s.shape
     assert torch.isfinite(output).all()
+
+
+
+def test_ipa_substrate_proximity_changes_key_conditioning():
+    model = InvariantPointAttention(
+        d_single=32, d_pair=16, n_head=4, n_qk_pts=2, n_v_pts=3
+    ).eval()
+    s, z, R, t = _inputs()
+    close_pocket = t[:, :2, :].clone()
+    far_pocket = close_pocket + 500.0
+
+    with torch.no_grad():
+        unconditioned = model(s, z, R, t)
+        close_conditioned = model(s, z, R, t, close_pocket)
+        far_conditioned = model(s, z, R, t, far_pocket)
+
+    assert not torch.allclose(unconditioned, close_conditioned, atol=1e-7, rtol=1e-7)
+    assert torch.allclose(unconditioned, far_conditioned, atol=1e-6, rtol=1e-6)
+
+
+def test_ipa_with_substrate_is_invariant_to_joint_global_se3_transform():
+    model = InvariantPointAttention(
+        d_single=32, d_pair=16, n_head=4, n_qk_pts=2, n_v_pts=3
+    ).eval()
+    s, z, R, t = _inputs()
+    Q = _rotation((1.0, -2.0, 0.5), 0.73)
+    shift = torch.tensor([7.0, -3.5, 2.25])
+    substrate = t[:, :3, :] + torch.tensor([0.25, -0.5, 0.75])
+    transformed_R = torch.einsum("ij,bljk->blik", Q, R)
+    transformed_t = torch.einsum("ij,blj->bli", Q, t) + shift
+    transformed_substrate = torch.einsum("ij,bkj->bki", Q, substrate) + shift
+
+    with torch.no_grad():
+        reference = model(s, z, R, t, substrate)
+        transformed = model(s, z, transformed_R, transformed_t, transformed_substrate)
+
+    assert torch.allclose(reference, transformed, atol=2e-5, rtol=2e-5)
+
+
+def test_ipa_rejects_empty_substrate_coordinate_set():
+    model = InvariantPointAttention(
+        d_single=32, d_pair=16, n_head=4, n_qk_pts=2, n_v_pts=3
+    )
+    s, z, R, t = _inputs()
+    with pytest.raises(ValueError, match="K > 0"):
+        model(s, z, R, t, torch.empty(1, 0, 3))
