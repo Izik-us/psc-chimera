@@ -496,7 +496,7 @@ class CanonicalCHIMERAv2(nn.Module):
                 target_pair = target_out[
                     :, target_pair_start:target_pair_start + new_pair_width
                 ].reshape(out_rows, new_heads, new_pair_dim)
-                pair_heads = min(copy_heads, old_pair_dim > 0 and new_heads or new_heads)
+                pair_heads = copy_heads
                 pair_width = min(old_pair_dim, new_pair_dim)
                 for head in range(pair_heads):
                     target_pair[:, head, :pair_width] = source_pair[:, head, :pair_width]
