@@ -81,3 +81,38 @@ def test_canonical_flow_bridge_is_identity_not_frozen_random_adapter():
     assert list(backbone.frozen_bridge.parameters()) == []
     features = torch.randn(2, 5, 32)
     assert torch.equal(backbone.frozen_bridge(features), features)
+
+
+def test_ipa_uses_learned_point_values_and_has_expected_output_width():
+    torch.manual_seed(101)
+    module = InvariantPointAttention(d_single=32, d_pair=16, n_head=4, n_qk_pts=2, n_v_pts=3)
+    expected_width = module.n_head * ((32 // 4) + 3 * 3 + 3 + 16)
+    assert module.out.in_features == expected_width
+
+    s = torch.randn(1, 5, 32, requires_grad=True)
+    z = torch.randn(1, 5, 5, 16)
+    R = torch.eye(3).expand(1, 5, 3, 3).clone()
+    t = torch.randn(1, 5, 3)
+    out = module(s, z, R, t)
+    out.square().mean().backward()
+    assert module.v_p.weight.grad is not None
+    assert torch.isfinite(module.v_p.weight.grad).all()
+    assert module.v_p.weight.grad.abs().sum() > 0
+
+
+def test_ipa_output_is_invariant_to_global_se3_transform():
+    torch.manual_seed(103)
+    module = InvariantPointAttention(d_single=32, d_pair=16, n_head=4, n_qk_pts=2, n_v_pts=3).eval()
+    s = torch.randn(1, 6, 32)
+    z = torch.randn(1, 6, 6, 16)
+    R = so3_exp(torch.randn(1, 6, 3) * 0.2)
+    t = torch.randn(1, 6, 3)
+    out = module(s, z, R, t)
+
+    global_rotation = so3_exp(torch.tensor([[0.4, -0.3, 0.2]]))[0]
+    global_shift = torch.tensor([7.0, -2.0, 5.0])
+    R_transformed = torch.matmul(global_rotation.unsqueeze(0).unsqueeze(0), R)
+    t_transformed = torch.matmul(t, global_rotation.transpose(0, 1)) + global_shift
+    out_transformed = module(s, z, R_transformed, t_transformed)
+
+    assert torch.allclose(out, out_transformed, atol=2e-5, rtol=2e-5)
