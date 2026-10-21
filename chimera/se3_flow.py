@@ -27,10 +27,10 @@ class InvariantPointAttention(nn.Module):
     """
     Local geometric attention using scalar, pair, and residue-frame features.
 
-    CHIMERA's IPA variant follows the AlphaFold-style scalar/pair/point
-    attention decomposition while retaining CHIMERA-specific substrate
-    conditioning. Point values are aggregated in global coordinates and
-    transformed back into the query residue's local frame before projection.
+    CHIMERA-specific scalar/pair/point attention with substrate conditioning.
+    Learned point values are aggregated globally and transformed back to the
+    query residue's local frame. This is not a drop-in numerical reproduction
+    of AlphaFold/OpenFold IPA.
     """
 
     def __init__(
@@ -130,13 +130,20 @@ class InvariantPointAttention(nn.Module):
 
         # Substrate proximity gate.
         if substrate_coords is not None:
-            if substrate_coords.ndim != 3 or substrate_coords.shape[0] != B or substrate_coords.shape[-1] != 3:
-                raise ValueError("substrate_coords must have shape (B,K,3)")
+            if (
+                substrate_coords.ndim != 3
+                or substrate_coords.shape[0] != B
+                or substrate_coords.shape[1] == 0
+                or substrate_coords.shape[-1] != 3
+            ):
+                raise ValueError("substrate_coords must have shape (B,K,3) with K > 0")
             diff_sub = t.unsqueeze(2) - substrate_coords.unsqueeze(1)
+            # Proximity is a key-residue property. Bias the key axis so the
+            # term survives softmax; a constant across keys would cancel out.
             min_dist = diff_sub.norm(dim=-1).min(dim=-1).values
             prox_bias = torch.exp(-min_dist / 5.0)
-            gate = self.substrate_gate(s).permute(0, 2, 1).unsqueeze(-1)
-            attn_z = attn_z + gate * prox_bias.unsqueeze(1).unsqueeze(-1)
+            gate = self.substrate_gate(s).permute(0, 2, 1).unsqueeze(2)
+            attn_z = attn_z + gate * prox_bias.unsqueeze(1).unsqueeze(1)
 
         gamma_soft = F.softplus(self.gamma).view(1, self.n_head, 1, 1)
         logits = attn_s + gamma_soft * attn_p + attn_z
