@@ -6,7 +6,7 @@ Implements the corrected architecture from the peer review (9-9.5/10 score).
 Architecture:
     Protein (amino acid sequence)
          │
-    ESM-2 Encoder (150M, frozen; explicit 1,022-residue input cap)
+    ESM-2 Encoder (150M, frozen; overlapping windows for long proteins)
          │
     Cross-Attention (protein → DNA)
          │
