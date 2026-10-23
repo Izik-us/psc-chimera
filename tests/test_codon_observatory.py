@@ -75,6 +75,7 @@ def test_cli_observatory_renders_telemetry_and_attention():
     output = stream.getvalue()
     observatory.close()
 
+    assert "\x1b[2J\x1b[H" in output  # dashboard redraws in place, not as appended snapshots
     assert "PSC CODON OPTIMIZER • CLI TRAINING OBSERVATORY" in output
     assert "OBJECTIVES" in output
     assert "CODON DECODING" in output
