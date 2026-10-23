@@ -84,25 +84,18 @@ def test_length_bucket_sampler_separates_extreme_lengths():
     assert all(not ({0, 1} <= set(batch) and 2 in batch) for batch in batches)
 
 
-def test_length_bucket_sampler_requires_explicit_oversize_policy():
-    with pytest.raises(ValueError, match="oversize-policy skip"):
-        LengthBucketBatchSampler(
-            _LengthDataset([80, 2426]),
-            batch_size=2,
-            max_protein_length=1022,
-        )
-
+def test_length_bucket_sampler_never_discards_long_examples():
     sampler = LengthBucketBatchSampler(
         _LengthDataset([80, 2426]),
         batch_size=2,
-        max_protein_length=1022,
-        oversize_policy="skip",
+        max_attention_elements=4_194_304,
     )
-    assert sampler.excluded_indices == [1]
-    assert list(sampler) == [[0]]
+    assert sorted(index for batch in sampler for index in batch) == [0, 1]
+    assert sampler.excluded_indices == []
+    assert any(2426 * 2426 > 4_194_304 for batch in sampler for i in batch if i == 1)
 
 
-def test_model_rejects_proteins_above_configured_context():
+def test_position_embeddings_extend_beyond_base_context_without_truncation():
     model = CodonOptimizer(
         d_model=32,
         n_heads=4,
@@ -111,12 +104,9 @@ def test_model_rejects_proteins_above_configured_context():
         max_codons=128,
         max_protein_length=128,
     )
-    protein = "M" * 129
-    with pytest.raises(ValueError, match="exceeds configured maximum"):
-        model.encode_protein(
-            tokenize_protein(protein).unsqueeze(0),
-            [protein],
-        )
+    positions = model._position_embeddings(129, torch.device("cpu"))
+    assert positions.shape == (129, 32)
+    assert torch.isfinite(positions).all()
 
 
 def test_codon_decoder_capacity_tracks_protein_context():
