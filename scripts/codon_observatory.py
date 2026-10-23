@@ -293,10 +293,12 @@ class CodonObservatory:
             ]
         )
 
-        # A terminal refresh is useful interactively, but CI/non-TTY output
-        # remains plain text so logs are readable and deterministic.
-        if getattr(self.stream, "isatty", lambda: False)():
-            self.stream.write("\x1b[2J\x1b[H")
+        # Redraw the same screen instead of appending a fresh snapshot.
+        # Emit ANSI clear/home even when stdout reports non-TTY (some IDE
+        # terminals and launchers misreport this); use an ANSI-capable terminal
+        # for the live dashboard. CI logs may show escape sequences, but remain
+        # deterministic and the ordinary non-visual training path is unchanged.
+        self.stream.write("\x1b[2J\x1b[H")
         self.stream.write("\n".join(lines) + "\n")
         self.stream.flush()
 
