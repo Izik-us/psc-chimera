@@ -428,7 +428,11 @@ def main() -> None:
         if sibling_validation.is_file():
             validation_path = sibling_validation
 
-    if validation_path is not None:
+    if args.smoke:
+        train_dataset = dataset
+        val_dataset = None
+        validation_source = "smoke test (validation disabled)"
+    elif validation_path is not None:
         if args.val_fraction is not None:
             raise ValueError(
                 "Use either --validation-dataset or --val-fraction, not both."
@@ -442,7 +446,9 @@ def main() -> None:
             0.1 if args.val_fraction is None else args.val_fraction,
             args.seed,
         )
-        validation_source = "protein-identity holdout" if val_dataset is not None else "none"
+        validation_source = (
+            "protein-identity holdout" if val_dataset is not None else "none"
+        )
 
     checkpoint_state = None
     checkpoint_config = None
