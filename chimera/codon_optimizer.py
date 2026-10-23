@@ -56,6 +56,7 @@ References:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 import argparse
 import re
 import math
@@ -103,6 +104,12 @@ EOS_TOKEN = len(ALL_CODONS) + 1  # 65
 PAD_TOKEN = len(ALL_CODONS) + 2  # 66
 VOCAB_SIZE = len(ALL_CODONS) + 3  # 67
 ESM_T30_MAX_PROTEIN_LENGTH = 1022
+
+# Bound quadratic attention work for long codon sequences. Full sequence
+# positions are retained; only the decoder's autoregressive self-attention
+# context and expression critic's global pathway are bounded.
+MAX_DECODER_ATTENTION_LENGTH = 512
+MAX_GLOBAL_ATTENTION_LENGTH = 512
 
 # Amino acid vocabulary (standard + unknown)
 AA_VOCAB = "ACDEFGHIKLMNPQRSTVWY"
@@ -593,6 +600,7 @@ class ExpressionPredictor(nn.Module):
         n_heads: int = 4,
         n_layers: int = 3,
         dropout: float = 0.17,
+        max_global_attention_length: int = MAX_GLOBAL_ATTENTION_LENGTH,
     ):
         super().__init__()
 
@@ -601,7 +609,11 @@ class ExpressionPredictor(nn.Module):
                 "d_model must be divisible by n_heads."
             )
 
+        if max_global_attention_length <= 0:
+            raise ValueError("max_global_attention_length must be positive.")
+
         self.d_model = d_model
+        self.max_global_attention_length = int(max_global_attention_length)
 
         # Only actual codons are embedded.
         # Special tokens are rejected by forward().
@@ -824,10 +836,39 @@ class ExpressionPredictor(nn.Module):
         # Global Transformer pathway
         # ---------------------------------------------------------------
 
+        # Full self-attention has quadratic memory cost. For long sequences,
+        # pool the global pathway to a bounded number of bins while leaving the
+        # full-resolution CNN pathway and final masked pooling unchanged.
+        # Adaptive max pooling marks a bin valid if it contains any real codon.
+        global_input = x
+        global_padding_mask = padding_mask
+        if x.shape[1] > self.max_global_attention_length:
+            global_input = F.adaptive_avg_pool1d(
+                x.transpose(1, 2),
+                self.max_global_attention_length,
+            ).transpose(1, 2)
+            pooled_valid = F.adaptive_max_pool1d(
+                (~padding_mask).to(dtype=x.dtype).unsqueeze(1),
+                self.max_global_attention_length,
+            ).squeeze(1) > 0
+            global_padding_mask = ~pooled_valid
+            global_input = global_input.masked_fill(
+                global_padding_mask.unsqueeze(-1),
+                0.0,
+            )
+
         global_feat = self.global_transformer(
-            x,
-            src_key_padding_mask=padding_mask,
+            global_input,
+            src_key_padding_mask=global_padding_mask,
         )
+
+        if global_feat.shape[1] != x.shape[1]:
+            global_feat = F.interpolate(
+                global_feat.transpose(1, 2),
+                size=x.shape[1],
+                mode="linear",
+                align_corners=False,
+            ).transpose(1, 2)
 
         global_feat = global_feat.masked_fill(
             padding_mask.unsqueeze(-1),
@@ -2066,22 +2107,80 @@ class CodonOptimizer(nn.Module):
                 "Decoder input contains invalid special-token IDs."
             )
 
-        positions = torch.arange(L, device=device)
         dec_emb = self.codon_embedding(dec_input) + self._position_embeddings(L, device).unsqueeze(0)
-
-        causal_mask = torch.triu(torch.ones((L, L), dtype=torch.bool, device=device), diagonal=1)
 
         # ---------------------------------------------------------------
         # Decoder
         # ---------------------------------------------------------------
+        # A full LxL causal mask and full-length self-attention become costly
+        # for multi-thousand-codon records. Preserve every output position but
+        # decode long sequences in overlapping sliding windows. Each window
+        # contains at most MAX_DECODER_ATTENTION_LENGTH positions; cross-
+        # attention still has access to the complete protein memory.
+        if L <= MAX_DECODER_ATTENTION_LENGTH:
+            causal_mask = torch.triu(
+                torch.ones((L, L), dtype=torch.bool, device=device),
+                diagonal=1,
+            )
+            dec_out = self.decoder(
+                tgt=dec_emb,
+                memory=memory,
+                tgt_mask=causal_mask,
+                tgt_key_padding_mask=target_padding_mask,
+                memory_key_padding_mask=memory_padding_mask,
+            )
+        else:
+            chunk_output_length = MAX_DECODER_ATTENTION_LENGTH // 2
+            decoded_chunks = []
+            for chunk_start in range(0, L, chunk_output_length):
+                chunk_end = min(L, chunk_start + chunk_output_length)
+                context_start = max(0, chunk_start - chunk_output_length)
+                window_emb = dec_emb[:, context_start:chunk_end]
+                window_padding = target_padding_mask[:, context_start:chunk_end]
+                window_length = chunk_end - context_start
+                causal_mask = torch.triu(
+                    torch.ones(
+                        (window_length, window_length),
+                        dtype=torch.bool,
+                        device=device,
+                    ),
+                    diagonal=1,
+                )
 
-        dec_out = self.decoder(
-            tgt=dec_emb,
-            memory=memory,
-            tgt_mask=causal_mask,
-            tgt_key_padding_mask=target_padding_mask,
-            memory_key_padding_mask=memory_padding_mask,
-        )
+                # Bind masks as defaults so each checkpoint recomputes with
+                # the correct window's masks during backward.
+                def decode_window(
+                    window_target,
+                    protein_memory,
+                    attention_mask=causal_mask,
+                    target_mask=window_padding,
+                    protein_mask=memory_padding_mask,
+                ):
+                    return self.decoder(
+                        tgt=window_target,
+                        memory=protein_memory,
+                        tgt_mask=attention_mask,
+                        tgt_key_padding_mask=target_mask,
+                        memory_key_padding_mask=protein_mask,
+                    )
+
+                if self.training and torch.is_grad_enabled():
+                    window_out = checkpoint(
+                        decode_window,
+                        window_emb,
+                        memory,
+                        use_reentrant=False,
+                    )
+                else:
+                    window_out = decode_window(window_emb, memory)
+
+                output_offset = chunk_start - context_start
+                output_length = chunk_end - chunk_start
+                decoded_chunks.append(
+                    window_out[:, output_offset:output_offset + output_length]
+                )
+
+            dec_out = torch.cat(decoded_chunks, dim=1)
 
         # Crucial: decoder query positions that are padding must be
         # exactly zero before entering the output head.
