@@ -1,13 +1,18 @@
-"""Live training observatory for PSC CodonOptimizer."""
+"""CLI training observatory for PSC CodonOptimizer.
+
+The observatory is intentionally terminal-native.  It does not import GUI
+or plotting libraries, so enabling training telemetry cannot pull Matplotlib
+or another native GUI backend into the training process.
+"""
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import sys
 import time
 from typing import Optional, Sequence
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 from chimera.codon_optimizer import CODON_TABLE
@@ -56,20 +61,27 @@ def read_system_stats():
         return None, None
     return (
         float(psutil.cpu_percent(interval=None)),
-        float(psutil.virtual_memory().used / (1024 ** 3)),
+        float(psutil.virtual_memory().used / (1024**3)),
     )
 
 
 class CodonObservatory:
+    """Compact, terminal-native training telemetry and attention dashboard."""
+
+    _BLOCKS = " .:-=+*#%@"
+    _SPARKS = "▁▂▃▄▅▆▇█"
+
     def __init__(
         self,
         update_every: int = 5,
         history_size: int = 5000,
         max_attention_length: int = 512,
+        stream=None,
     ):
         self.update_every = max(1, int(update_every))
         self.history_size = max(100, int(history_size))
         self.max_attention_length = max(1, int(max_attention_length))
+        self.stream = stream if stream is not None else sys.stdout
 
         self.step_history = deque(maxlen=self.history_size)
         self.loss_history = deque(maxlen=self.history_size)
@@ -82,42 +94,7 @@ class CodonObservatory:
 
         self._last_render = 0
         self._started = time.perf_counter()
-
-        plt.ion()
-
-        # Restore the original Observatory figure allocation while retaining
-        # the later decoding-trace and attention panels.
-        self.fig = plt.figure(
-            figsize=(24, 16),
-            constrained_layout=True,
-        )
-
-        gs = self.fig.add_gridspec(
-            5,
-            4,
-            height_ratios=[1.0, 1.0, 2.5, 2.5, 1.5],
-        )
-
-        self.ax_loss = self.fig.add_subplot(gs[0, :2])
-        self.ax_obj = self.fig.add_subplot(gs[0, 2:])
-        self.ax_bio = self.fig.add_subplot(gs[1, :2])
-        self.ax_probs = self.fig.add_subplot(gs[1, 2:])
-
-        # Full-width, tall sequence visualization.
-        self.ax_decode = self.fig.add_subplot(gs[2, :])
-
-        # Full-width attention heatmap gets its own row as well.
-        self.ax_attention = self.fig.add_subplot(gs[3, :])
-
-        self.ax_internals = self.fig.add_subplot(gs[4, :2])
-        self.ax_runtime = self.fig.add_subplot(gs[4, 2:])
-
-        self.fig.suptitle(
-            "PSC CodonOptimizer Training Live Visualizer",
-            fontsize=17,
-        )
-        if "agg" not in plt.get_backend().lower():
-            self.fig.show()
+        self._closed = False
 
     def should_capture_attention(
         self,
@@ -132,12 +109,186 @@ class CodonObservatory:
             )
         )
 
-    def _clear(self, ax, title: str):
-        ax.clear()
-        ax.set_title(title)
-        ax.grid(True, alpha=0.25)
+    @staticmethod
+    def _sparkline(values, width: int = 30) -> str:
+        values = list(values)
+        if not values:
+            return ""
+        if len(values) > width:
+            indices = np.linspace(0, len(values) - 1, width).astype(int)
+            values = [values[i] for i in indices]
+        finite = [float(v) for v in values if np.isfinite(v)]
+        if not finite:
+            return "?" * len(values)
+        lo, hi = min(finite), max(finite)
+        if hi <= lo:
+            return "▅" * len(values)
+        return "".join(
+            CodonObservatory._SPARKS[
+                min(
+                    len(CodonObservatory._SPARKS) - 1,
+                    max(0, int((float(v) - lo) / (hi - lo) * 7)),
+                )
+            ]
+            for v in values
+        )
+
+    @staticmethod
+    def _bar(value: float, maximum: float = 1.0, width: int = 24) -> str:
+        if not np.isfinite(value):
+            return "?" * width
+        if maximum <= 0:
+            maximum = 1.0
+        fraction = min(1.0, max(0.0, float(value) / maximum))
+        filled = int(round(fraction * width))
+        return "█" * filled + "·" * (width - filled)
+
+    @classmethod
+    def _attention_matrix(cls, attention: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if attention is None:
+            return None
+        matrix = np.asarray(attention, dtype=float)
+        if matrix.ndim == 4:
+            matrix = matrix.mean(axis=1)
+        if matrix.ndim == 3:
+            matrix = matrix.mean(axis=0)
+        if matrix.ndim != 2 or not np.isfinite(matrix).all():
+            return None
+        return matrix
+
+    @classmethod
+    def _attention_ascii(cls, attention: Optional[np.ndarray], rows: int = 8, cols: int = 32) -> list[str]:
+        matrix = cls._attention_matrix(attention)
+        if matrix is None:
+            return ["  attention matrix unavailable"]
+        if matrix.size == 0:
+            return ["  attention matrix empty"]
+
+        row_count, col_count = matrix.shape
+        row_idx = np.linspace(0, row_count - 1, min(rows, row_count)).astype(int)
+        col_idx = np.linspace(0, col_count - 1, min(cols, col_count)).astype(int)
+        sample = matrix[np.ix_(row_idx, col_idx)]
+        lo, hi = float(sample.min()), float(sample.max())
+        if hi <= lo:
+            normalized = np.zeros_like(sample)
+        else:
+            normalized = (sample - lo) / (hi - lo)
+        lines = []
+        for row in normalized:
+            chars = "".join(
+                cls._BLOCKS[min(len(cls._BLOCKS) - 1, int(v * (len(cls._BLOCKS) - 1)))]
+                for v in row
+            )
+            lines.append("  " + chars)
+        return lines
+
+    @classmethod
+    def _top_attention(cls, attention: Optional[np.ndarray], row: int, top_k: int = 6) -> str:
+        matrix = cls._attention_matrix(attention)
+        if matrix is None or row < 0 or row >= matrix.shape[0]:
+            return "n/a"
+        values = matrix[row]
+        order = np.argsort(values)[::-1][:top_k]
+        return ", ".join(f"{int(i) + 1}:{float(values[i]):.3f}" for i in order)
+
+    def _render(self, telemetry: TrainingTelemetry) -> None:
+        elapsed = max(1e-6, time.perf_counter() - self._started)
+        width = 88
+        lines = [
+            "",
+            "=" * width,
+            "PSC CODON OPTIMIZER • CLI TRAINING OBSERVATORY",
+            "=" * width,
+            (
+                f"epoch {telemetry.epoch}/{telemetry.total_epochs}  "
+                f"step {telemetry.global_step}/{telemetry.total_steps}  "
+                f"lr {telemetry.learning_rate:.3e}  "
+                f"batch {telemetry.batch_time:.2f}s  "
+                f"throughput {telemetry.samples_per_second:.2f} samples/s"
+            ),
+            "",
+            "OBJECTIVES",
+            f"  loss   {telemetry.loss:9.5f}  {self._sparkline(self.loss_history)}",
+            f"  CE     {telemetry.ce:9.5f}  {self._sparkline(self.ce_history)}",
+            f"  CAI    {telemetry.cai:9.5f}  {self._bar(telemetry.cai)}",
+            f"  GC     {telemetry.gc:9.5f}  {self._bar(telemetry.gc)}",
+            f"  motif  {telemetry.motif:9.5f}  {self._bar(telemetry.motif)}",
+            f"  expr   {telemetry.expression_loss:9.5f}  {self._sparkline(self.expr_history)}",
+            f"  grad   {telemetry.gradient_norm:9.5f}  {self._sparkline(self.grad_history)}",
+            "",
+            "BIOLOGICAL / EXPRESSION",
+            f"  predicted expression : {telemetry.predicted_expression: .5f}",
+            f"  target expression    : {telemetry.target_expression: .5f}",
+            f"  expression error     : {telemetry.expression_loss: .5f}",
+            "",
+            "CODON DECODING",
+            (
+                f"  protein length {telemetry.protein_length} aa  |  "
+                f"codon length {telemetry.codon_length} nt  |  "
+                f"selected residue {telemetry.selected_position + 1}: "
+                f"{telemetry.selected_amino_acid}"
+            ),
+        ]
+
+        codons = list(telemetry.candidate_codons)
+        probs = np.asarray(telemetry.candidate_probabilities, dtype=float)
+        if codons and len(probs) == len(codons):
+            order = np.argsort(probs)[::-1]
+            lines.append(
+                "  synonymous candidates: "
+                + "  ".join(f"{codons[i]}={probs[i]:.3f}" for i in order)
+            )
+        else:
+            lines.append("  synonymous candidates: unavailable")
+
+        predicted = list(telemetry.predicted_codons)
+        if predicted:
+            preview = " ".join(predicted[:24])
+            suffix = " …" if len(predicted) > 24 else ""
+            lines.append(f"  predicted DNA codons : {preview}{suffix}")
+        else:
+            lines.append("  predicted DNA codons : unavailable")
+
+        attention = self._attention_matrix(telemetry.cross_attention)
+        lines.extend(
+            [
+                "",
+                "DECODER → PROTEIN ATTENTION",
+            ]
+        )
+        if attention is None:
+            lines.append("  capture disabled, unavailable, or outside attention length limit")
+        else:
+            lines.append(f"  matrix shape          : {attention.shape[0]} × {attention.shape[1]}")
+            lines.append(
+                f"  selected codon top protein positions: "
+                f"{self._top_attention(attention, telemetry.selected_position)}"
+            )
+            lines.append("  downsampled heatmap (rows=codon, cols=protein):")
+            lines.extend(self._attention_ascii(telemetry.cross_attention))
+
+        lines.extend(
+            [
+                "",
+                "RUNTIME",
+                f"  CPU                  : {telemetry.cpu_percent:.1f}%" if telemetry.cpu_percent is not None else "  CPU                  : n/a",
+                f"  RAM used             : {telemetry.memory_gb:.2f} GB" if telemetry.memory_gb is not None else "  RAM used             : n/a",
+                f"  uptime               : {elapsed:.1f}s",
+                f"  architecture         : {telemetry.architecture}",
+                "=" * width,
+            ]
+        )
+
+        # A terminal refresh is useful interactively, but CI/non-TTY output
+        # remains plain text so logs are readable and deterministic.
+        if getattr(self.stream, "isatty", lambda: False)():
+            self.stream.write("\x1b[2J\x1b[H")
+        self.stream.write("\n".join(lines) + "\n")
+        self.stream.flush()
 
     def update(self, telemetry: TrainingTelemetry):
+        if self._closed:
+            return
         step = telemetry.global_step
         self.step_history.append(step)
         self.loss_history.append(telemetry.loss)
@@ -151,222 +302,10 @@ class CodonObservatory:
         if step - self._last_render < self.update_every:
             return
         self._last_render = step
-
-        x = np.asarray(self.step_history)
-
-        # ==============================================================
-        # LOSS
-        # ==============================================================
-        self._clear(self.ax_loss, "Loss")
-        self.ax_loss.plot(x, self.loss_history, label="total")
-        self.ax_loss.plot(x, self.ce_history, label="CE")
-        self.ax_loss.set_xlabel("global step")
-        self.ax_loss.legend(loc="upper right")
-
-        # ==============================================================
-        # OBJECTIVES
-        # ==============================================================
-        self._clear(self.ax_obj, "Objective components")
-        self.ax_obj.plot(x, self.cai_history, label="CAI")
-        self.ax_obj.plot(x, self.gc_history, label="GC")
-        self.ax_obj.plot(x, self.motif_history, label="motif")
-        self.ax_obj.plot(x, self.expr_history, label="expression")
-        self.ax_obj.set_xlabel("global step")
-        self.ax_obj.legend(loc="upper right")
-
-        # ==============================================================
-        # BIOLOGICAL METRICS
-        # ==============================================================
-        self._clear(self.ax_bio, "Current biological / optimization metrics")
-        labels = ["CAI", "GC", "Motif", "Expr loss", "Grad"]
-        values = [
-            telemetry.cai,
-            telemetry.gc,
-            telemetry.motif,
-            telemetry.expression_loss,
-            telemetry.gradient_norm,
-        ]
-        self.ax_bio.bar(labels, values)
-        self.ax_bio.tick_params(axis="x", rotation=20)
-
-        # ==============================================================
-        # SYNONYMOUS CODON PROBABILITIES
-        # ==============================================================
-        self._clear(self.ax_probs, "Synonymous codon probabilities")
-        codons = list(telemetry.candidate_codons)
-        probs = np.asarray(telemetry.candidate_probabilities, dtype=float)
-
-        if codons and len(probs) == len(codons):
-            order = np.argsort(probs)[::-1]
-            self.ax_probs.bar(np.arange(len(order)), probs[order])
-            self.ax_probs.set_xticks(np.arange(len(order)))
-            self.ax_probs.set_xticklabels(
-                [codons[i] for i in order],
-                rotation=45,
-                ha="right",
-            )
-            self.ax_probs.set_ylim(0, max(1.0, float(probs.max()) * 1.15))
-            self.ax_probs.set_ylabel("P(codon | context)")
-            self.ax_probs.set_title(
-                "Synonymous codons for "
-                f"{telemetry.selected_amino_acid}"
-                f" @ position {telemetry.selected_position + 1}"
-            )
-
-        # ==============================================================
-        # CAUSAL DECODING TRACE
-        # ==============================================================
-        self._clear(self.ax_decode, "Causal codon decoding trace")
-        predicted = list(telemetry.predicted_codons)
-        protein = telemetry.sample_protein
-
-        if predicted:
-            display_limit = min(48, len(predicted), len(protein))
-            positions = np.arange(display_limit)
-
-            self.ax_decode.plot(
-                positions,
-                np.arange(display_limit),
-                marker="o",
-                linestyle="",
-            )
-
-            self.ax_decode.set_xticks(positions)
-            self.ax_decode.set_xticklabels(
-                [predicted[i] for i in positions],
-                rotation=65,
-                ha="right",
-                fontsize=8,
-            )
-
-            self.ax_decode.set_yticks(positions)
-            self.ax_decode.set_yticklabels(
-                [protein[i] for i in positions],
-                fontsize=9,
-            )
-
-            self.ax_decode.set_xlabel("predicted codon")
-            self.ax_decode.set_ylabel("protein residue")
-            self.ax_decode.set_ylim(
-                -0.75,
-                max(0.75, display_limit - 0.25),
-            )
-
-        # ==============================================================
-        # CROSS ATTENTION
-        # ==============================================================
-        self._clear(self.ax_attention, "Final decoder cross-attention")
-        attention = telemetry.cross_attention
-
-        if attention is not None:
-            attention = np.asarray(attention)
-            if attention.ndim == 3:
-                attention = attention.mean(axis=0)
-
-            if attention.ndim == 2:
-                self.ax_attention.imshow(
-                    attention,
-                    aspect="auto",
-                    interpolation="nearest",
-                )
-                self.ax_attention.set_xlabel("protein position")
-                self.ax_attention.set_ylabel("decoder codon position")
-                self.ax_attention.set_title(
-                    "Final-layer protein → codon attention"
-                )
-            else:
-                self.ax_attention.text(
-                    0.5,
-                    0.5,
-                    "Unexpected attention shape",
-                    ha="center",
-                    va="center",
-                )
-        else:
-            self.ax_attention.text(
-                0.5,
-                0.5,
-                "Attention not captured (disabled or sequence too long)",
-                ha="center",
-                va="center",
-            )
-
-        # ==============================================================
-        # MODEL INTERNALS
-        # ==============================================================
-        self._clear(self.ax_internals, "Model internals")
-        self.ax_internals.axis("off")
-
-        text = (
-            "Protein\n"
-            "   ↓\n"
-            "ESM-2 (frozen)\n"
-            "   ↓\n"
-            "Projection\n"
-            "   ↓\n"
-            "Causal TransformerDecoder\n"
-            "   ↓\n"
-            "Codon logits [64]\n"
-            "   ↓\n"
-            "Hard synonymous mask\n"
-            "   ↓\n"
-            "Predicted DNA\n\n"
-            f"sample protein length : {telemetry.protein_length}\n"
-            f"sample codon length   : {telemetry.codon_length}\n"
-            f"selected position     : {telemetry.selected_position + 1}\n"
-            f"selected amino acid   : {telemetry.selected_amino_acid}\n"
-            f"sample protein        : {telemetry.sample_protein[:70]}\n"
-            f"predicted codons      : {' '.join(telemetry.predicted_codons[:12])}"
-        )
-
-        self.ax_internals.text(
-            0.02,
-            0.98,
-            text,
-            va="top",
-            family="monospace",
-            fontsize=9,
-        )
-
-        # ==============================================================
-        # RUNTIME
-        # ==============================================================
-        self._clear(self.ax_runtime, "Runtime / optimization")
-        self.ax_runtime.axis("off")
-
-        elapsed = max(1e-6, time.perf_counter() - self._started)
-        text = (
-            f"epoch             : {telemetry.epoch}/{telemetry.total_epochs}\n"
-            f"global step       : {telemetry.global_step}/{telemetry.total_steps}\n"
-            f"learning rate     : {telemetry.learning_rate:.3e}\n"
-            f"gradient norm     : {telemetry.gradient_norm:.4f}\n"
-            f"batch time        : {telemetry.batch_time:.3f} s\n"
-            f"samples/sec       : {telemetry.samples_per_second:.2f}\n"
-            f"CPU               : {telemetry.cpu_percent if telemetry.cpu_percent is not None else 'n/a'}%\n"
-            f"RAM used          : {telemetry.memory_gb if telemetry.memory_gb is not None else 'n/a'} GB\n"
-            f"pred expression   : {telemetry.predicted_expression:.4f}\n"
-            f"target expression : {telemetry.target_expression:.4f}\n"
-            f"uptime            : {elapsed:.1f} s\n\n"
-            "architecture\n"
-            f"{telemetry.architecture}"
-        )
-
-        self.ax_runtime.text(
-            0.02,
-            0.98,
-            text,
-            va="top",
-            family="monospace",
-            fontsize=9,
-        )
-
-        self.fig.canvas.draw_idle()
-        self.fig.canvas.flush_events()
-        plt.pause(0.001)
+        self._render(telemetry)
 
     def close(self):
-        plt.ioff()
-        plt.close(self.fig)
+        self._closed = True
 
 
 def candidate_codons_for_amino_acid(amino_acid: str) -> list[str]:
