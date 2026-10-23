@@ -54,6 +54,9 @@ class TrainingTelemetry:
     candidate_probabilities: Sequence[float]
     predicted_codons: Sequence[str]
     cross_attention: Optional[np.ndarray] = None
+    total_parameters: int = 0
+    trainable_parameters: int = 0
+    model_config: str = "unavailable"
 
 
 def read_system_stats():
@@ -89,6 +92,7 @@ class CodonObservatory:
         self.cai_history = deque(maxlen=self.history_size)
         self.gc_history = deque(maxlen=self.history_size)
         self.motif_history = deque(maxlen=self.history_size)
+        self.upa_history = deque(maxlen=self.history_size)
         self.expr_history = deque(maxlen=self.history_size)
         self.grad_history = deque(maxlen=self.history_size)
 
@@ -213,18 +217,20 @@ class CodonObservatory:
             f"  CAI    {telemetry.cai:9.5f}  {self._bar(telemetry.cai)}",
             f"  GC     {telemetry.gc:9.5f}  {self._bar(telemetry.gc)}",
             f"  motif  {telemetry.motif:9.5f}  {self._bar(telemetry.motif)}",
+            f"  UPA    {telemetry.upa:9.5f}  {self._bar(telemetry.upa)}",
             f"  expr   {telemetry.expression_loss:9.5f}  {self._sparkline(self.expr_history)}",
             f"  grad   {telemetry.gradient_norm:9.5f}  {self._sparkline(self.grad_history)}",
             "",
             "BIOLOGICAL / EXPRESSION",
             f"  predicted expression : {telemetry.predicted_expression: .5f}",
             f"  target expression    : {telemetry.target_expression: .5f}",
-            f"  expression error     : {telemetry.expression_loss: .5f}",
+            f"  expression error     : {abs(telemetry.predicted_expression - telemetry.target_expression): .5f}",
+            f"  expression loss      : {telemetry.expression_loss: .5f}",
             "",
             "CODON DECODING",
             (
                 f"  protein length {telemetry.protein_length} aa  |  "
-                f"codon length {telemetry.codon_length} nt  |  "
+                f"codons {telemetry.codon_length}  |  DNA length {3 * telemetry.codon_length} nt  |  "
                 f"selected residue {telemetry.selected_position + 1}: "
                 f"{telemetry.selected_amino_acid}"
             ),
@@ -270,6 +276,14 @@ class CodonObservatory:
         lines.extend(
             [
                 "",
+                "MODEL CONFIG",
+                *[f"  {part}" for part in telemetry.model_config.split(", ")],
+                "",
+                "MODEL PARAMETERS",
+                f"  total                : {telemetry.total_parameters:,}",
+                f"  trainable            : {telemetry.trainable_parameters:,}",
+                f"  frozen               : {max(0, telemetry.total_parameters - telemetry.trainable_parameters):,}",
+                "",
                 "RUNTIME",
                 f"  CPU                  : {telemetry.cpu_percent:.1f}%" if telemetry.cpu_percent is not None else "  CPU                  : n/a",
                 f"  RAM used             : {telemetry.memory_gb:.2f} GB" if telemetry.memory_gb is not None else "  RAM used             : n/a",
@@ -296,6 +310,7 @@ class CodonObservatory:
         self.cai_history.append(telemetry.cai)
         self.gc_history.append(telemetry.gc)
         self.motif_history.append(telemetry.motif)
+        self.upa_history.append(telemetry.upa)
         self.expr_history.append(telemetry.expression_loss)
         self.grad_history.append(telemetry.gradient_norm)
 
