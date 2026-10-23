@@ -1023,6 +1023,7 @@ class CodonOptimizer(nn.Module):
         self.esm_model = None
         self.esm_alphabet = None
         self.esm_batch_converter = None
+        self.esm_max_residues = ESM_T30_MAX_PROTEIN_LENGTH
 
         if esm_model_path is not None:
 
@@ -1097,11 +1098,10 @@ class CodonOptimizer(nn.Module):
                     raise ValueError(
                         "Loaded ESM model reports no room for protein residues."
                     )
-                if self.max_protein_length > supported_length:
-                    raise ValueError(
-                        f"max_protein_length={self.max_protein_length} exceeds "
-                        f"the loaded ESM context of {supported_length} residues."
-                    )
+                # ESM-2's positional table remains a per-window limit, not a
+                # protein-length limit. Long proteins are encoded in overlapping
+                # windows in encode_protein().
+                self.esm_max_residues = supported_length
 
             for parameter in self.esm_model.parameters():
                 parameter.requires_grad = False
@@ -1681,13 +1681,6 @@ class CodonOptimizer(nn.Module):
                 "protein_padding_mask must be supplied."
             )
 
-        if torch.any(sequence_lengths > self.max_protein_length):
-            longest = int(sequence_lengths.max().item())
-            raise ValueError(
-                f"Protein length {longest} exceeds configured maximum "
-                f"{self.max_protein_length}; sequences are never silently truncated."
-            )
-
         # Canonical biological mask.
         expected_mask = (
             torch.arange(
@@ -1753,69 +1746,54 @@ class CodonOptimizer(nn.Module):
                     "is active."
                 )
 
-            batch = [
-                (
-                    f"protein_{i}",
-                    sequence,
-                )
-                for i, sequence in enumerate(
-                    protein_sequences
-                )
-            ]
-
-            _, _, esm_tokens = (
-                self.esm_batch_converter(batch)
+            # Encode each protein as overlapping ESM-sized windows. ESM-2's
+            # learned positions are never indexed beyond their trained range.
+            # Overlap averaging reduces boundary artifacts without truncation.
+            representation_layer = self.esm_model.num_layers
+            esm_dim = int(getattr(self.esm_model, "embed_dim", 640))
+            encoded = torch.zeros(
+                (B, L, esm_dim), dtype=torch.float32, device=protein_tokens.device
             )
-
-            esm_tokens = esm_tokens.to(
-                protein_tokens.device
-            )
+            counts = torch.zeros((B, L, 1), dtype=torch.float32, device=protein_tokens.device)
+            window_size = max(1, int(self.esm_max_residues))
+            overlap = min(128, max(0, window_size // 8))
+            stride = max(1, window_size - overlap)
 
             with torch.no_grad():
+                for batch_index, sequence in enumerate(protein_sequences):
+                    for start in range(0, len(sequence), stride):
+                        end = min(len(sequence), start + window_size)
+                        window = sequence[start:end]
+                        _, _, esm_tokens = self.esm_batch_converter(
+                            [(f"protein_{batch_index}_{start}", window)]
+                        )
+                        esm_tokens = esm_tokens.to(protein_tokens.device)
+                        result = self.esm_model(
+                            esm_tokens,
+                            repr_layers=[representation_layer],
+                            return_contacts=False,
+                        )
+                        if representation_layer not in result["representations"]:
+                            raise RuntimeError(
+                                f"ESM-2 did not return representation layer "
+                                f"{representation_layer}."
+                            )
+                        window_repr = result["representations"][representation_layer][0, 1:-1]
+                        if window_repr.shape[0] != len(window):
+                            raise RuntimeError(
+                                "ESM window representation length does not match input window."
+                            )
+                        encoded[batch_index, start:end] += window_repr.to(encoded.dtype)
+                        counts[batch_index, start:end] += 1.0
+                        if end == len(sequence):
+                            break
 
-                result = self.esm_model(
-                    esm_tokens,
-                    repr_layers=[self.esm_model.num_layers],
-                    return_contacts=False,
-                )
-
-            representation_layer = self.esm_model.num_layers
-            if representation_layer not in result["representations"]:
-                raise RuntimeError(
-                    f"ESM-2 did not return representation layer "
-                    f"{representation_layer}."
-                )
-
-            x = result["representations"][representation_layer]
-
-            # Remove BOS and EOS.
-            x = x[:, 1:-1]
-
-            if x.shape[1] != L:
-                raise RuntimeError(
-                    "ESM representation length does not match "
-                    "protein token length."
-                )
-
+            x = encoded / counts.clamp_min(1.0)
             esm_padding_mask = (
-                torch.arange(
-                    L,
-                    device=x.device,
-                ).unsqueeze(0)
-                >= sequence_lengths.to(
-                    x.device
-                ).unsqueeze(1)
+                torch.arange(L, device=x.device).unsqueeze(0)
+                >= sequence_lengths.to(x.device).unsqueeze(1)
             )
-
-            if not torch.equal(
-                esm_padding_mask,
-                protein_padding_mask,
-            ):
-                raise ValueError(
-                    "ESM-derived padding mask disagrees with "
-                    "protein_padding_mask."
-                )
-
+            x = x.masked_fill(esm_padding_mask.unsqueeze(-1), 0.0)
             memory_padding_mask = esm_padding_mask
 
         # ---------------------------------------------------------------
@@ -1936,6 +1914,26 @@ class CodonOptimizer(nn.Module):
             ),
             diagonal=1,
         )
+    def _position_embeddings(self, length: int, device: torch.device) -> torch.Tensor:
+        """Return learned positions at any length using interpolation past the base table.
+
+        Existing checkpoints retain their learned position table. For longer
+        contexts, the table is smoothly interpolated rather than indexing past
+        its capacity or allocating a sequence-sized parameter table.
+        """
+        if length <= 0:
+            raise ValueError("Position length must be positive.")
+        weight = self.pos_encoding.weight
+        if length <= weight.shape[0]:
+            return self.pos_encoding(torch.arange(length, device=device))
+        interpolated = F.interpolate(
+            weight.transpose(0, 1).unsqueeze(0),
+            size=length,
+            mode="linear",
+            align_corners=True,
+        ).squeeze(0).transpose(0, 1)
+        return interpolated.to(device=device, dtype=weight.dtype)
+
     def decode_teacher_forced(
         self,
         memory: torch.Tensor,
@@ -1961,12 +1959,6 @@ class CodonOptimizer(nn.Module):
         if L <= 0:
             raise ValueError(
                 "Target codon sequence cannot be empty."
-            )
-
-        if L > self.max_codons:
-            raise ValueError(
-                f"Target length {L} exceeds max_codons="
-                f"{self.max_codons}."
             )
 
         if memory.ndim != 3:
@@ -2074,17 +2066,8 @@ class CodonOptimizer(nn.Module):
                 "Decoder input contains invalid special-token IDs."
             )
 
-        positions = torch.arange(
-            L,
-            device=device,
-        )
-
-        dec_emb = (
-            self.codon_embedding(dec_input)
-            + self.pos_encoding(
-                positions
-            ).unsqueeze(0)
-        )
+        positions = torch.arange(L, device=device)
+        dec_emb = self.codon_embedding(dec_input) + self._position_embeddings(L, device).unsqueeze(0)
 
         causal_mask = torch.triu(torch.ones((L, L), dtype=torch.bool, device=device), diagonal=1)
 
@@ -2151,11 +2134,6 @@ class CodonOptimizer(nn.Module):
                 "generated must contain at least BOS."
             )
 
-        if T > self.max_codons:
-            raise ValueError(
-                "Generated sequence exceeds max_codons."
-            )
-
         if memory.shape[0] != B:
             raise ValueError(
                 "generated and memory batch sizes do not match."
@@ -2185,17 +2163,8 @@ class CodonOptimizer(nn.Module):
                 "generated contains invalid token IDs."
             )
 
-        positions = torch.arange(
-            T,
-            device=generated.device,
-        )
-
-        dec_emb = (
-            self.codon_embedding(generated)
-            + self.pos_encoding(
-                positions
-            ).unsqueeze(0)
-        )
+        positions = torch.arange(T, device=generated.device)
+        dec_emb = self.codon_embedding(generated) + self._position_embeddings(T, generated.device).unsqueeze(0)
 
         causal_mask = (
             nn.Transformer.generate_square_subsequent_mask(
