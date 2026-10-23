@@ -35,3 +35,38 @@ print("TRAINING_IMPORT_ISOLATED_FROM_MATPLOTLIB", flush=True)
         f"stderr:\n{result.stderr}"
     )
     assert "TRAINING_IMPORT_ISOLATED_FROM_MATPLOTLIB" in result.stdout
+
+
+def test_training_telemetry_is_imported_lazily_for_visualization():
+    """The visualizer needs its telemetry type without breaking plain imports."""
+    import ast
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "scripts" / "train_codon_optimizer.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(source)
+    train_epoch = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "train_epoch"
+    )
+    lazy_imports = [
+        node for node in ast.walk(train_epoch)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "scripts.codon_observatory"
+    ]
+    imported_names = {
+        alias.name for node in lazy_imports for alias in node.names
+    }
+    assert {"TrainingTelemetry", "read_system_stats"} <= imported_names
+
+    # Keep the optional observatory out of the ordinary module import path.
+    top_level_imports = [
+        node for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    assert not any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "scripts.codon_observatory"
+        for node in top_level_imports
+    )
