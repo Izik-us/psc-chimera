@@ -326,7 +326,7 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
             try:
                 if capture_now:
                     # Load system telemetry only when visualization is active.
-                    from scripts.codon_observatory import read_system_stats
+                    from scripts.codon_observatory import TrainingTelemetry, read_system_stats
                     cpu, ram = read_system_stats()
                     sample_idx = 0
                     valid_len = int((~codon_mask[sample_idx]).sum().item())
