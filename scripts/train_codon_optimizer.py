@@ -1,4 +1,4 @@
-"""Train the PSC codon optimizer with optional live telemetry visualization."""
+"""Train the PSC codon optimizer with optional live CLI telemetry visualization."""
 from __future__ import annotations
 
 import argparse
@@ -325,7 +325,7 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
         if observatory is not None:
             try:
                 if capture_now:
-                    # Load system telemetry only when visualization is active.
+                    # Load system telemetry only when CLI visualization is active.
                     from scripts.codon_observatory import read_system_stats
                     cpu, ram = read_system_stats()
                     sample_idx = 0
@@ -399,8 +399,8 @@ def parse_args() -> argparse.Namespace:
         help="Maximum batch_size * padded_length^2 for self-attention.",
     )
     parser.add_argument("--val-fraction", type=float)
-    parser.add_argument("--visualize", action="store_true", help="Enable live matplotlib training observatory.")
-    parser.add_argument("--visualize-interval", type=int, default=5, help="Render dashboard every N optimizer steps.")
+    parser.add_argument("--visualize", action="store_true", help="Enable live CLI training observatory.")
+    parser.add_argument("--visualize-interval", type=int, default=5, help="Render CLI dashboard every N optimizer steps.")
     parser.add_argument("--smoke", action="store_true")
     return parser.parse_args()
 
@@ -547,8 +547,8 @@ def main() -> None:
     observatory = None
     if args.visualize:
         try:
-            # Matplotlib and its GUI backend are optional: importing them in
-            # ordinary training needlessly adds native libraries to the process.
+            # The observatory is terminal-native and intentionally has no GUI
+            # or plotting dependency in the training process.
             from scripts.codon_observatory import CodonObservatory
 
             observatory = CodonObservatory(update_every=args.visualize_interval)
