@@ -306,7 +306,7 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
         codon_mask = batch["codon_padding_mask"].to(device)
         expression = batch["expression"].to(device)
         capture_now = observatory is not None and observatory.should_capture_attention(
-            global_step,
+            global_step + 1,
             int(codon_tokens.shape[1]),
         )
         model.set_attention_capture(capture_now, final_layer_only=True)
@@ -324,27 +324,27 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
 
         if observatory is not None:
             try:
-                if capture_now:
-                    # Load system telemetry only when visualization is active.
-                    from scripts.codon_observatory import TrainingTelemetry, read_system_stats
-                    cpu, ram = read_system_stats()
-                    sample_idx = 0
-                    valid_len = int((~codon_mask[sample_idx]).sum().item())
-                    if valid_len > 0:
-                        selected_position = (global_step // observatory.update_every) % valid_len
-                        aa = batch["aa_sequence"][sample_idx][selected_position]
-                        candidates = CODON_TABLE[aa]
-                        logits_at_position = output["logits"][sample_idx, selected_position].detach()
-                        probs = torch.softmax(logits_at_position, dim=-1)
-                        candidate_ids = [ALL_CODONS.index(codon) for codon in candidates]
-                        candidate_probs = [float(probs[idx].item()) for idx in candidate_ids]
-                        predicted_ids = output["logits"][sample_idx, :valid_len].argmax(dim=-1).tolist()
-                        predicted_codons = [ALL_CODONS[idx] for idx in predicted_ids]
-                        attention = model.get_cross_attention()
-                        attention_sample = attention[sample_idx].cpu().numpy() if attention is not None else None
-                        lr = float(optimizer.param_groups[0]["lr"])
-                        elapsed = max(time.perf_counter() - batch_start, 1e-9)
-                        telemetry = TrainingTelemetry(
+                # Metrics refresh every optimizer step. Attention capture is
+                # optional and separately throttled because it is expensive.
+                from scripts.codon_observatory import TrainingTelemetry, read_system_stats
+                cpu, ram = read_system_stats()
+                sample_idx = 0
+                valid_len = int((~codon_mask[sample_idx]).sum().item())
+                if valid_len > 0:
+                    selected_position = (global_step - 1) % valid_len
+                    aa = batch["aa_sequence"][sample_idx][selected_position]
+                    candidates = CODON_TABLE[aa]
+                    logits_at_position = output["logits"][sample_idx, selected_position].detach()
+                    probs = torch.softmax(logits_at_position, dim=-1)
+                    candidate_ids = [ALL_CODONS.index(codon) for codon in candidates]
+                    candidate_probs = [float(probs[idx].item()) for idx in candidate_ids]
+                    predicted_ids = output["logits"][sample_idx, :valid_len].argmax(dim=-1).tolist()
+                    predicted_codons = [ALL_CODONS[idx] for idx in predicted_ids]
+                    attention = model.get_cross_attention() if capture_now else None
+                    attention_sample = attention[sample_idx].cpu().numpy() if attention is not None else None
+                    lr = float(optimizer.param_groups[0]["lr"])
+                    elapsed = max(time.perf_counter() - batch_start, 1e-9)
+                    telemetry = TrainingTelemetry(
                             epoch=epoch, total_epochs=total_epochs,
                             global_step=global_step, total_steps=total_steps,
                             loss=float(loss.detach().item()),
@@ -365,9 +365,8 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
                             total_parameters=getattr(model, "_observatory_total_parameters", 0),
                             trainable_parameters=getattr(model, "_observatory_trainable_parameters", 0),
                             model_config=getattr(model, "_observatory_model_config", "unavailable"),
-                        )
-                        observatory.update(telemetry)
-                    print("gradients=" + ",".join(f"{k}:{v:.3e}" for k, v in grad_groups.items()), flush=True)
+                    )
+                    observatory.update(telemetry)
             except Exception as exc:
                 print(f"visualizer_warning={type(exc).__name__}: {exc}", flush=True)
             finally:
@@ -403,7 +402,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--val-fraction", type=float)
     parser.add_argument("--visualize", action="store_true", help="Enable the live terminal-native training observatory.")
-    parser.add_argument("--visualize-interval", type=int, default=5, help="Render dashboard every N optimizer steps.")
+    parser.add_argument("--visualize-interval", type=int, default=1, help="Refresh the live dashboard every N optimizer steps; attention capture follows the same interval.")
     parser.add_argument("--smoke", action="store_true")
     return parser.parse_args()
 
