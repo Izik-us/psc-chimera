@@ -83,6 +83,7 @@ class LengthBucketBatchSampler(Sampler[list[int]]):
         # Kept for compatibility with training telemetry. Long records are
         # never filtered or truncated by the sampler.
         self.excluded_indices: list[int] = []
+        self.over_budget_singletons: list[tuple[int, int]] = []
         indexed_lengths = [
             (index, int(dataset[index]["protein_tokens"].numel()))
             for index in range(len(dataset))
@@ -90,6 +91,12 @@ class LengthBucketBatchSampler(Sampler[list[int]]):
         if not indexed_lengths:
             raise ValueError("Cannot create batches from an empty dataset.")
 
+        if max_attention_elements is not None:
+            self.over_budget_singletons = [
+                (index, length)
+                for index, length in indexed_lengths
+                if length * length > max_attention_elements
+            ]
         indexed_lengths.sort(key=lambda pair: pair[1])
         self.batches: list[list[int]] = []
         batch: list[int] = []
@@ -499,16 +506,16 @@ def main() -> None:
         if val_dataset is not None
         else None
     )
-    if train_batch_sampler.excluded_indices:
+    if train_batch_sampler.over_budget_singletons:
         print(
-            f"skipped_train_examples={len(train_batch_sampler.excluded_indices)} "
-            "(explicit oversize policy)",
+            f"train_attention_budget_overruns={len(train_batch_sampler.over_budget_singletons)} "
+            "(examples retained as singleton batches; runtime memory may be high)",
             flush=True,
         )
-    if val_batch_sampler is not None and val_batch_sampler.excluded_indices:
+    if val_batch_sampler is not None and val_batch_sampler.over_budget_singletons:
         print(
-            f"skipped_validation_examples={len(val_batch_sampler.excluded_indices)} "
-            "(explicit oversize policy)",
+            f"validation_attention_budget_overruns={len(val_batch_sampler.over_budget_singletons)} "
+            "(examples retained as singleton batches; runtime memory may be high)",
             flush=True,
         )
     total_parameters = sum(p.numel() for p in model.parameters())
