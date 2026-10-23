@@ -72,41 +72,23 @@ class LengthBucketBatchSampler(Sampler[list[int]]):
         self,
         dataset,
         batch_size: int,
-        max_protein_length: int = ESM_T30_MAX_PROTEIN_LENGTH,
-        max_attention_elements: int = 4_194_304,
-        oversize_policy: str = "error",
+        max_attention_elements: int | None = 4_194_304,
     ) -> None:
-        if batch_size <= 0 or max_protein_length <= 0 or max_attention_elements <= 0:
-            raise ValueError(
-                "batch_size, max_protein_length and max_attention_elements "
-                "must be positive"
-            )
-        if oversize_policy not in {"error", "skip"}:
-            raise ValueError("oversize_policy must be 'error' or 'skip'")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if max_attention_elements is not None and max_attention_elements <= 0:
+            raise ValueError("max_attention_elements must be positive or None")
         self.batch_size = batch_size
         self.max_attention_elements = max_attention_elements
+        # Kept for compatibility with training telemetry. Long records are
+        # never filtered or truncated by the sampler.
         self.excluded_indices: list[int] = []
-        indexed_lengths = []
-        oversized = []
-        for index in range(len(dataset)):
-            length = int(dataset[index]["protein_tokens"].numel())
-            if length > max_protein_length or length * length > max_attention_elements:
-                oversized.append((index, length))
-                continue
-            indexed_lengths.append((index, length))
-        if oversized and oversize_policy == "error":
-            examples = ", ".join(
-                f"index={index}:length={length}"
-                for index, length in oversized[:8]
-            )
-            raise ValueError(
-                f"{len(oversized)} examples exceed configured sequence or "
-                f"attention limits ({examples}). Set --oversize-policy skip "
-                "to exclude them explicitly; sequences are never truncated."
-            )
-        self.excluded_indices = [index for index, _ in oversized]
+        indexed_lengths = [
+            (index, int(dataset[index]["protein_tokens"].numel()))
+            for index in range(len(dataset))
+        ]
         if not indexed_lengths:
-            raise ValueError("No examples fit the configured batch limits.")
+            raise ValueError("Cannot create batches from an empty dataset.")
 
         indexed_lengths.sort(key=lambda pair: pair[1])
         self.batches: list[list[int]] = []
@@ -116,9 +98,12 @@ class LengthBucketBatchSampler(Sampler[list[int]]):
             candidate_max_length = max(batch_max_length, length)
             exceeds_count = len(batch) >= batch_size
             exceeds_attention = (
-                (len(batch) + 1) * candidate_max_length * candidate_max_length
+                max_attention_elements is not None
+                and (len(batch) + 1) * candidate_max_length * candidate_max_length
                 > max_attention_elements
             )
+            # The budget controls batching, never sample eligibility. A single
+            # over-budget example is emitted as a singleton rather than dropped.
             if batch and (exceeds_count or exceeds_attention):
                 self.batches.append(batch)
                 batch = []
@@ -405,12 +390,6 @@ def parse_args() -> argparse.Namespace:
         default=4_194_304,
         help="Maximum batch_size * padded_length^2 for self-attention.",
     )
-    parser.add_argument(
-        "--oversize-policy",
-        choices=("error", "skip"),
-        default="error",
-        help="Reject over-limit records, or explicitly exclude them from this run.",
-    )
     parser.add_argument("--val-fraction", type=float)
     parser.add_argument("--visualize", action="store_true", help="Enable live matplotlib training observatory.")
     parser.add_argument("--visualize-interval", type=int, default=5, help="Render dashboard every N optimizer steps.")
@@ -495,9 +474,7 @@ def main() -> None:
     train_batch_sampler = LengthBucketBatchSampler(
         train_dataset,
         args.batch_size,
-        max_protein_length=model.max_protein_length,
         max_attention_elements=args.max_attention_elements,
-        oversize_policy=args.oversize_policy,
     )
     loader = DataLoader(
         train_dataset,
@@ -508,9 +485,7 @@ def main() -> None:
         LengthBucketBatchSampler(
             val_dataset,
             args.batch_size,
-            max_protein_length=model.max_protein_length,
             max_attention_elements=args.max_attention_elements,
-            oversize_policy=args.oversize_policy,
         )
         if val_dataset is not None
         else None
