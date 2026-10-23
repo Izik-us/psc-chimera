@@ -75,13 +75,13 @@ def test_length_bucket_sampler_separates_extreme_lengths():
     sampler = LengthBucketBatchSampler(
         _LengthDataset([80, 95, 2426]),
         batch_size=3,
-        max_protein_length=3000,
         max_attention_elements=6_000_000,
     )
     batches = list(sampler)
 
     assert sorted(index for batch in batches for index in batch) == [0, 1, 2]
     assert all(not ({0, 1} <= set(batch) and 2 in batch) for batch in batches)
+    assert sampler.excluded_indices == []
 
 
 def test_length_bucket_sampler_never_discards_long_examples():
