@@ -362,6 +362,9 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
                             selected_amino_acid=aa, candidate_codons=candidates,
                             candidate_probabilities=candidate_probs, predicted_codons=predicted_codons,
                             cross_attention=attention_sample,
+                            total_parameters=getattr(model, "_observatory_total_parameters", 0),
+                            trainable_parameters=getattr(model, "_observatory_trainable_parameters", 0),
+                            model_config=getattr(model, "_observatory_model_config", "unavailable"),
                         )
                         observatory.update(telemetry)
                     print("gradients=" + ",".join(f"{k}:{v:.3e}" for k, v in grad_groups.items()), flush=True)
@@ -399,7 +402,7 @@ def parse_args() -> argparse.Namespace:
         help="Maximum batch_size * padded_length^2 for self-attention.",
     )
     parser.add_argument("--val-fraction", type=float)
-    parser.add_argument("--visualize", action="store_true", help="Enable live matplotlib training observatory.")
+    parser.add_argument("--visualize", action="store_true", help="Enable the live terminal-native training observatory.")
     parser.add_argument("--visualize-interval", type=int, default=5, help="Render dashboard every N optimizer steps.")
     parser.add_argument("--smoke", action="store_true")
     return parser.parse_args()
@@ -528,6 +531,11 @@ def main() -> None:
     total_parameters = sum(p.numel() for p in model.parameters())
     trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     esm_parameters = sum(p.numel() for p in model.esm_model.parameters() if p.requires_grad) if getattr(model, "esm_model", None) is not None else 0
+    model._observatory_total_parameters = total_parameters
+    model._observatory_trainable_parameters = trainable_parameters
+    model._observatory_model_config = ", ".join(
+        f"{key}={value}" for key, value in model_config.items()
+    )
     print("\nMODEL PARAMETERS", flush=True)
     print(f"  total       = {total_parameters:,}", flush=True)
     print(f"  trainable   = {trainable_parameters:,}", flush=True)

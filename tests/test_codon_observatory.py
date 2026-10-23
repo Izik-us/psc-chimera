@@ -42,6 +42,9 @@ def _telemetry(step: int = 3) -> TrainingTelemetry:
         candidate_codons=("GAA", "GAG"),
         candidate_probabilities=(0.35, 0.65),
         predicted_codons=("ATG", "ACC", "GAG", "TAT", "AAG", "CTG", "GTG", "GTT"),
+        total_parameters=12_345,
+        trainable_parameters=6_789,
+        model_config="d_model=256, heads=8, decoder_layers=10, dim_ff=1024",
         cross_attention=np.asarray(
             [
                 [0.10, 0.20, 0.70, 0.00],
@@ -80,6 +83,13 @@ def test_cli_observatory_renders_telemetry_and_attention():
     assert "selected codon top protein positions" in output
     assert "GAG=0.650" in output
     assert "predicted DNA codons" in output
+    assert "MODEL CONFIG" in output
+    assert "d_model=256" in output
+    assert "MODEL PARAMETERS" in output
+    assert "total                : 12,345" in output
+    assert "trainable            : 6,789" in output
+    assert "UPA" in output
+    assert "DNA length 24 nt" in output
 
 
 def test_observatory_does_not_import_matplotlib():
