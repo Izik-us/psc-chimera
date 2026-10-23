@@ -315,7 +315,6 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
         loss, metrics = codon_optimizer_loss(output["logits"], codon_tokens, output["expression"], target_expression=expression, codon_padding_mask=codon_mask)
         loss.backward()
         grad_norm = _grad_norm(model)
-        grad_groups = _named_grad_norms(model)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         global_step += 1
@@ -345,26 +344,26 @@ def train_epoch(model, loader, optimizer, device, epoch, total_epochs, global_st
                     lr = float(optimizer.param_groups[0]["lr"])
                     elapsed = max(time.perf_counter() - batch_start, 1e-9)
                     telemetry = TrainingTelemetry(
-                            epoch=epoch, total_epochs=total_epochs,
-                            global_step=global_step, total_steps=total_steps,
-                            loss=float(loss.detach().item()),
-                            ce=float(metrics.get("ce", 0.0)), cai=float(metrics.get("cai", 0.0)),
-                            gc=float(metrics.get("gc", 0.0)), motif=float(metrics.get("motif", 0.0)),
-                            upa=float(metrics.get("upa", 0.0)), expression_loss=float(metrics.get("expression", 0.0)),
-                            gradient_norm=grad_norm, learning_rate=lr,
-                            cpu_percent=cpu, memory_gb=ram, batch_time=elapsed,
-                            samples_per_second=len(batch["aa_sequence"]) / elapsed,
-                            protein_length=len(batch["aa_sequence"][sample_idx]), codon_length=valid_len,
-                            predicted_expression=float(output["expression"][sample_idx].detach().item()),
-                            target_expression=float(expression[sample_idx].detach().item()),
-                            architecture=f"d_model={model.d_model}, heads={model.n_heads}, decoder_layers={model.n_dec_layers}, dim_ff={model.dim_ff}",
-                            sample_protein=batch["aa_sequence"][sample_idx], selected_position=selected_position,
-                            selected_amino_acid=aa, candidate_codons=candidates,
-                            candidate_probabilities=candidate_probs, predicted_codons=predicted_codons,
-                            cross_attention=attention_sample,
-                            total_parameters=getattr(model, "_observatory_total_parameters", 0),
-                            trainable_parameters=getattr(model, "_observatory_trainable_parameters", 0),
-                            model_config=getattr(model, "_observatory_model_config", "unavailable"),
+                        epoch=epoch, total_epochs=total_epochs,
+                        global_step=global_step, total_steps=total_steps,
+                        loss=float(loss.detach().item()),
+                        ce=float(metrics.get("ce", 0.0)), cai=float(metrics.get("cai", 0.0)),
+                        gc=float(metrics.get("gc", 0.0)), motif=float(metrics.get("motif", 0.0)),
+                        upa=float(metrics.get("upa", 0.0)), expression_loss=float(metrics.get("expression", 0.0)),
+                        gradient_norm=grad_norm, learning_rate=lr,
+                        cpu_percent=cpu, memory_gb=ram, batch_time=elapsed,
+                        samples_per_second=len(batch["aa_sequence"]) / elapsed,
+                        protein_length=len(batch["aa_sequence"][sample_idx]), codon_length=valid_len,
+                        predicted_expression=float(output["expression"][sample_idx].detach().item()),
+                        target_expression=float(expression[sample_idx].detach().item()),
+                        architecture=f"d_model={model.d_model}, heads={model.n_heads}, decoder_layers={model.n_dec_layers}, dim_ff={model.dim_ff}",
+                        sample_protein=batch["aa_sequence"][sample_idx], selected_position=selected_position,
+                        selected_amino_acid=aa, candidate_codons=candidates,
+                        candidate_probabilities=candidate_probs, predicted_codons=predicted_codons,
+                        cross_attention=attention_sample,
+                        total_parameters=getattr(model, "_observatory_total_parameters", 0),
+                        trainable_parameters=getattr(model, "_observatory_trainable_parameters", 0),
+                        model_config=getattr(model, "_observatory_model_config", "unavailable"),
                     )
                     observatory.update(telemetry)
             except Exception as exc:
