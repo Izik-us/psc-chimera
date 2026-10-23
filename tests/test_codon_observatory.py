@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from io import StringIO
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -81,7 +84,45 @@ def test_cli_observatory_renders_telemetry_and_attention():
 
 def test_observatory_does_not_import_matplotlib():
     """The terminal observatory must not require plotting/native GUI code."""
-    import sys
-
-    assert "matplotlib" not in sys.modules
-    assert "matplotlib.pyplot" not in sys.modules
+    repo_root = Path(__file__).resolve().parents[1]
+    probe = r"""
+import sys
+from io import StringIO
+import numpy as np
+from scripts.codon_observatory import CodonObservatory, TrainingTelemetry
+assert "matplotlib" not in sys.modules
+stream = StringIO()
+observatory = CodonObservatory(update_every=1, stream=stream)
+telemetry = TrainingTelemetry(
+    epoch=1, total_epochs=1, global_step=1, total_steps=1,
+    loss=1.0, ce=0.9, cai=0.8, gc=0.5, motif=0.1, upa=0.0,
+    expression_loss=0.2, gradient_norm=0.5, learning_rate=1e-4,
+    cpu_percent=None, memory_gb=None, batch_time=1.0,
+    samples_per_second=1.0, protein_length=4, codon_length=4,
+    predicted_expression=0.4, target_expression=0.5,
+    architecture="test", sample_protein="MTEY", selected_position=1,
+    selected_amino_acid="T", candidate_codons=("ACT", "ACC"),
+    candidate_probabilities=(0.4, 0.6), predicted_codons=("ATG", "ACC", "GAG", "TAT"),
+    cross_attention=np.eye(4, dtype=float),
+)
+observatory.update(telemetry)
+observatory.close()
+assert "PSC CODON OPTIMIZER • CLI TRAINING OBSERVATORY" in stream.getvalue()
+assert "matplotlib" not in sys.modules
+print("CLI_OBSERVATORY_ISOLATED_FROM_MATPLOTLIB", flush=True)
+"""
+    result = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", probe],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "CLI observatory imported plotting/native GUI code or crashed.\n"
+        f"returncode={result.returncode}\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "CLI_OBSERVATORY_ISOLATED_FROM_MATPLOTLIB" in result.stdout
