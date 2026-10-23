@@ -2164,7 +2164,15 @@ class CodonOptimizer(nn.Module):
                         memory_key_padding_mask=protein_mask,
                     )
 
-                if self.training and torch.is_grad_enabled():
+                capture_enabled = any(
+                    getattr(layer, "capture_cross_attention", False)
+                    for layer in self.decoder.layers
+                )
+                if (
+                    self.training
+                    and torch.is_grad_enabled()
+                    and not capture_enabled
+                ):
                     window_out = checkpoint(
                         decode_window,
                         window_emb,
@@ -2172,6 +2180,9 @@ class CodonOptimizer(nn.Module):
                         use_reentrant=False,
                     )
                 else:
+                    # Avoid checkpoint recomputation while telemetry is
+                    # capturing attention, since recomputation would overwrite
+                    # the final window's captured attention with an earlier one.
                     window_out = decode_window(window_emb, memory)
 
                 output_offset = chunk_start - context_start
