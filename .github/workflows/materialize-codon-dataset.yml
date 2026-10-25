@@ -1,0 +1,40 @@
+name: Materialize augmented codon dataset
+
+on:
+  push:
+    branches:
+      - codon-dataset-10k
+    paths:
+      - "scripts/augment_codon_dataset.py"
+      - ".github/workflows/materialize-codon-dataset.yml"
+      - "data/merged_codon_v2/manifest.json"
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the dataset branch
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate and validate 10k+ training records
+        run: python scripts/augment_codon_dataset.py --minimum-total-records 10000
+
+      - name: Commit generated JSONL and manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/merged_codon_v2/train.jsonl data/merged_codon_v2/manifest.json
+          git commit -m "Materialize augmented codon training dataset"
+          git push origin "HEAD:\${{ github.ref_name }}"
