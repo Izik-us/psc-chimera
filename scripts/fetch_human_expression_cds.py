@@ -3,6 +3,11 @@
 ``Exp_Meiosis`` averages female PGC expression at 17 weeks with male
 pachytene-spermatocyte and round-spermatid expression. It is not a general
 human expression phenotype or a controlled synonymous-variant assay.
+
+The records produced here are real, annotated human CDS sequences retrieved
+from Ensembl using transcript identifiers supplied by Pouyet et al. They are
+not synthetic or model-generated sequences. The expression value remains a
+proxy label and is explicitly marked as such.
 """
 
 from __future__ import annotations
@@ -50,17 +55,17 @@ def read_candidates(path: Path, expression_column: str) -> list[dict[str, Any]]:
             {
                 "transcript": transcript,
                 "gene_id": fields[gene_index],
-                            "expression_phenotype": (
-                                "mean_F_PGC_17W_and_male_pachytene_spermatocyte_round_spermatid_FPKM"
-                                if expression_column == "Exp_Meiosis"
-                                else expression_column
-                            ),
-                            "expression_components": (
-                                ["F_PGC_17W", "M_PS", "M_RS"]
-                                if expression_column == "Exp_Meiosis"
-                                else [expression_column]
-                            ),
-                            "normalization": "expression_raw_divided_by_max_positive_value_in_source_table",
+                "expression_phenotype": (
+                    "mean_F_PGC_17W_and_male_pachytene_spermatocyte_round_spermatid_FPKM"
+                    if expression_column == "Exp_Meiosis"
+                    else expression_column
+                ),
+                "expression_components": (
+                    ["F_PGC_17W", "M_PS", "M_RS"]
+                    if expression_column == "Exp_Meiosis"
+                    else [expression_column]
+                ),
+                "normalization": "expression_raw_divided_by_max_positive_value_in_source_table",
                 "gene_symbol": fields[symbol_index],
                 "expression_raw": expression,
             }
@@ -136,7 +141,7 @@ def main() -> None:
     parser.add_argument("summary", type=Path)
     parser.add_argument("--cache-dir", type=Path, default=Path("data/external/ensembl_cds_cache"))
     parser.add_argument("--output", type=Path, default=Path("data/human_expression_cds_proxy.jsonl"))
-    parser.add_argument("--max-records", type=int, default=500)
+    parser.add_argument("--max-records", type=int, default=12600)
     parser.add_argument("--expression-column", default="Exp_Meiosis")
     args = parser.parse_args()
     if args.max_records <= 0:
