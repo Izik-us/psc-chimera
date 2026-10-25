@@ -50,7 +50,9 @@ jobs:
       - name: Restore Ensembl CDS cache
         uses: actions/cache/restore@v4
         with:
-          path: .cache/ensembl_cds_cache
+          path: |
+            .cache/ensembl_cds_cache
+            data/human_expression_cds_proxy.jsonl
           key: ensembl-cds-v2-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             ensembl-cds-v2-${{ runner.os }}-
