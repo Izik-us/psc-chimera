@@ -8,6 +8,12 @@ on:
       - 'scripts/fetch_human_expression_cds.py'
       - 'scripts/merge_codon_datasets.py'
       - 'scripts/prepare_fath2011_dataset.py'
+      - 'tests/test_fetch_human_expression_cds.py'
+      - '.github/workflows/rebuild_real_codon_dataset.yml'
+  pull_request:
+    paths:
+      - 'scripts/fetch_human_expression_cds.py'
+      - 'tests/test_fetch_human_expression_cds.py'
       - '.github/workflows/rebuild_real_codon_dataset.yml'
   workflow_dispatch:
 
@@ -15,7 +21,23 @@ permissions:
   contents: write
 
 jobs:
+  downloader-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest biopython
+      - name: Test resumable downloader
+        run: python -m pytest -q tests/test_fetch_human_expression_cds.py
+
   rebuild:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
