@@ -2,6 +2,14 @@
 
 **Status checked 2026-10-04 on `chimera-repair`.** The data path is now executable from raw RCSB mmCIF through canonical chain/sequence records, MSA and annotation context, geometry, split assignment and immutable storage. It is an interface-ready controlled seed, not a production-scale training corpus.
 
+## Codon-optimizer dataset expansion (2026-10-25)
+
+The codon-optimizer split in data/merged_codon_v2 now contains 10,230 training rows: the 501 original rows (78 measured Fath2011 records and 423 Pouyet human-expression proxy records) plus 9,729 synthetic synonymous-codon recodings (23 variants for each Pouyet proxy parent). The 87 validation rows remain unchanged. The reproducible generator is scripts/augment_codon_dataset.py.
+
+Synthetic rows preserve each parent's amino-acid sequence while changing only synonymous codons. Their required expression field contains a CAI-like score derived from the HUMAN_CODON_FREQ table in chimera/codon_optimizer.py. They are marked label_type=synthetic and source=CHIMERA_SynonymousAugmentation_v1, with parent accession and deterministic augmentation metadata. These scores are not experimental expression measurements, and these rows are not new independent genes or biological observations. The expansion increases codon-sequence diversity for development; it does not create a 10,000-example empirical expression dataset.
+
+Important training caveat: label_type metadata is not itself a sample-weighting policy. The current trainer's primary loss is evaluated over training batches, so the synthetic majority can strongly influence the learned objective. Report metrics by label type and introduce source/label-aware weighting or source-balanced sampling before using this mixed set to make biological-expression claims. Keep the untouched validation split as the primary comparison set.
+
 Relevant implementation points:
 
 - [data/rcsb.py](../data/rcsb.py) provides RCSB query discovery, ID manifests, cache-aware/retryable downloads, assembly files, per-record stage history and checksum semantics.

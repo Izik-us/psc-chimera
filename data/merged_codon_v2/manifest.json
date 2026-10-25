@@ -1,13 +1,35 @@
 {
-  "total_records": 588,
-  "train_records": 501,
-  "validation_records": 87,
+  "label_types": [
+    "measured",
+    "proxy",
+    "synthetic"
+  ],
+  "record_counts": {
+    "original_measured_train_records": 78,
+    "original_proxy_train_records": 423,
+    "original_train_records": 501,
+    "synthetic_train_records": 9729,
+    "validation_records": 87
+  },
   "sources": [
+    "CHIMERA_SynonymousAugmentation_v1",
     "Fath2011_Table1",
     "Pouyet_HumanCodonUsage"
   ],
-  "label_types": [
-    "measured",
-    "proxy"
-  ]
+  "synthetic_augmentation": {
+    "parent_records": 423,
+    "parent_source": "Pouyet_HumanCodonUsage",
+    "records_are_new_independent_biological_observations": false,
+    "score_is_measured_expression": false,
+    "scoring_method": "Geometric mean of per-codon relative adaptiveness from HUMAN_CODON_FREQ in chimera/codon_optimizer.py",
+    "seed": 20261025,
+    "source": "CHIMERA_SynonymousAugmentation_v1",
+    "synthetic_records": 9729,
+    "validation_augmented": false,
+    "variants_per_parent": 23,
+    "version": 1
+  },
+  "total_records": 10317,
+  "train_records": 10230,
+  "validation_records": 87
 }
