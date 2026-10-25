@@ -20,7 +20,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from chimera.codon_optimizer import translate_dna
+from Bio.Seq import Seq
 
 
 SOURCE_URL = "https://zenodo.org/api/records/835063/files/data_HumanCodonUsage.zip/content"
@@ -111,7 +111,7 @@ def build_records(summary_path: Path, cache_dir: Path, max_records: int, express
         if len(cds) % 3 or cds in seen_cds:
             continue
         try:
-            protein = translate_dna(cds)
+            protein = str(Seq(cds).translate(to_stop=False))
         except (AssertionError, ValueError):
             continue
         if not protein or "*" in protein or any(amino_acid not in "ACDEFGHIKLMNPQRSTVWY" for amino_acid in protein):
