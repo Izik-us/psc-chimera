@@ -32,7 +32,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip pytest biopython
+        run: |
+          python -m pip install --upgrade pip pytest biopython
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Test resumable downloader
         run: python -m pytest -q tests/test_fetch_human_expression_cds.py
 
