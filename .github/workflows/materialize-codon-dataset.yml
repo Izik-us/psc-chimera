@@ -37,4 +37,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/merged_codon_v2/train.jsonl data/merged_codon_v2/manifest.json
           git commit -m "Materialize augmented codon training dataset"
+          git fetch origin codon-dataset-10k
+          git rebase origin/codon-dataset-10k
           git push origin HEAD:codon-dataset-10k
