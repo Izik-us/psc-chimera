@@ -20,7 +20,7 @@ jobs:
       - name: Check out the dataset branch
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.ref_name }}
+          ref: codon-dataset-10k
           fetch-depth: 0
 
       - name: Set up Python
@@ -37,4 +37,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/merged_codon_v2/train.jsonl data/merged_codon_v2/manifest.json
           git commit -m "Materialize augmented codon training dataset"
-          git push origin "HEAD:\${{ github.ref_name }}"
+          git push origin HEAD:codon-dataset-10k
