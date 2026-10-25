@@ -4,7 +4,7 @@
 
 ## Codon-optimizer dataset expansion (2026-10-25)
 
-The codon-optimizer split in data/merged_codon_v2 is being expanded to 10,230 training rows: the 501 original rows (78 measured Fath2011 records and 423 Pouyet human-expression proxy records) plus 9,729 synthetic synonymous-codon recodings (23 variants for each Pouyet proxy parent). The 87 validation rows remain unchanged. The reproducible generator is scripts/augment_codon_dataset.py.
+The codon-optimizer split in data/merged_codon_v2 now contains 10,230 training rows: the 501 original rows (78 measured Fath2011 records and 423 Pouyet human-expression proxy records) plus 9,729 synthetic synonymous-codon recodings (23 variants for each Pouyet proxy parent). The 87 validation rows remain unchanged. The reproducible generator is scripts/augment_codon_dataset.py.
 
 Synthetic rows preserve each parent's amino-acid sequence while changing only synonymous codons. Their required expression field contains a CAI-like score derived from the HUMAN_CODON_FREQ table in chimera/codon_optimizer.py. They are marked label_type=synthetic and source=CHIMERA_SynonymousAugmentation_v1, with parent accession and deterministic augmentation metadata. These scores are not experimental expression measurements, and these rows are not new independent genes or biological observations. The expansion increases codon-sequence diversity for development; it does not create a 10,000-example empirical expression dataset.
 
