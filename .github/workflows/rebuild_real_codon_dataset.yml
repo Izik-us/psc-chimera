@@ -1,0 +1,92 @@
+name: Rebuild real codon training dataset
+
+on:
+  push:
+    paths:
+      - 'scripts/fetch_human_expression_cds.py'
+      - 'scripts/merge_codon_datasets.py'
+      - 'scripts/prepare_fath2011_dataset.py'
+      - '.github/workflows/rebuild_real_codon_dataset.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout chimera-main
+        uses: actions/checkout@v4
+        with:
+          ref: chimera-main
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dataset dependencies
+        run: python -m pip install --upgrade pip biopython
+
+      - name: Download Pouyet human codon-usage archive
+        run: |
+          mkdir -p /tmp/pouyet
+          curl -L --fail --retry 4 \
+            'https://zenodo.org/api/records/835063/files/data_HumanCodonUsage.zip/content' \
+            -o /tmp/pouyet/data_HumanCodonUsage.zip
+          unzip -q /tmp/pouyet/data_HumanCodonUsage.zip -d /tmp/pouyet/archive
+          find /tmp/pouyet/archive -type f -iname '*human_genes_summary*' -print
+
+      - name: Build 12,600 real human CDS records
+        run: |
+          SUMMARY=$(find /tmp/pouyet/archive -type f -iname '*human_genes_summary*' | head -n 1)
+          test -n "$SUMMARY"
+          python scripts/fetch_human_expression_cds.py "$SUMMARY" \
+            --cache-dir /tmp/pouyet/ensembl_cds_cache \
+            --output data/human_expression_cds_proxy.jsonl \
+            --max-records 12600 \
+            --expression-column Exp_Meiosis
+
+      - name: Merge Fath measured data with real human CDS proxy data
+        run: |
+          python scripts/merge_codon_datasets.py \
+            data/fath2011_codon_training_measured.jsonl \
+            data/human_expression_cds_proxy.jsonl \
+            --output-dir data/merged_codon_v2 \
+            --validation-fraction 0.2
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          train = Path('data/merged_codon_v2/train.jsonl')
+          validation = Path('data/merged_codon_v2/validation.jsonl')
+          n_train = sum(1 for line in train.open(encoding='utf-8') if line.strip())
+          n_val = sum(1 for line in validation.open(encoding='utf-8') if line.strip())
+          print(f'train_records={n_train} validation_records={n_val}')
+          if n_train < 10000:
+              raise SystemExit(f'ERROR: expected >=10000 training records, got {n_train}')
+          manifest = json.loads(Path('data/merged_codon_v2/manifest.json').read_text(encoding='utf-8'))
+          if 'Fath2011_Table1' not in manifest['sources']:
+              raise SystemExit('ERROR: Fath2011 measured source missing from merged manifest')
+          if 'Pouyet_HumanCodonUsage' not in manifest['sources']:
+              raise SystemExit('ERROR: Pouyet real human CDS source missing from merged manifest')
+          if 'synthetic' in manifest['label_types']:
+              raise SystemExit('ERROR: synthetic records are not permitted in this dataset build')
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Remove generated cache artifacts
+        run: rm -f data/human_expression_cds_proxy.jsonl
+
+      - name: Commit rebuilt dataset
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/merged_codon_v2/train.jsonl data/merged_codon_v2/validation.jsonl data/merged_codon_v2/manifest.json
+          if git diff --cached --quiet; then
+            echo 'No dataset changes to commit.'
+            exit 0
+          fi
+          git commit -m 'data: rebuild codon training set with real sequences'
+          git push origin HEAD:chimera-main
