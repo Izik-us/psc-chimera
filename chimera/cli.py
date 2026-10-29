@@ -86,6 +86,13 @@ def _parser() -> argparse.ArgumentParser:
         "--output", default=None,
         help="optional new JSON path for the plan; existing files are never replaced",
     )
+    prepare = design_actions.add_parser(
+        "prepare", help="create an auditable planned/blocked run without generating candidates"
+    )
+    prepare.add_argument("--task", required=True, help="path to a versioned design-task JSON file")
+    prepare.add_argument("--runs-root", default="runs/design", help="directory for durable design runs")
+    inspect = design_actions.add_parser("inspect", help="inspect a prepared design run")
+    inspect.add_argument("--run-dir", required=True, help="path to a design run directory")
     return parser
 
 
@@ -132,6 +139,22 @@ def main(argv: list[str] | None = None) -> int:
                 _write_json(result)
                 return 0 if result["state"] == "INTEGRITY_VERIFIED" else 1
             _write_json(inspect_asset(args.asset, args.cache_dir))
+            return 0
+        if args.command == "design" and args.design_action == "prepare":
+            from .design_runs import create_design_run, load_design_task
+
+            task_path = Path(args.task).expanduser().resolve()
+            task = load_design_task(task_path)
+            created = create_design_run(
+                task, task_file=task_path, runs_root=Path(args.runs_root).expanduser()
+            )
+            _write_json(created)
+            return 0 if created["manifest"]["status"] == "PLANNED" else 1
+        if args.command == "design" and args.design_action == "inspect":
+            from .design_runs import inspect_design_run
+
+            report = inspect_design_run(args.run_dir)
+            _write_json(report)
             return 0
         if args.command == "design" and args.design_action == "plan":
             from .design_runs import build_design_plan, load_design_task
