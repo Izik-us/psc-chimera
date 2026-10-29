@@ -76,6 +76,16 @@ def _parser() -> argparse.ArgumentParser:
         help="new evidence JSON path; existing files are never replaced",
     )
     gate.add_argument("--model-cache", default=None, help="model cache directory")
+    design = commands.add_parser("design", help="plan and manage bounded scientific design runs")
+    design_actions = design.add_subparsers(dest="design_action", required=True)
+    plan = design_actions.add_parser(
+        "plan", help="validate a design task and emit a dry-run plan without loading a model"
+    )
+    plan.add_argument("--task", required=True, help="path to a versioned design-task JSON file")
+    plan.add_argument(
+        "--output", default=None,
+        help="optional new JSON path for the plan; existing files are never replaced",
+    )
     return parser
 
 
@@ -123,6 +133,25 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if result["state"] == "INTEGRITY_VERIFIED" else 1
             _write_json(inspect_asset(args.asset, args.cache_dir))
             return 0
+        if args.command == "design" and args.design_action == "plan":
+            from .design_runs import build_design_plan, load_design_task
+
+            task_path = Path(args.task).expanduser().resolve()
+            task = load_design_task(task_path)
+            plan = build_design_plan(task, task_file=task_path)
+            if args.output:
+                destination = Path(args.output).expanduser().resolve()
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with destination.open("x", encoding="utf-8", newline="\\n") as stream:
+                        json.dump(plan, stream, indent=2, sort_keys=True)
+                        stream.write("\\n")
+                except FileExistsError as exc:
+                    raise FileExistsError(
+                        f"Refusing to replace existing design plan: {destination}"
+                    ) from exc
+            _write_json(plan)
+            return 0 if plan["readiness"] != "BLOCKED" else 1
         if args.command == "production-gate":
             from .production_gate import run_production_gate
 
