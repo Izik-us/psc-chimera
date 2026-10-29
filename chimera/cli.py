@@ -143,9 +143,9 @@ def main(argv: list[str] | None = None) -> int:
                 destination = Path(args.output).expanduser().resolve()
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    with destination.open("x", encoding="utf-8", newline="\\n") as stream:
+                    with destination.open("x", encoding="utf-8", newline="\n") as stream:
                         json.dump(plan, stream, indent=2, sort_keys=True)
-                        stream.write("\\n")
+                        stream.write("\n")
                 except FileExistsError as exc:
                     raise FileExistsError(
                         f"Refusing to replace existing design plan: {destination}"
