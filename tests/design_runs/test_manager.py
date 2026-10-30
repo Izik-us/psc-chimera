@@ -70,3 +70,35 @@ def test_inspection_detects_task_tampering(tmp_path):
 
     with pytest.raises(ArtifactError, match="SHA-256"):
         inspect_design_run(created["run_dir"])
+
+
+def test_inspection_detects_plan_content_tampering(tmp_path):
+    task_file = tmp_path / "task.json"
+    (tmp_path / "inputs.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "checkpoint.pt").write_bytes(b"fixture")
+    task = _task()
+    task_file.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+    created = create_design_run(task, task_file=task_file, runs_root=tmp_path / "runs")
+    plan_path = tmp_path / "runs" / created["run_id"] / "plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["objective"] = "tampered objective"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+    with pytest.raises(ArtifactError, match="content SHA-256"):
+        inspect_design_run(created["run_dir"])
+
+
+def test_inspection_detects_plan_digest_tampering(tmp_path):
+    task_file = tmp_path / "task.json"
+    (tmp_path / "inputs.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "checkpoint.pt").write_bytes(b"fixture")
+    task = _task()
+    task_file.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+    created = create_design_run(task, task_file=task_file, runs_root=tmp_path / "runs")
+    plan_path = tmp_path / "runs" / created["run_id"] / "plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["plan_sha256"] = "0" * 64
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+    with pytest.raises(ArtifactError, match="identity"):
+        inspect_design_run(created["run_dir"])
