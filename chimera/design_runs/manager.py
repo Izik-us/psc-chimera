@@ -33,6 +33,13 @@ def _write_json_new(path: Path, value: Any) -> None:
         os.fsync(stream.fileno())
 
 
+def _plan_digest(plan: dict[str, Any]) -> str:
+    """Recompute the planner identity, excluding its self-referential digest."""
+    payload = dict(plan)
+    payload.pop("plan_sha256", None)
+    return hashlib.sha256(canonical_config_json(payload).encode("utf-8")).hexdigest()
+
+
 def create_design_run(
     task: DesignTask,
     *,
@@ -122,8 +129,15 @@ def inspect_design_run(run_dir: str | Path) -> dict[str, Any]:
         raise ArtifactError(f"cannot read design run artifacts in {directory}: {exc}") from exc
     if hashlib.sha256(task_bytes).hexdigest() != manifest.get("task_artifact_sha256"):
         raise ArtifactError("task.json SHA-256 does not match run manifest")
-    if plan.get("plan_sha256") != manifest.get("plan_sha256"):
+    recorded_plan_digest = plan.get("plan_sha256")
+    if not isinstance(recorded_plan_digest, str) or recorded_plan_digest != manifest.get("plan_sha256"):
         raise ArtifactError("plan.json identity does not match run manifest")
+    try:
+        actual_plan_digest = _plan_digest(plan)
+    except ConfigurationError as exc:
+        raise ArtifactError(f"plan.json is not canonically hashable: {exc}") from exc
+    if actual_plan_digest != recorded_plan_digest:
+        raise ArtifactError("plan.json content SHA-256 does not match its recorded identity")
     if not events or events[0].get("run_id") != manifest.get("run_id"):
         raise ArtifactError("events.jsonl does not contain the expected initial run event")
     return {
