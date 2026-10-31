@@ -342,6 +342,32 @@ Research Prototype
 ## Production engineering entry points
 
 Install with `pip install .` (or `pip install -e .` for editable development).
+
+### The CHIMERA library terminal
+
+The `chimera` command with no arguments is the library landing page. It prints
+this README followed by a live, read-only system dashboard containing the
+installed package/runtime versions, PyTorch/CUDA/GPU availability, public API
+surface size, declared model-asset cache/integrity states, and locally
+discovered canonical checkpoint files. Checkpoint tensors are not loaded by
+the dashboard.
+
+```bash
+chimera                         # README + system dashboard
+chimera --no-readme             # compact dashboard
+chimera --json                  # machine-readable dashboard
+chimera status                  # compact status
+chimera status --json           # structured status
+python -m chimera               # equivalent module entry point
+```
+
+The package is also a Python library. Its public surface is exported from
+`chimera`, including the canonical architecture, training, inference,
+checkpoint, geometry, objective, and domain-schema APIs. Use
+`chimera.__all__` as the supported top-level export inventory; specialized
+submodules remain importable for advanced workflows. Importing the package
+does not download model weights or initialize a training run.
+
 The core install includes only PyTorch, NumPy, and einops. Optional feature
 groups are `esm`, `retrieval`, `data`, `research`, and `viz`; development tools
 are in `dev`. Use only the extras required by the selected workflow.
