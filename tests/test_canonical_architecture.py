@@ -871,6 +871,28 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     assert restored.optimizer.state_dict()["param_groups"] == payload["optimizer_state"]["param_groups"]
     assert len(restored.optimizer.state_dict()["state"]) == len(payload["optimizer_state"]["state"])
 
+    # Compare one identical continuation from the same saved boundary. This
+    # catches a resume path that restores weights but not optimizer/RNG state.
+    trainer.resume(path)
+    uninterrupted_step = trainer.train_step(batch)
+    restored.resume(path)
+    resumed_step = restored.train_step(batch)
+    assert uninterrupted_step["loss"] == resumed_step["loss"]
+    assert trainer.global_step == restored.global_step == 2
+    assert all(
+        torch.equal(left, right)
+        for left, right in zip(trainer.model.state_dict().values(), restored.model.state_dict().values())
+    )
+    assert trainer.optimizer.state_dict()["state"].keys() == restored.optimizer.state_dict()["state"].keys()
+    for parameter_id, uninterrupted_state in trainer.optimizer.state_dict()["state"].items():
+        resumed_state = restored.optimizer.state_dict()["state"][parameter_id]
+        assert uninterrupted_state.keys() == resumed_state.keys()
+        for name, value in uninterrupted_state.items():
+            if torch.is_tensor(value):
+                assert torch.equal(value, resumed_state[name])
+            else:
+                assert value == resumed_state[name]
+
     mismatched_optimizer_model = make_model()
     mismatched_optimizer = CanonicalTrainer(
         mismatched_optimizer_model,
