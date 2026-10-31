@@ -257,6 +257,35 @@ blockers.
 
 `CanonicalTrainer` owns one explicit regime at a time. It chooses the active loss and trainable module set; it does not sum unrelated flow, sequence, objective, and preference losses.
 
+The installed CLI exposes the same package-owned training engine:
+
+```bash
+# Initialize the one canonical model/checkpoint
+chimera train representation start --architecture configs/CHIMERAv2.json \
+  --checkpoint Models/CHIMERAv2.pt --dataset data/representation.jsonl \
+  --epochs 500 --lr 1e-4
+
+# Transition the existing checkpoint into sequence training
+chimera train sequence resume --checkpoint Models/CHIMERAv2.pt \
+  --dataset data/train_sequence.jsonl --epochs 2000 --lr 4e-4
+
+# Inspect the active regime and recorded stage history
+chimera checkpoint inspect --checkpoint Models/CHIMERAv2.pt
+```
+
+A `resume` request for the checkpoint's current regime restores its optimizer,
+scheduler, and RNG state and requires the same dataset identity. A `resume`
+request for a different regime reconstructs the same complete model weights,
+activates that regime's trainable components, and creates a fresh optimizer
+because the trainable parameter set/loss may have changed. The checkpoint path
+is unchanged; its training metadata records prior regimes, their dataset
+identities, trainable components, optimizer fingerprints, and transition step.
+The default preprocessing identity is a versioned canonical-batch JSONL
+contract; supply `--preprocessing-hash` and `--dataset-manifest` when your
+pipeline has stronger explicit provenance. The dataset remains pre-tensorized
+`CanonicalTrainingBatch` JSONL: this CLI does not generate MSA, pair features,
+structures, or biological labels.
+
 | Regime | Supervision | Trainable components | Active loss |
 |---|---|---|---|
 | `representation` | MSA tokens and pair features | Coupled EvoFormer stack | Masked-MSA recovery + pairwise MSA mutual-information supervision |
