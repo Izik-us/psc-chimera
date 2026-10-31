@@ -58,7 +58,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
-    commands = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--json", action="store_true", help="emit machine-readable status for the default dashboard")
+    parser.add_argument("--no-readme", action="store_true", help="show the compact dashboard without README")
+    parser.add_argument("--cache-dir", default=None, help="model asset cache directory")
+    commands = parser.add_subparsers(dest="command", required=False)
+    status = commands.add_parser("status", help="show runtime, model, and checkpoint status")
+    status.add_argument("--json", action="store_true", help="emit machine-readable status")
+    status.add_argument("--cache-dir", default=None)
     version_command = commands.add_parser("version", help="show the software version")
     version_command.set_defaults(command="version")
     _add_models_parser(commands)
@@ -124,6 +130,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        if args.command is None:
+            from .dashboard import collect_status, render_dashboard
+
+            if args.json:
+                _write_json(collect_status(args.cache_dir))
+            else:
+                print(render_dashboard(include_readme=not args.no_readme, cache_dir=args.cache_dir))
+            return 0
+        if args.command == "status":
+            from .dashboard import collect_status, render_dashboard
+
+            if args.json:
+                _write_json(collect_status(args.cache_dir))
+            else:
+                print(render_dashboard(include_readme=False, cache_dir=args.cache_dir))
+            return 0
         if args.command == "version":
             _write_json({"software": "psc-chimera", "version": __version__})
             return 0
