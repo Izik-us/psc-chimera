@@ -424,6 +424,37 @@ def test_reconstruction_rejects_tampered_architecture_before_weight_loading(tmp_
     with pytest.raises(CheckpointCompatibilityError, match="architecture_config SHA-256"):
         load_canonical_model_from_checkpoint(checkpoint_path)
 
+
+def test_reconstruction_rejects_state_tensor_corruption(tmp_path):
+    from chimera.checkpoint_io import load_canonical_model_from_checkpoint
+
+    source_model = _model()
+    manifest = replace(_complete_manifest(source_model), format_version=5)
+    state = {name: value.detach().clone() for name, value in source_model.state_dict().items()}
+    tensor_name = next(name for name, value in state.items() if torch.is_tensor(value) and value.numel())
+    state[tensor_name].view(-1)[0].add_(1)
+    original_state = source_model.state_dict()
+    checkpoint_path = tmp_path / "tampered-weights.pt"
+    torch.save(
+        {
+            "artifact_type": "canonical_training_checkpoint",
+            "checkpoint_schema_version": 2,
+            "architecture_config": source_model.model_configuration(),
+            "manifest": asdict(manifest),
+            "model_state": state,
+            "model_state_sha256": state_dict_content_hash(original_state),
+            "training": {
+                "component_status": source_model.component_status,
+                "objective_calibration": source_model.objective_calibration,
+                "objective_status": source_model.objective_status,
+            },
+        },
+        checkpoint_path,
+    )
+
+    with pytest.raises(CheckpointCompatibilityError, match="content SHA-256"):
+        load_canonical_model_from_checkpoint(checkpoint_path)
+
 def test_validation_can_be_explicitly_not_requested():
     result = run_inference(
         _model(),
