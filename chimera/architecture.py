@@ -94,6 +94,11 @@ class CanonicalCHIMERAv2(nn.Module):
         evoformer_dropout_triangle: float = 0.25,
         evoformer_transition_factor: int = 4,
         evoformer_opm_epsilon: float = 1e-3,
+        evoformer_n_heads_msa: int = 8,
+        evoformer_n_heads_pair: int = 4,
+        evoformer_c_hidden_opm: int = 32,
+        evoformer_c_hidden_triangle: int = 128,
+        evoformer_max_relative_position: int = 32,
         **legacy_aliases,
     ) -> None:
         super().__init__()
@@ -143,6 +148,11 @@ class CanonicalCHIMERAv2(nn.Module):
             dropout_triangle=evoformer_dropout_triangle,
             transition_factor=evoformer_transition_factor,
             opm_epsilon=evoformer_opm_epsilon,
+            n_heads_msa=evoformer_n_heads_msa,
+            n_heads_pair=evoformer_n_heads_pair,
+            c_hidden_opm=evoformer_c_hidden_opm,
+            c_hidden_triangle=evoformer_c_hidden_triangle,
+            max_relative_position=evoformer_max_relative_position,
         )
         self.flow_evo_projection = nn.Linear(d_evo_single, d_se3)
         resolved_flow_heads = 12 if n_flow_heads is None and d_se3 == 768 else n_flow_heads
