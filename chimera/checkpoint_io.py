@@ -1,72 +1,7 @@
-"""Safe reconstruction of canonical CHIMERA models from training checkpoints.
-
-Training checkpoints remain resumable trainer artifacts. This module adds the
-model-reconstruction half of that contract without changing component-transfer
-checkpoint semantics.
-"""
-from __future__ import annotations
-
-import hashlib
-from pathlib import Path
-from typing import Any
-
-from .checkpoint import CheckpointManifest, config_hash, state_schema_hash
-from .errors import CheckpointCompatibilityError
-
-
-def load_canonical_model_from_checkpoint(
-    path: str | Path,
-    *,
-    map_location: str = "cpu",
-):
-    """Reconstruct and strictly load CanonicalCHIMERAv2 from a v2 training artifact.
-
-    Older canonical checkpoints did not persist their full architecture
-    configuration. They remain loadable through the existing caller-instantiated
-    trainer/inference APIs, but cannot be reconstructed automatically.
-    """
+def canonical_model_from_configuration(architecture: dict[str, Any]):
+    """Instantiate a canonical model from its complete persisted configuration."""
     from .architecture import CanonicalCHIMERAv2
-    from .inference import _safe_torch_load
 
-    checkpoint_path = Path(path).expanduser().resolve()
-    if not checkpoint_path.is_file():
-        raise CheckpointCompatibilityError(
-            f"canonical checkpoint does not exist: {checkpoint_path}"
-        )
-    try:
-        payload: Any = _safe_torch_load(checkpoint_path)
-    except Exception as exc:
-        raise CheckpointCompatibilityError(
-            f"canonical checkpoint could not be safely deserialized: {exc}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise CheckpointCompatibilityError("canonical checkpoint payload must be a mapping")
-    if payload.get("artifact_type") != "canonical_training_checkpoint":
-        raise CheckpointCompatibilityError(
-            "automatic reconstruction requires a canonical_training_checkpoint"
-        )
-    if payload.get("checkpoint_schema_version") != 2:
-        raise CheckpointCompatibilityError(
-            "checkpoint does not contain the architecture-reconstruction schema; "
-            "use the legacy caller-instantiated loading path"
-        )
-    architecture = payload.get("architecture_config")
-    if not isinstance(architecture, dict) or not architecture:
-        raise CheckpointCompatibilityError(
-            "canonical checkpoint is missing architecture_config"
-        )
-    try:
-        manifest = CheckpointManifest(**payload["manifest"])
-        manifest.validate()
-    except (KeyError, TypeError, ValueError) as exc:
-        raise CheckpointCompatibilityError(
-            f"canonical checkpoint manifest is invalid: {exc}"
-        ) from exc
-    actual_config_hash = config_hash(architecture)
-    if manifest.config_hash != actual_config_hash:
-        raise CheckpointCompatibilityError(
-            "architecture_config SHA-256 does not match checkpoint manifest"
-        )
     constructor_config = dict(architecture)
     evoformer_config = constructor_config.pop("evoformer", None)
     if not isinstance(evoformer_config, dict):
@@ -112,11 +47,82 @@ def load_canonical_model_from_checkpoint(
             )
         constructor_config[constructor_name] = evoformer_config[saved_name]
     try:
-        model = CanonicalCHIMERAv2(**constructor_config)
+        return CanonicalCHIMERAv2(**constructor_config)
     except (TypeError, ValueError, AttributeError) as exc:
         raise CheckpointCompatibilityError(
             f"saved canonical architecture cannot be reconstructed: {exc}"
         ) from exc
+
+
+"""Safe reconstruction of canonical CHIMERA models from training checkpoints.
+
+Training checkpoints remain resumable trainer artifacts. This module adds the
+model-reconstruction half of that contract without changing component-transfer
+checkpoint semantics.
+"""
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from typing import Any
+
+from .checkpoint import CheckpointManifest, config_hash, state_schema_hash
+from .errors import CheckpointCompatibilityError
+
+
+def load_canonical_model_from_checkpoint(
+    path: str | Path,
+    *,
+    map_location: str = "cpu",
+):
+    """Reconstruct and strictly load CanonicalCHIMERAv2 from a v2 training artifact.
+
+    Older canonical checkpoints did not persist their full architecture
+    configuration. They remain loadable through the existing caller-instantiated
+    trainer/inference APIs, but cannot be reconstructed automatically.
+    """
+    from .inference import _safe_torch_load
+
+    checkpoint_path = Path(path).expanduser().resolve()
+    if not checkpoint_path.is_file():
+        raise CheckpointCompatibilityError(
+            f"canonical checkpoint does not exist: {checkpoint_path}"
+        )
+    try:
+        payload: Any = _safe_torch_load(checkpoint_path)
+    except Exception as exc:
+        raise CheckpointCompatibilityError(
+            f"canonical checkpoint could not be safely deserialized: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise CheckpointCompatibilityError("canonical checkpoint payload must be a mapping")
+    if payload.get("artifact_type") != "canonical_training_checkpoint":
+        raise CheckpointCompatibilityError(
+            "automatic reconstruction requires a canonical_training_checkpoint"
+        )
+    if payload.get("checkpoint_schema_version") != 2:
+        raise CheckpointCompatibilityError(
+            "checkpoint does not contain the architecture-reconstruction schema; "
+            "use the legacy caller-instantiated loading path"
+        )
+    architecture = payload.get("architecture_config")
+    if not isinstance(architecture, dict) or not architecture:
+        raise CheckpointCompatibilityError(
+            "canonical checkpoint is missing architecture_config"
+        )
+    try:
+        manifest = CheckpointManifest(**payload["manifest"])
+        manifest.validate()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CheckpointCompatibilityError(
+            f"canonical checkpoint manifest is invalid: {exc}"
+        ) from exc
+    actual_config_hash = config_hash(architecture)
+    if manifest.config_hash != actual_config_hash:
+        raise CheckpointCompatibilityError(
+            "architecture_config SHA-256 does not match checkpoint manifest"
+        )
+    model = canonical_model_from_configuration(architecture)
     model_state = payload.get("model_state")
     if not isinstance(model_state, dict):
         raise CheckpointCompatibilityError("canonical checkpoint is missing model_state")
@@ -164,4 +170,4 @@ def checkpoint_file_sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-__all__ = ["checkpoint_file_sha256", "load_canonical_model_from_checkpoint"]
+__all__ = ["canonical_model_from_configuration", "checkpoint_file_sha256", "load_canonical_model_from_checkpoint"]
