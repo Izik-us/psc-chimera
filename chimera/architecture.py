@@ -620,6 +620,7 @@ class CanonicalCHIMERAv2(nn.Module):
             "d_mpnn": self.d_mpnn,
             "n_flow_blocks": self.n_flow_blocks,
             "n_flow_steps": self.n_flow_steps,
+            "n_flow_heads": self.flow_model.flow_model.velocity_field.ipa_blocks[0].ipa.n_head,
             "evoformer": dict(self.evoformer.configuration),
             "n_retrieve": self.structural_retriever.n_retrieve,
             "n_mpnn_seqs": self.n_mpnn_seqs,
