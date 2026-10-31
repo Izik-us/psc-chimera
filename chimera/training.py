@@ -439,6 +439,7 @@ class CanonicalTrainer:
             preprocessing_hash=preprocessing_hash,
             random_seed=self.random_seed,
             min_validation_examples=self.min_validation_examples,
+            generator=self.generator,
             allow_sequence_backbone_finetuning=allow_sequence_backbone_finetuning,
         )
         next_trainer.stage_history = history
