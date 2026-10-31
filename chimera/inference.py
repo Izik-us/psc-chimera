@@ -530,6 +530,15 @@ def _load_checkpoint(
             raise CheckpointCompatibilityError(
                 f"canonical checkpoint manifest is invalid: {exc}"
             ) from exc
+        if payload.get("checkpoint_schema_version") == 2:
+            architecture_config = payload.get("architecture_config")
+            if (
+                not isinstance(architecture_config, dict)
+                or config_hash(architecture_config) != actual.config_hash
+            ):
+                raise CheckpointCompatibilityError(
+                    "canonical checkpoint architecture_config is missing or does not match its manifest"
+                )
         verdict = validate_checkpoint_compatibility(actual, expected)
         if verdict in {"incompatible", "unverified-provenance"}:
             raise CheckpointCompatibilityError(
