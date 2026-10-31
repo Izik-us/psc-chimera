@@ -99,7 +99,8 @@ def load_canonical_model_from_checkpoint(
         "c_hidden_triangle": "evoformer_c_hidden_triangle",
         "max_relative_position": "evoformer_max_relative_position",
     }
-    unknown_evoformer_keys = set(evoformer_config) - set(evoformer_keys)
+    metadata_keys = {"architecture", "d_msa", "d_pair", "d_single"}
+    unknown_evoformer_keys = set(evoformer_config) - set(evoformer_keys) - metadata_keys
     if unknown_evoformer_keys:
         raise CheckpointCompatibilityError(
             f"unsupported EvoFormer architecture fields: {sorted(unknown_evoformer_keys)}"
