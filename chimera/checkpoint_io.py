@@ -67,9 +67,35 @@ def load_canonical_model_from_checkpoint(
         raise CheckpointCompatibilityError(
             "architecture_config SHA-256 does not match checkpoint manifest"
         )
+    constructor_config = dict(architecture)
+    evoformer_config = constructor_config.pop("evoformer", None)
+    if not isinstance(evoformer_config, dict):
+        raise CheckpointCompatibilityError("architecture_config.evoformer must be a mapping")
+    evoformer_keys = {
+        "n_blocks": "evoformer_n_blocks",
+        "gradient_checkpointing": "evoformer_gradient_checkpointing",
+        "attention_chunk_size": "evoformer_attention_chunk_size",
+        "opm_chunk_size": "evoformer_opm_chunk_size",
+        "dropout_msa_row": "evoformer_dropout_msa_row",
+        "dropout_msa_column": "evoformer_dropout_msa_column",
+        "dropout_triangle": "evoformer_dropout_triangle",
+        "transition_factor": "evoformer_transition_factor",
+        "opm_epsilon": "evoformer_opm_epsilon",
+    }
+    unknown_evoformer_keys = set(evoformer_config) - set(evoformer_keys)
+    if unknown_evoformer_keys:
+        raise CheckpointCompatibilityError(
+            f"unsupported EvoFormer architecture fields: {sorted(unknown_evoformer_keys)}"
+        )
+    for saved_name, constructor_name in evoformer_keys.items():
+        if saved_name not in evoformer_config:
+            raise CheckpointCompatibilityError(
+                f"architecture_config.evoformer is missing {saved_name}"
+            )
+        constructor_config[constructor_name] = evoformer_config[saved_name]
     try:
-        model = CanonicalCHIMERAv2(**architecture)
-    except (TypeError, ValueError) as exc:
+        model = CanonicalCHIMERAv2(**constructor_config)
+    except (TypeError, ValueError, AttributeError) as exc:
         raise CheckpointCompatibilityError(
             f"saved canonical architecture cannot be reconstructed: {exc}"
         ) from exc
