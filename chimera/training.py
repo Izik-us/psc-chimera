@@ -6,7 +6,9 @@ from dataclasses import asdict, dataclass, fields
 from enum import Enum
 import hashlib
 import json
+import os
 import random
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
@@ -995,6 +997,8 @@ class CanonicalTrainer:
             raise ValueError("canonical checkpoints require complete, verified provenance")
         payload = {
             "artifact_type": "canonical_training_checkpoint",
+            "checkpoint_schema_version": 2,
+            "architecture_config": self.model.model_configuration(),
             "model_state": self.model.state_dict(),
             "optimizer_state": self.optimizer.state_dict(),
             "scheduler_state": self.scheduler.state_dict() if self.scheduler is not None else None,
@@ -1027,7 +1031,21 @@ class CanonicalTrainer:
                 },
             },
         }
-        torch.save(payload, path)
+        target = Path(path).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+        )
+        os.close(descriptor)
+        temporary_path = Path(temporary_name)
+        try:
+            torch.save(payload, temporary_path)
+            with temporary_path.open("rb") as stream:
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, target)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
 
     def resume(self, path: str | Path, *, migration_id: str | None = None) -> None:
         self._assert_current_regime()
