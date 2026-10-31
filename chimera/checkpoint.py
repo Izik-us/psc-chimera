@@ -155,6 +155,21 @@ def state_schema_hash(state_dict: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def state_dict_content_hash(state_dict: Mapping[str, Any]) -> str:
+    """Hash exact state-dictionary tensor contents, names, dtypes, and shapes."""
+    digest = hashlib.sha256()
+    for name in sorted(state_dict):
+        value = state_dict[name]
+        digest.update(str(name).encode("utf-8"))
+        if hasattr(value, "detach") and hasattr(value, "shape"):
+            tensor = value.detach().to(device="cpu").contiguous()
+            digest.update(str(tensor.dtype).encode("utf-8"))
+            digest.update(json.dumps(list(tensor.shape), separators=(",", ":")).encode("utf-8"))
+            digest.update(tensor.reshape(-1).view(__import__("torch").uint8).numpy().tobytes())
+        else:
+            digest.update(repr(value).encode("utf-8"))
+    return digest.hexdigest()
+
 def config_hash(config: Mapping[str, Any]) -> str:
     """Stable SHA-256 fingerprint for a JSON-serializable model configuration."""
     payload = json.dumps(config, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
