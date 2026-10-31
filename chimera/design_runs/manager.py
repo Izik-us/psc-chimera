@@ -1,4 +1,4 @@
-"""Durable creation and inspection of planned design runs.
+"""Durable creation and integrity-checked inspection of design runs.
 
 This module prepares auditable run directories only. It does not load models,
 generate candidates, or claim that a scientific run has executed.
@@ -138,6 +138,17 @@ def inspect_design_run(run_dir: str | Path) -> dict[str, Any]:
         raise ArtifactError(f"plan.json is not canonically hashable: {exc}") from exc
     if actual_plan_digest != recorded_plan_digest:
         raise ArtifactError("plan.json content SHA-256 does not match its recorded identity")
+    for field in ("inference_result", "report"):
+        record = manifest.get(field)
+        if record is None:
+            continue
+        if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+            raise ArtifactError(f"run manifest {field} reference is malformed")
+        artifact_path = directory / record["path"]
+        if not artifact_path.is_file():
+            raise ArtifactError(f"design run is missing recorded {field} artifact")
+        if hashlib.sha256(artifact_path.read_bytes()).hexdigest() != record.get("sha256"):
+            raise ArtifactError(f"{field} artifact SHA-256 does not match run manifest")
     if not events or events[0].get("run_id") != manifest.get("run_id"):
         raise ArtifactError("events.jsonl does not contain the expected initial run event")
     return {
