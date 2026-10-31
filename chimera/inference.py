@@ -541,6 +541,17 @@ def _load_checkpoint(
             )
         if not isinstance(payload.get("model_state"), dict):
             raise CheckpointCompatibilityError("canonical checkpoint is missing model_state")
+        if payload.get("checkpoint_schema_version") == 2:
+            from .checkpoint import state_dict_content_hash
+
+            declared_content_hash = payload.get("model_state_sha256")
+            if (
+                not isinstance(declared_content_hash, str)
+                or state_dict_content_hash(payload["model_state"]) != declared_content_hash
+            ):
+                raise CheckpointCompatibilityError(
+                    "canonical checkpoint model_state content SHA-256 is missing or invalid"
+                )
         if state_schema_hash(payload["model_state"]) != actual.state_schema_hash:
             raise CheckpointCompatibilityError(
                 "canonical checkpoint model_state does not match its declared state schema"
