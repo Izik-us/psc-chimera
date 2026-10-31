@@ -2,10 +2,18 @@ name: Rebuild real codon training dataset
 
 on:
   push:
+    branches:
+      - chimera-main
     paths:
       - 'scripts/fetch_human_expression_cds.py'
       - 'scripts/merge_codon_datasets.py'
       - 'scripts/prepare_fath2011_dataset.py'
+      - 'tests/test_fetch_human_expression_cds.py'
+      - '.github/workflows/rebuild_real_codon_dataset.yml'
+  pull_request:
+    paths:
+      - 'scripts/fetch_human_expression_cds.py'
+      - 'tests/test_fetch_human_expression_cds.py'
       - '.github/workflows/rebuild_real_codon_dataset.yml'
   workflow_dispatch:
 
@@ -13,14 +21,43 @@ permissions:
   contents: write
 
 jobs:
-  rebuild:
+  downloader-tests:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip pytest biopython
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Test resumable downloader
+        run: python -m pytest -q tests/test_fetch_human_expression_cds.py
+
+  rebuild:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout chimera-main
         uses: actions/checkout@v4
         with:
           ref: chimera-main
           fetch-depth: 1
+
+      - name: Restore Ensembl CDS cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .cache/ensembl_cds_cache
+            data/human_expression_cds_proxy.jsonl
+          key: ensembl-cds-v2-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ensembl-cds-v2-${{ runner.os }}-
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,15 +76,25 @@ jobs:
           unzip -q /tmp/pouyet/data_HumanCodonUsage.zip -d /tmp/pouyet/archive
           find /tmp/pouyet/archive -type f -iname '*human_genes_summary*' -print
 
-      - name: Build 12,600 real human CDS records
+      - name: Build real human CDS records with resumable checkpoints
         run: |
           SUMMARY=$(find /tmp/pouyet/archive -type f -iname '*human_genes_summary*' | head -n 1)
           test -n "$SUMMARY"
           python scripts/fetch_human_expression_cds.py "$SUMMARY" \
-            --cache-dir /tmp/pouyet/ensembl_cds_cache \
+            --cache-dir .cache/ensembl_cds_cache \
             --output data/human_expression_cds_proxy.jsonl \
             --max-records 12600 \
+            --batch-size 50 \
             --expression-column Exp_Meiosis
+
+      - name: Save Ensembl CDS cache, including partial progress
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .cache/ensembl_cds_cache
+            data/human_expression_cds_proxy.jsonl
+          key: ensembl-cds-v2-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Merge Fath measured data with real human CDS proxy data
         run: |
@@ -76,7 +123,7 @@ jobs:
           print(json.dumps(manifest, indent=2))
           PY
 
-      - name: Remove generated cache artifacts
+      - name: Remove temporary proxy output
         run: rm -f data/human_expression_cds_proxy.jsonl
 
       - name: Commit rebuilt dataset
