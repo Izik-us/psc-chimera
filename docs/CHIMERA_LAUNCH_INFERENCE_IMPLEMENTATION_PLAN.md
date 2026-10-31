@@ -2,7 +2,7 @@
 
 **Target branch:** `chimera-main`  
 **Planning branch:** `chimera-launch-inference-plan`  
-**Status:** Design plan only. This document does not claim that the proposed commands, modules, or guarantees already exist.
+**Status:** The core checkpoint-driven training-to-inference and bounded synchronous design-run path are implemented on this branch. The remaining sections describe future work unless explicitly marked implemented in the design-run specification.
 
 ## 1. Objective
 

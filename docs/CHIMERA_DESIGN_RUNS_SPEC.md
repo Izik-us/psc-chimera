@@ -1,13 +1,13 @@
 # CHIMERA Design Runs: Functional Specification
 
 **Branch:** `chimera-launch-inference-plan`  
-**Status:** Proposed design-run specification. No runtime implementation is claimed by this document.
+**Status:** The bounded synchronous canonical-inference path is implemented on this branch. Candidate clustering, diverse shortlist export, domain-specific NRPS evaluators, benchmark orchestration, and cancellation remain outside this milestone.
 
 ## 1. Purpose
 
-A design run is a bounded, auditable scientific computation that turns one explicit design task and a declared model/checkpoint into a set of candidate outputs plus validation, scoring, provenance, and a final report.
+A design run is a bounded, auditable computational job that turns one explicit design task and a declared model/checkpoint into candidate outputs plus computational validation, proxy scoring, provenance, and a final report.
 
-The Design Run Manager is a first-class layer of the Launch & Inference Harness. It orchestrates existing canonical inference; it must not implement a second model-generation path or silently substitute the legacy `scripts/run_design.py` path.
+The Design Run Manager orchestrates the existing canonical inference API; it does not implement a second model-generation path or silently substitute the legacy `scripts/run_design.py` path.
 
 For CHIMERA's NRPS module/domain-linker compatibility objective, a run should record the exact design context and constraints, the candidates produced, the validators and scoring functions applied, and the evidence supporting each ranking. Computational scores are hypotheses/proxies, not proof of biochemical compatibility.
 
@@ -91,9 +91,22 @@ The system must distinguish three questions:
 
 A soft score must not override a failed hard constraint. If a candidate fails a required check, mark it infeasible and preserve the reason rather than hiding it through an aggregate score. If metrics conflict, expose the Pareto trade-offs or per-metric results rather than inventing a single authoritative ranking.
 
-## 7. Suggested CLI
+## 7. CLI
 
-These are proposed commands and must not be documented as implemented until code and tests exist:
+Implemented commands on this branch:
+
+```bash
+chimera design plan --task configs/design_task.json
+chimera design prepare --task configs/design_task.json --runs-root runs/design
+chimera design run --task configs/design_task.json --runs-root runs/design
+chimera design inspect --run-dir runs/design/<run-id>
+```
+
+`run` creates an immutable planned run, verifies that the input bundle and checkpoint still match their planned hashes, validates the prepared tensor bundle, reconstructs the canonical model from the checkpoint, invokes `run_inference_from_checkpoint()`, and persists the complete inference result plus a compact report. It is synchronous and single-process. The task input bundle is a schema-versioned JSON object containing tensor arrays and a `PreparedInputManifest`; no raw biological preprocessing is synthesized.
+
+Only `sequence_length` maximum/minimum hard constraints currently have an implemented evaluator. Any other declared hard constraint fails closed before generation. Soft objectives must be included in `inference_config.objective_set`. Retrieval remains explicitly unavailable in the current canonical inference backend. The command does not provide asynchronous progress polling, forceful cancellation, clustering, diversity-aware export, or experimental validation.
+
+The `plan` command remains side-effect-light and does not load a model. `run` requires a bounded candidate count in the versioned task schema.
 
 ```bash
 # Validate a task and show the planned work without generating candidates
@@ -199,4 +212,4 @@ Use mocked or tiny model fixtures for default CI. Hardware tests should be condi
 
 ## 13. Definition of done
 
-A user can submit a versioned design task, dry-run the plan, execute a bounded generation job through a declared backend, inspect progress, receive a complete candidate ledger with validation and per-metric scores, export a diverse shortlist, and reproduce the run's provenance from its manifest. Failures are explicit, partial runs are never mislabeled as complete, and scientific claims are limited to the evidence actually produced.
+A user can submit a versioned design task, dry-run the plan, execute a bounded canonical inference job, inspect its durable status and report, and reproduce the run's provenance from its manifest. Candidate-level validation and per-objective proxy scores are retained in the immutable inference-result artifact. Unsupported hard constraints fail closed. Failures are explicit, partial runs are never mislabeled as complete, and scientific claims are limited to the evidence actually produced. Clustering, diverse shortlist export, benchmark integration, and experimental validation are not claimed by this milestone.
