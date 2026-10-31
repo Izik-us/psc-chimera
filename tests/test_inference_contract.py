@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from chimera import CanonicalCHIMERAv2
-from chimera.checkpoint import CheckpointManifest, config_hash, state_schema_hash
+from chimera.checkpoint import CheckpointManifest, config_hash, state_dict_content_hash, state_schema_hash
 from chimera.configuration import InferenceConfig
 from chimera.errors import (
     CheckpointCompatibilityError,
@@ -292,6 +292,7 @@ def test_complete_training_checkpoint_uses_existing_manifest_contract(tmp_path):
             "artifact_type": "canonical_training_checkpoint",
             "manifest": asdict(_complete_manifest(source_model)),
             "model_state": source_model.state_dict(),
+            "model_state_sha256": state_dict_content_hash(source_model.state_dict()),
             "training": {
                 "component_status": source_model.component_status,
                 "objective_calibration": source_model.objective_calibration,
