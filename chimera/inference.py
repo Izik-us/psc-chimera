@@ -1037,6 +1037,20 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
     )
 
 
+def run_inference_from_checkpoint(
+    checkpoint_path: str | Path,
+    request: InferenceRequest,
+) -> InferenceResult:
+    """Reconstruct the canonical architecture from a v2 checkpoint and generate candidates."""
+    from dataclasses import replace
+
+    from .checkpoint_io import load_canonical_model_from_checkpoint
+
+    model = load_canonical_model_from_checkpoint(checkpoint_path)
+    bound_request = replace(request, checkpoint_path=Path(checkpoint_path))
+    return run_inference(model, bound_request)
+
+
 def run_inference(model: torch.nn.Module, request: InferenceRequest) -> InferenceResult:
     """Serialize the process-global runtime policy and model placement changes."""
     with _RUNTIME_POLICY_LOCK:
@@ -1049,4 +1063,5 @@ __all__ = [
     "InferenceResult",
     "ValidationOptions",
     "run_inference",
+    "run_inference_from_checkpoint",
 ]
