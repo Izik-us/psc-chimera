@@ -346,8 +346,8 @@ class CanonicalTrainer:
                 )
             if model._reference_policy is None:
                 model.init_dpo_reference()
-            selected = configure_trainable_components(
-                model,
+            selected = model.configure_training_regime(
+                self.regime,
                 self.regime,
                 allow_sequence_backbone_finetuning=self.allow_sequence_backbone_finetuning,
             )
