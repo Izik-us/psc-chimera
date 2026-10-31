@@ -83,6 +83,31 @@ def _batch(record: dict) -> CanonicalTrainingBatch:
             values[name] = {
                 key: torch.as_tensor(value) for key, value in values[name].items()
             }
+    if values.get("constraints") is not None:
+        from chimera.domain_schema import NRPSConstraints
+
+        constraints = values["constraints"]
+        if not isinstance(constraints, dict):
+            raise ValueError("constraints must be a JSON object")
+        constraint_values = dict(constraints)
+        for name, value in tuple(constraint_values.items()):
+            if name in {
+                "fixed_mask", "stachelhaus_positions", "domain_boundaries",
+                "module_boundaries", "icosahedral_face", "hotspot_coords",
+                "hotspot_indices", "fixed_sequence", "domain_types",
+            } and value is not None:
+                constraint_values[name] = torch.as_tensor(value)
+        values["constraints"] = NRPSConstraints(**constraint_values)
+    if values.get("preference_batch") is not None:
+        from chimera.dpo import DPOBatch
+
+        preference = values["preference_batch"]
+        if not isinstance(preference, dict):
+            raise ValueError("preference_batch must be a JSON object")
+        values["preference_batch"] = DPOBatch(**{
+            name: torch.as_tensor(value) if value is not None else None
+            for name, value in preference.items()
+        })
     if "objective_label_sources" in values and values["objective_label_sources"] is not None:
         if not isinstance(values["objective_label_sources"], dict):
             raise ValueError("objective_label_sources must be a JSON object")
