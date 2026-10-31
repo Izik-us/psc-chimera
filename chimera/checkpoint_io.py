@@ -10,7 +10,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from .checkpoint import CheckpointManifest, config_hash, state_schema_hash
+from .checkpoint import CheckpointManifest, config_hash, state_dict_content_hash, state_schema_hash
 from .errors import CheckpointCompatibilityError
 
 
@@ -126,6 +126,14 @@ def load_canonical_model_from_checkpoint(
     if not isinstance(model_state, dict):
         raise CheckpointCompatibilityError("canonical checkpoint is missing model_state")
     actual_state_schema = state_schema_hash(model_state)
+    declared_content_hash = payload.get("model_state_sha256")
+    if (
+        not isinstance(declared_content_hash, str)
+        or state_dict_content_hash(model_state) != declared_content_hash
+    ):
+        raise CheckpointCompatibilityError(
+            "canonical checkpoint model_state content SHA-256 is missing or invalid"
+        )
     if actual_state_schema != manifest.state_schema_hash:
         raise CheckpointCompatibilityError(
             "checkpoint model_state does not match its declared state schema"
