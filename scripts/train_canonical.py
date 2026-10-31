@@ -129,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         if manifest.get("preprocessing_hash") != args.preprocessing_hash:
             raise ValueError("resume preprocessing hash does not match")
         model = load_canonical_model_from_checkpoint(args.resume)
+        model.to(device)
         trainer = CanonicalTrainer.from_checkpoint(
             model,
             args.resume,
@@ -144,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(architecture, dict):
             raise ValueError("architecture JSON must contain a model_configuration object")
         model = canonical_model_from_configuration(architecture)
+        model.to(device)
         trainer = CanonicalTrainer(
             model,
             args.regime,
@@ -156,7 +158,6 @@ def main(argv: list[str] | None = None) -> int:
             random_seed=args.seed,
         )
 
-    model.to(device)
     args.checkpoint.expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
     for _ in range(args.epochs):
         model.train()
