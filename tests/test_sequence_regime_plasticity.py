@@ -94,3 +94,40 @@ def test_sequence_default_keeps_evoformer_behaviorally_isolated():
     after = _module_state_fingerprint(model.evoformer)
     assert before == after
     assert not any(parameter.requires_grad for parameter in model.evoformer.parameters())
+
+
+
+def test_regime_transition_preserves_model_weights_and_resets_optimizer(tmp_path):
+    import pytest
+    from chimera.training import CanonicalTrainer, TrainingRegime
+
+    model = _model()
+    first = CanonicalTrainer(model, TrainingRegime.SEQUENCE, random_seed=17)
+    first.epoch = 3
+    first.global_step = 11
+    before = {
+        name: tensor.detach().clone()
+        for name, tensor in model.state_dict().items()
+    }
+    dataset = tmp_path / "flow.jsonl"
+    dataset.write_text("{}\\n", encoding="utf-8")
+
+    second = first.transition(
+        TrainingRegime.FLOW,
+        dataset_manifest="flow-stage-v1",
+        dataset_path=dataset,
+        dataset_version="flow-v1",
+        preprocessing_hash="a" * 64,
+        learning_rate=4e-4,
+    )
+
+    assert second.model is model
+    assert second.regime is TrainingRegime.FLOW
+    assert second.global_step == 11
+    assert second.epoch == 0
+    assert second.optimizer is not first.optimizer
+    assert second.stage_history[0]["regime"] == "sequence"
+    assert second.stage_history[0]["completed_epochs"] == 3
+    assert all(torch.equal(before[name], tensor) for name, tensor in model.state_dict().items())
+    with pytest.raises(RuntimeError, match="stale CanonicalTrainer"):
+        first._assert_current_regime()
