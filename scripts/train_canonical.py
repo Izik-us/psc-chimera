@@ -119,6 +119,15 @@ def _batch(record: dict) -> CanonicalTrainingBatch:
     return CanonicalTrainingBatch(**values)
 
 
+def _dataset_manifest_identity(value: str) -> str:
+    candidate = Path(value).expanduser()
+    if candidate.is_file():
+        document = json.loads(candidate.read_text(encoding="utf-8"))
+        return json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if not value.strip():
+        raise ValueError("--dataset-manifest must be a non-empty identity or JSON manifest path")
+    return value.strip()
+
 def _seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -141,6 +150,11 @@ def main(argv: list[str] | None = None) -> int:
         raise FileNotFoundError(data_path)
     records = _load_records(data_path)
     dataset_hash = hashlib.sha256(data_path.read_bytes()).hexdigest()
+    dataset_manifest_identity = _dataset_manifest_identity(args.dataset_manifest)
+    if len(args.preprocessing_hash) != 64 or any(
+        character not in "0123456789abcdef" for character in args.preprocessing_hash
+    ):
+        raise ValueError("--preprocessing-hash must be a lowercase SHA-256 digest")
     _seed(args.seed)
 
     if args.resume:
@@ -153,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("resume dataset bytes do not match the checkpoint dataset_hash")
         if manifest.get("dataset_version") != args.dataset_version:
             raise ValueError("resume dataset version does not match")
+        if manifest.get("dataset_manifest") != dataset_manifest_identity:
+            raise ValueError("resume dataset manifest identity does not match")
         if manifest.get("preprocessing_hash") != args.preprocessing_hash:
             raise ValueError("resume preprocessing hash does not match")
         model = load_canonical_model_from_checkpoint(args.resume)
@@ -178,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
             args.regime,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
-            dataset_manifest=args.dataset_manifest,
+            dataset_manifest=dataset_manifest_identity,
             dataset_path=data_path,
             dataset_version=args.dataset_version,
             preprocessing_hash=args.preprocessing_hash,
