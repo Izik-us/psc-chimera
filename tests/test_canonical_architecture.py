@@ -919,6 +919,11 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     with pytest.raises(ValueError, match="checkpoint provenance is not compatible"):
         mismatched_scheduler.resume(path)
 
+    # The continuation step above correctly invalidates the previous
+    # sequence-policy validation. Revalidate the resumed policy on the held-out
+    # batch before entering preference training; the preference guard must stay
+    # strict rather than being bypassed by this test.
+    restored.validate_sequence_policy([batch], validation_manifest="heldout-v1")
     from chimera.dpo import DPOBatch
     rejected = (batch.target_sequence + 1) % 20
     preference_dataset_path = tmp_path / "preference-train.json"
@@ -927,7 +932,7 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
         encoding="utf-8",
     )
     preference = CanonicalTrainer(
-        model,
+        restored_model,
         TrainingRegime.PREFERENCE,
         learning_rate=1e-4,
         dataset_manifest={"dataset_version": "preference-test-v1", "split": "train"},
@@ -948,7 +953,7 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     preference_path = tmp_path / "preference-stage.pt"
     reference_weights = {
         name: value.detach().clone()
-        for name, value in model._reference_policy.state_dict().items()
+        for name, value in restored_model._reference_policy.state_dict().items()
     }
     preference.save_checkpoint(preference_path)
     resumed_preference = CanonicalTrainer.from_checkpoint(make_model(), preference_path)
