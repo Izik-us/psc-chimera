@@ -84,3 +84,24 @@ result.write_json("runs/results/inference-result.json")
 ```
 
 The inference loader independently verifies checkpoint compatibility and weight-content identity. Candidate artifacts retain their computational validation and provenance. They do not establish biological activity, protein stability, expression, substrate specificity, or experimental validation.
+
+
+## Regime transitions within one checkpoint
+
+The canonical checkpoint remains a single complete model artifact across all
+training regimes. `CanonicalTrainer.transition(...)` reconfigures trainability
+on the existing model instance, records the completed stage in
+`training.stage_history`, and creates a new optimizer for the new regime.
+This is deliberate: optimizer moments from one regime must not be silently
+reused when its parameter groups or objective change. The new active regime's
+dataset identity becomes the checkpoint manifest's current dataset identity;
+previous stage dataset hashes and versions remain in stage history.
+
+The CLI form is
+`chimera train <regime> resume --checkpoint <same-path> --dataset <regime-jsonl>`.
+Same-regime resume retains the strict dataset/provenance checks and restores
+the saved optimizer and RNG state. Cross-regime resume verifies and reconstructs
+the canonical model checkpoint, then starts the requested regime with a fresh
+optimizer while preserving model weights, cumulative global step, and prior
+stage history. `chimera checkpoint inspect` displays the current stage and
+history.
