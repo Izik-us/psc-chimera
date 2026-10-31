@@ -1,3 +1,19 @@
+"""Safe reconstruction of canonical CHIMERA models from training checkpoints.
+
+Training checkpoints remain resumable trainer artifacts. This module adds the
+model-reconstruction half of that contract without changing component-transfer
+checkpoint semantics.
+"""
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from typing import Any
+
+from .checkpoint import CheckpointManifest, config_hash, state_schema_hash
+from .errors import CheckpointCompatibilityError
+
+
 def canonical_model_from_configuration(architecture: dict[str, Any]):
     """Instantiate a canonical model from its complete persisted configuration."""
     from .architecture import CanonicalCHIMERAv2
@@ -52,23 +68,6 @@ def canonical_model_from_configuration(architecture: dict[str, Any]):
         raise CheckpointCompatibilityError(
             f"saved canonical architecture cannot be reconstructed: {exc}"
         ) from exc
-
-
-"""Safe reconstruction of canonical CHIMERA models from training checkpoints.
-
-Training checkpoints remain resumable trainer artifacts. This module adds the
-model-reconstruction half of that contract without changing component-transfer
-checkpoint semantics.
-"""
-from __future__ import annotations
-
-import hashlib
-from pathlib import Path
-from typing import Any
-
-from .checkpoint import CheckpointManifest, config_hash, state_schema_hash
-from .errors import CheckpointCompatibilityError
-
 
 def load_canonical_model_from_checkpoint(
     path: str | Path,
