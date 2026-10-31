@@ -188,4 +188,8 @@ def checkpoint_file_sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-__all__ = ["canonical_model_from_configuration", "checkpoint_file_sha256", "load_canonical_model_from_checkpoint"]
+__all__ = [
+    "canonical_model_from_configuration",
+    "checkpoint_file_sha256",
+    "load_canonical_model_from_checkpoint",
+]
