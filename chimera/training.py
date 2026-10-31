@@ -1043,7 +1043,7 @@ class CanonicalTrainer:
         temporary_path = Path(temporary_name)
         try:
             torch.save(payload, temporary_path)
-            with temporary_path.open("rb") as stream:
+            with temporary_path.open("rb+") as stream:
                 os.fsync(stream.fileno())
             os.replace(temporary_path, target)
         except Exception:
