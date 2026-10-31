@@ -47,7 +47,7 @@ def test_train_command_routes_to_canonical_runner(monkeypatch, tmp_path: Path):
     ]) == 23
     assert captured["argv"][captured["argv"].index("--regime") + 1] == "sequence"
     assert captured["argv"][captured["argv"].index("--resume") + 1] == str(checkpoint)
-    assert captured["argv"][captured["argv"].index("--learning-rate") + 1] == "4e-4"
+    assert float(captured["argv"][captured["argv"].index("--learning-rate") + 1]) == 4e-4
 
 
 def test_checkpoint_inspect_reports_single_checkpoint_stage_history(tmp_path: Path, capsys):
