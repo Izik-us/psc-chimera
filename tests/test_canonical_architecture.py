@@ -815,7 +815,7 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     payload = torch.load(path, map_location="cpu", weights_only=False)
     manifest = CheckpointManifest(**payload["manifest"])
     assert payload["artifact_type"] == "canonical_training_checkpoint"
-    assert manifest.format_version == 4
+    assert manifest.format_version == 5
     assert manifest.chimera_version
     assert payload["training"]["frozen_backbone_fingerprint"]
     assert payload["training"]["allow_sequence_backbone_finetuning"] is False
