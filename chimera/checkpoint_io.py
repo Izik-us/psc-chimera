@@ -71,6 +71,18 @@ def load_canonical_model_from_checkpoint(
     evoformer_config = constructor_config.pop("evoformer", None)
     if not isinstance(evoformer_config, dict):
         raise CheckpointCompatibilityError("architecture_config.evoformer must be a mapping")
+    expected_evoformer_architecture = "chimera_af2_evoformer_core_v2"
+    if evoformer_config.get("architecture") != expected_evoformer_architecture:
+        raise CheckpointCompatibilityError("unsupported canonical EvoFormer architecture identity")
+    for saved_name, model_name in (
+        ("d_msa", "d_evo_single"),
+        ("d_pair", "d_evo_pair"),
+        ("d_single", "d_evo_single"),
+    ):
+        if evoformer_config.get(saved_name) != constructor_config.get(model_name):
+            raise CheckpointCompatibilityError(
+                f"architecture_config.evoformer.{saved_name} conflicts with {model_name}"
+            )
     evoformer_keys = {
         "n_blocks": "evoformer_n_blocks",
         "gradient_checkpointing": "evoformer_gradient_checkpointing",
@@ -81,6 +93,11 @@ def load_canonical_model_from_checkpoint(
         "dropout_triangle": "evoformer_dropout_triangle",
         "transition_factor": "evoformer_transition_factor",
         "opm_epsilon": "evoformer_opm_epsilon",
+        "n_heads_msa": "evoformer_n_heads_msa",
+        "n_heads_pair": "evoformer_n_heads_pair",
+        "c_hidden_opm": "evoformer_c_hidden_opm",
+        "c_hidden_triangle": "evoformer_c_hidden_triangle",
+        "max_relative_position": "evoformer_max_relative_position",
     }
     unknown_evoformer_keys = set(evoformer_config) - set(evoformer_keys)
     if unknown_evoformer_keys:
