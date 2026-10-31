@@ -1079,7 +1079,7 @@ def _migration_policy_check() -> Check:
     from .checkpoint import CheckpointManifest
 
     supported = []
-    for version in (1, 2, 3, 4):
+    for version in (1, 2, 3, 4, 5):
         CheckpointManifest(format_version=version).validate()
         supported.append(version)
     return Check(
