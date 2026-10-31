@@ -620,6 +620,26 @@ class CanonicalCHIMERAv2(nn.Module):
             reasons.append("one or more model components lack held-out validation")
         return {"state": state, "components": statuses, "reasons": reasons}
 
+    def configure_training_regime(
+        self,
+        regime: str,
+        *,
+        allow_sequence_backbone_finetuning: bool = False,
+    ) -> tuple[str, ...]:
+        """Apply the canonical training trainability policy to this model.
+
+        The policy implementation lives in chimera.training; this method is
+        the architecture-level entry point and imports it lazily to avoid a
+        composition-root/training-engine import cycle.
+        """
+        from .training import configure_trainable_components
+
+        return configure_trainable_components(
+            self,
+            regime,
+            allow_sequence_backbone_finetuning=allow_sequence_backbone_finetuning,
+        )
+
     def model_configuration(self) -> dict[str, Any]:
         """Return the canonical architecture identity used by checkpoint manifests."""
         return {

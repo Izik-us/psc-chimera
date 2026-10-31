@@ -59,6 +59,7 @@ from .training import (
     ObjectiveLabelKind,
     TrainingRegime,
     gradient_flow_report,
+    configure_trainable_components,
 )
 from .inference import (
     InferenceCandidate,
@@ -128,7 +129,7 @@ __all__ = [
     "OpenFoldAdapter", "OpenFoldCLIAdapter", "RFdiffusionAdapter",
     "RFdiffusionCLIAdapter", "ProteinMPNNAdapter",
     "CanonicalTrainingBatch", "CanonicalTrainer", "TrainingRegime", "ObjectiveLabelKind",
-    "gradient_flow_report",
+    "gradient_flow_report", "configure_trainable_components",
     "InferenceCandidate", "InferenceRequest", "InferenceResult",
     "ValidationOptions", "run_inference", "validate_candidate",
     "build_composition_manifest", "write_composition_manifest",

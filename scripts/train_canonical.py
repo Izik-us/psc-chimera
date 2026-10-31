@@ -34,19 +34,19 @@ _TENSOR_FIELDS = {
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--training-jsonl", required=True, type=Path)
+    parser.add_argument("--training-jsonl", "--dataset", dest="training_jsonl", required=True, type=Path)
     parser.add_argument("--architecture-json", type=Path)
     parser.add_argument(
         "--regime", choices=[item.value for item in TrainingRegime], default="sequence"
     )
-    parser.add_argument("--dataset-manifest", required=True)
-    parser.add_argument("--dataset-version", required=True)
-    parser.add_argument("--preprocessing-hash", required=True)
+    parser.add_argument("--dataset-manifest", default=None)
+    parser.add_argument("--dataset-version", default="canonical-training-batch-jsonl-v1")
+    parser.add_argument("--preprocessing-hash", default=None)
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--resume", type=Path)
-    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--epochs", "--epoch", "-epoch", dest="epochs", type=int, default=1)
     parser.add_argument("--checkpoint-every-steps", type=int, default=100)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--learning-rate", "--lr", "-lr", dest="learning_rate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -150,9 +150,16 @@ def main(argv: list[str] | None = None) -> int:
         raise FileNotFoundError(data_path)
     records = _load_records(data_path)
     dataset_hash = hashlib.sha256(data_path.read_bytes()).hexdigest()
-    dataset_manifest_identity = _dataset_manifest_identity(args.dataset_manifest)
-    if len(args.preprocessing_hash) != 64 or any(
-        character not in "0123456789abcdef" for character in args.preprocessing_hash
+    dataset_manifest_identity = (
+        _dataset_manifest_identity(args.dataset_manifest)
+        if args.dataset_manifest
+        else f"canonical-jsonl:{dataset_hash}"
+    )
+    preprocessing_hash = args.preprocessing_hash or hashlib.sha256(
+        b"psc-chimera:CanonicalTrainingBatch-jsonl:v1"
+    ).hexdigest()
+    if len(preprocessing_hash) != 64 or any(
+        character not in "0123456789abcdef" for character in preprocessing_hash
     ):
         raise ValueError("--preprocessing-hash must be a lowercase SHA-256 digest")
     _seed(args.seed)
@@ -163,24 +170,40 @@ def main(argv: list[str] | None = None) -> int:
 
         payload = _safe_torch_load(args.resume.expanduser().resolve())
         manifest = payload.get("manifest", {})
-        if manifest.get("dataset_hash") != dataset_hash:
-            raise ValueError("resume dataset bytes do not match the checkpoint dataset_hash")
-        if manifest.get("dataset_version") != args.dataset_version:
-            raise ValueError("resume dataset version does not match")
-        if manifest.get("dataset_manifest") != dataset_manifest_identity:
-            raise ValueError("resume dataset manifest identity does not match")
-        if manifest.get("preprocessing_hash") != args.preprocessing_hash:
-            raise ValueError("resume preprocessing hash does not match")
         model = load_canonical_model_from_checkpoint(args.resume)
         model.to(device)
-        trainer = CanonicalTrainer.from_checkpoint(
-            model,
-            args.resume,
-            learning_rate=args.learning_rate,
-            weight_decay=args.weight_decay,
-        )
-        if trainer.regime.value != args.regime:
-            raise ValueError("requested regime does not match resumed checkpoint")
+        saved_regime = payload.get("training", {}).get("regime")
+        if saved_regime == args.regime:
+            if manifest.get("dataset_hash") != dataset_hash:
+                raise ValueError("resume dataset bytes do not match the checkpoint dataset_hash")
+            if manifest.get("dataset_version") != args.dataset_version:
+                raise ValueError("resume dataset version does not match")
+            if manifest.get("dataset_manifest") != dataset_manifest_identity:
+                raise ValueError("resume dataset manifest identity does not match")
+            if manifest.get("preprocessing_hash") != preprocessing_hash:
+                raise ValueError("resume preprocessing hash does not match")
+            trainer = CanonicalTrainer.from_checkpoint(
+                model,
+                args.resume,
+                learning_rate=args.learning_rate,
+                weight_decay=args.weight_decay,
+            )
+        else:
+            previous_trainer = CanonicalTrainer.from_checkpoint(
+                model,
+                args.resume,
+                learning_rate=args.learning_rate,
+                weight_decay=args.weight_decay,
+            )
+            trainer = previous_trainer.transition(
+                args.regime,
+                dataset_manifest=dataset_manifest_identity,
+                dataset_path=data_path,
+                dataset_version=args.dataset_version,
+                preprocessing_hash=preprocessing_hash,
+                learning_rate=args.learning_rate,
+                weight_decay=args.weight_decay,
+            )
     else:
         if args.architecture_json is None:
             raise ValueError("--architecture-json is required unless --resume is supplied")
@@ -197,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
             dataset_manifest=dataset_manifest_identity,
             dataset_path=data_path,
             dataset_version=args.dataset_version,
-            preprocessing_hash=args.preprocessing_hash,
+            preprocessing_hash=preprocessing_hash,
             random_seed=args.seed,
         )
 
