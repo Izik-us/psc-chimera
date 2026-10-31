@@ -22,6 +22,7 @@ from .checkpoint import (
     git_provenance,
     runtime_provenance,
     state_schema_hash,
+    state_dict_content_hash,
     validate_checkpoint_compatibility,
 )
 from .dpo import DPOBatch
@@ -995,11 +996,13 @@ class CanonicalTrainer:
         manifest = self._manifest()
         if not manifest.has_complete_provenance():
             raise ValueError("canonical checkpoints require complete, verified provenance")
+        model_state = self.model.state_dict()
         payload = {
             "artifact_type": "canonical_training_checkpoint",
             "checkpoint_schema_version": 2,
             "architecture_config": self.model.model_configuration(),
-            "model_state": self.model.state_dict(),
+            "model_state": model_state,
+            "model_state_sha256": state_dict_content_hash(model_state),
             "optimizer_state": self.optimizer.state_dict(),
             "scheduler_state": self.scheduler.state_dict() if self.scheduler is not None else None,
             "manifest": asdict(manifest),
