@@ -36,7 +36,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--training-jsonl", required=True, type=Path)
     parser.add_argument("--architecture-json", type=Path)
-    parser.add_argument("--regime", choices=[item.value for item in TrainingRegime], default="sequence")
+    parser.add_argument(
+        "--regime", choices=[item.value for item in TrainingRegime], default="sequence"
+    )
     parser.add_argument("--dataset-manifest", required=True)
     parser.add_argument("--dataset-version", required=True)
     parser.add_argument("--preprocessing-hash", required=True)
