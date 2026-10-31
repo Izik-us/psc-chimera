@@ -11,6 +11,8 @@ import platform
 from pathlib import Path
 import subprocess
 
+import torch
+
 from ._version import __version__
 
 
@@ -165,7 +167,7 @@ def state_dict_content_hash(state_dict: Mapping[str, Any]) -> str:
             tensor = value.detach().to(device="cpu").contiguous()
             digest.update(str(tensor.dtype).encode("utf-8"))
             digest.update(json.dumps(list(tensor.shape), separators=(",", ":")).encode("utf-8"))
-            digest.update(tensor.reshape(-1).view(__import__("torch").uint8).numpy().tobytes())
+            digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes())
         else:
             digest.update(repr(value).encode("utf-8"))
     return digest.hexdigest()
