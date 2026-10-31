@@ -380,32 +380,36 @@ def test_request_accepts_and_validates_msa_masks_and_residue_indices():
 
 
 def test_versioned_training_checkpoint_reconstructs_model_and_runs_inference(tmp_path):
+    from chimera.training import CanonicalTrainer, TrainingRegime
+
     source_model = _model()
-    manifest = replace(_complete_manifest(source_model), format_version=5)
-    checkpoint_path = tmp_path / "reconstructable.pt"
-    torch.save(
-        {
-            "artifact_type": "canonical_training_checkpoint",
-            "checkpoint_schema_version": 2,
-            "architecture_config": source_model.model_configuration(),
-            "manifest": asdict(manifest),
-            "model_state": source_model.state_dict(),
-            "training": {
-                "component_status": source_model.component_status,
-                "objective_calibration": source_model.objective_calibration,
-                "objective_status": source_model.objective_status,
-            },
-        },
-        checkpoint_path,
+    dataset_path = tmp_path / "training-data.jsonl"
+    dataset_path.write_text('{"sample_id":"synthetic-engineering-test"}\\n', encoding="utf-8")
+    trainer = CanonicalTrainer(
+        source_model,
+        TrainingRegime.SEQUENCE,
+        dataset_manifest={"split": "synthetic-test", "dataset_version": "test-v1"},
+        dataset_path=dataset_path,
+        dataset_version="test-v1",
+        preprocessing_config={"pipeline": "canonical-input-test-v1"},
+        random_seed=19,
+        min_validation_examples=1,
     )
+    checkpoint_path = tmp_path / "reconstructable.pt"
+    trainer.save_checkpoint(checkpoint_path)
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    manifest = CheckpointManifest(**payload["manifest"])
 
     result = run_inference_from_checkpoint(checkpoint_path, _request())
 
+    assert payload["checkpoint_schema_version"] == 2
+    assert payload["architecture_config"] == source_model.model_configuration()
+    assert payload["model_state_sha256"] == state_dict_content_hash(payload["model_state"])
+    assert manifest.format_version == 5
     assert len(result.candidates) == 2
     assert result.checkpoint_compatibility == "exact-compatible"
     assert result.checkpoint_sha256 == hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
     assert result.provenance["model"]["architecture_config_sha256"] == manifest.config_hash
-
 
 def test_reconstruction_rejects_tampered_architecture_before_weight_loading(tmp_path):
     source_model = _model()
