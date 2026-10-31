@@ -318,6 +318,20 @@ def validate_checkpoint_compatibility(
     if actual == expected:
         return "exact-compatible" if actual.has_complete_provenance() else "unverified-provenance"
 
+    if migration_id == "v4-to-v5-training-checkpoint":
+        if actual.format_version == 4 and expected.format_version == 5:
+            actual_dict = asdict(actual)
+            expected_dict = asdict(expected)
+            actual_dict.pop("format_version")
+            expected_dict.pop("format_version")
+            if (
+                actual_dict == expected_dict
+                and actual.has_complete_provenance()
+                and expected.has_complete_provenance()
+            ):
+                return "expected-compatible"
+        return "incompatible"
+
     if migration_id == "v4-serialization-metadata-v0-to-v1":
         if (
             actual.format_version == expected.format_version == 4
