@@ -10,6 +10,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+import torch
+
 from .checkpoint import CheckpointManifest, config_hash, state_dict_content_hash, state_schema_hash
 from .errors import CheckpointCompatibilityError
 
@@ -116,6 +118,10 @@ def load_canonical_model_from_checkpoint(
         raise CheckpointCompatibilityError(
             f"canonical checkpoint manifest is invalid: {exc}"
         ) from exc
+    if not manifest.has_complete_provenance():
+        raise CheckpointCompatibilityError(
+            "canonical checkpoint does not have complete training provenance"
+        )
     actual_config_hash = config_hash(architecture)
     if manifest.config_hash != actual_config_hash:
         raise CheckpointCompatibilityError(
@@ -164,6 +170,7 @@ def load_canonical_model_from_checkpoint(
     model.component_status = training["component_status"]
     model.objective_calibration = training["objective_calibration"]
     model.objective_status = training["objective_status"]
+    model.to(torch.device(map_location))
     model.eval()
     return model
 
