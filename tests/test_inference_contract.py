@@ -1,21 +1,31 @@
 import hashlib
 import json
 import random
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import numpy as np
 import pytest
 import torch
 
 from chimera import CanonicalCHIMERAv2
-from chimera.checkpoint import CheckpointManifest, config_hash, state_schema_hash
+from chimera.checkpoint import (
+    CheckpointManifest,
+    config_hash,
+    state_dict_content_hash,
+    state_schema_hash,
+)
 from chimera.configuration import InferenceConfig
 from chimera.errors import (
     CheckpointCompatibilityError,
     ConfigurationError,
     InputValidationError,
 )
-from chimera.inference import InferenceRequest, ValidationOptions, run_inference
+from chimera.inference import (
+    InferenceRequest,
+    ValidationOptions,
+    run_inference,
+    run_inference_from_checkpoint,
+)
 from chimera.objective_schema import objective_schema_hash
 
 
@@ -292,6 +302,7 @@ def test_complete_training_checkpoint_uses_existing_manifest_contract(tmp_path):
             "artifact_type": "canonical_training_checkpoint",
             "manifest": asdict(_complete_manifest(source_model)),
             "model_state": source_model.state_dict(),
+            "model_state_sha256": state_dict_content_hash(source_model.state_dict()),
             "training": {
                 "component_status": source_model.component_status,
                 "objective_calibration": source_model.objective_calibration,
@@ -366,6 +377,97 @@ def test_request_accepts_and_validates_msa_masks_and_residue_indices():
     with pytest.raises(InputValidationError, match="residue_mask"):
         _request(residue_mask=torch.ones(1, 7, dtype=torch.bool))
 
+
+
+def test_versioned_training_checkpoint_reconstructs_model_and_runs_inference(tmp_path):
+    from chimera.training import CanonicalTrainer, TrainingRegime
+
+    source_model = _model()
+    dataset_path = tmp_path / "training-data.jsonl"
+    dataset_path.write_text('{"sample_id":"synthetic-engineering-test"}\\n', encoding="utf-8")
+    trainer = CanonicalTrainer(
+        source_model,
+        TrainingRegime.SEQUENCE,
+        dataset_manifest={"split": "synthetic-test", "dataset_version": "test-v1"},
+        dataset_path=dataset_path,
+        dataset_version="test-v1",
+        preprocessing_config={"pipeline": "canonical-input-test-v1"},
+        random_seed=19,
+        min_validation_examples=1,
+    )
+    checkpoint_path = tmp_path / "reconstructable.pt"
+    trainer.save_checkpoint(checkpoint_path)
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    manifest = CheckpointManifest(**payload["manifest"])
+
+    result = run_inference_from_checkpoint(checkpoint_path, _request())
+
+    assert payload["checkpoint_schema_version"] == 2
+    assert payload["architecture_config"] == source_model.model_configuration()
+    assert payload["model_state_sha256"] == state_dict_content_hash(payload["model_state"])
+    assert manifest.format_version == 5
+    assert len(result.candidates) == 2
+    assert result.checkpoint_compatibility == "exact-compatible"
+    assert result.checkpoint_sha256 == hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+    assert result.provenance["model"]["architecture_config_sha256"] == manifest.config_hash
+
+def test_reconstruction_rejects_tampered_architecture_before_weight_loading(tmp_path):
+    source_model = _model()
+    manifest = replace(_complete_manifest(source_model), format_version=5)
+    architecture = source_model.model_configuration()
+    architecture["d_mpnn"] += 8
+    checkpoint_path = tmp_path / "tampered-architecture.pt"
+    torch.save(
+        {
+            "artifact_type": "canonical_training_checkpoint",
+            "checkpoint_schema_version": 2,
+            "architecture_config": architecture,
+            "manifest": asdict(manifest),
+            "model_state": source_model.state_dict(),
+            "training": {
+                "component_status": source_model.component_status,
+                "objective_calibration": source_model.objective_calibration,
+                "objective_status": source_model.objective_status,
+            },
+        },
+        checkpoint_path,
+    )
+
+    from chimera.checkpoint_io import load_canonical_model_from_checkpoint
+
+    with pytest.raises(CheckpointCompatibilityError, match="architecture_config SHA-256"):
+        load_canonical_model_from_checkpoint(checkpoint_path)
+
+
+def test_reconstruction_rejects_state_tensor_corruption(tmp_path):
+    from chimera.checkpoint_io import load_canonical_model_from_checkpoint
+
+    source_model = _model()
+    manifest = replace(_complete_manifest(source_model), format_version=5)
+    state = {name: value.detach().clone() for name, value in source_model.state_dict().items()}
+    tensor_name = next(name for name, value in state.items() if torch.is_tensor(value) and value.numel())
+    state[tensor_name].view(-1)[0].add_(1)
+    original_state = source_model.state_dict()
+    checkpoint_path = tmp_path / "tampered-weights.pt"
+    torch.save(
+        {
+            "artifact_type": "canonical_training_checkpoint",
+            "checkpoint_schema_version": 2,
+            "architecture_config": source_model.model_configuration(),
+            "manifest": asdict(manifest),
+            "model_state": state,
+            "model_state_sha256": state_dict_content_hash(original_state),
+            "training": {
+                "component_status": source_model.component_status,
+                "objective_calibration": source_model.objective_calibration,
+                "objective_status": source_model.objective_status,
+            },
+        },
+        checkpoint_path,
+    )
+
+    with pytest.raises(CheckpointCompatibilityError, match="content SHA-256"):
+        load_canonical_model_from_checkpoint(checkpoint_path)
 
 def test_validation_can_be_explicitly_not_requested():
     result = run_inference(

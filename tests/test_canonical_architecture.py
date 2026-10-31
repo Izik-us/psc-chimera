@@ -815,7 +815,7 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     payload = torch.load(path, map_location="cpu", weights_only=False)
     manifest = CheckpointManifest(**payload["manifest"])
     assert payload["artifact_type"] == "canonical_training_checkpoint"
-    assert manifest.format_version == 4
+    assert manifest.format_version == 5
     assert manifest.chimera_version
     assert payload["training"]["frozen_backbone_fingerprint"]
     assert payload["training"]["allow_sequence_backbone_finetuning"] is False
@@ -871,6 +871,28 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     assert restored.optimizer.state_dict()["param_groups"] == payload["optimizer_state"]["param_groups"]
     assert len(restored.optimizer.state_dict()["state"]) == len(payload["optimizer_state"]["state"])
 
+    # Compare one identical continuation from the same saved boundary. This
+    # catches a resume path that restores weights but not optimizer/RNG state.
+    trainer.resume(path)
+    uninterrupted_step = trainer.train_step(batch)
+    restored.resume(path)
+    resumed_step = restored.train_step(batch)
+    assert uninterrupted_step["loss"] == resumed_step["loss"]
+    assert trainer.global_step == restored.global_step == 2
+    assert all(
+        torch.equal(left, right)
+        for left, right in zip(trainer.model.state_dict().values(), restored.model.state_dict().values())
+    )
+    assert trainer.optimizer.state_dict()["state"].keys() == restored.optimizer.state_dict()["state"].keys()
+    for parameter_id, uninterrupted_state in trainer.optimizer.state_dict()["state"].items():
+        resumed_state = restored.optimizer.state_dict()["state"][parameter_id]
+        assert uninterrupted_state.keys() == resumed_state.keys()
+        for name, value in uninterrupted_state.items():
+            if torch.is_tensor(value):
+                assert torch.equal(value, resumed_state[name])
+            else:
+                assert value == resumed_state[name]
+
     mismatched_optimizer_model = make_model()
     mismatched_optimizer = CanonicalTrainer(
         mismatched_optimizer_model,
@@ -897,6 +919,11 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     with pytest.raises(ValueError, match="checkpoint provenance is not compatible"):
         mismatched_scheduler.resume(path)
 
+    # The continuation step above correctly invalidates the previous
+    # sequence-policy validation. Revalidate the resumed policy on the held-out
+    # batch before entering preference training; the preference guard must stay
+    # strict rather than being bypassed by this test.
+    restored.validate_sequence_policy([batch], validation_manifest="heldout-v1")
     from chimera.dpo import DPOBatch
     rejected = (batch.target_sequence + 1) % 20
     preference_dataset_path = tmp_path / "preference-train.json"
@@ -905,7 +932,7 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
         encoding="utf-8",
     )
     preference = CanonicalTrainer(
-        model,
+        restored_model,
         TrainingRegime.PREFERENCE,
         learning_rate=1e-4,
         dataset_manifest={"dataset_version": "preference-test-v1", "split": "train"},
@@ -926,7 +953,7 @@ def test_canonical_sequence_regime_and_checkpoint_resume(tmp_path):
     preference_path = tmp_path / "preference-stage.pt"
     reference_weights = {
         name: value.detach().clone()
-        for name, value in model._reference_policy.state_dict().items()
+        for name, value in restored_model._reference_policy.state_dict().items()
     }
     preference.save_checkpoint(preference_path)
     resumed_preference = CanonicalTrainer.from_checkpoint(make_model(), preference_path)

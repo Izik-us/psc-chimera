@@ -11,6 +11,8 @@ import platform
 from pathlib import Path
 import subprocess
 
+import torch
+
 from ._version import __version__
 
 
@@ -18,7 +20,7 @@ from ._version import __version__
 class CheckpointManifest:
     """Machine-readable description of the architecture and provenance a checkpoint belongs to."""
 
-    format_version: int = 4
+    format_version: int = 5
     serialization_revision: int = 1
     chimera_version: str = __version__
     transport: str = "se3_schrodinger_bridge"
@@ -97,7 +99,7 @@ class CheckpointManifest:
         )
 
     def validate(self, expected: "CheckpointManifest" | None = None) -> None:
-        if self.format_version not in (1, 2, 3, 4):
+        if self.format_version not in (1, 2, 3, 4, 5):
             raise ValueError(f"unsupported checkpoint format_version={self.format_version}")
         if self.serialization_revision < 0:
             raise ValueError("serialization_revision must be non-negative")
@@ -154,6 +156,21 @@ def state_schema_hash(state_dict: Mapping[str, Any]) -> str:
     payload = json.dumps(entries, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
+
+def state_dict_content_hash(state_dict: Mapping[str, Any]) -> str:
+    """Hash exact state-dictionary tensor contents, names, dtypes, and shapes."""
+    digest = hashlib.sha256()
+    for name in sorted(state_dict):
+        value = state_dict[name]
+        digest.update(str(name).encode("utf-8"))
+        if hasattr(value, "detach") and hasattr(value, "shape"):
+            tensor = value.detach().to(device="cpu").contiguous()
+            digest.update(str(tensor.dtype).encode("utf-8"))
+            digest.update(json.dumps(list(tensor.shape), separators=(",", ":")).encode("utf-8"))
+            digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes())
+        else:
+            digest.update(repr(value).encode("utf-8"))
+    return digest.hexdigest()
 
 def config_hash(config: Mapping[str, Any]) -> str:
     """Stable SHA-256 fingerprint for a JSON-serializable model configuration."""
@@ -300,6 +317,20 @@ def validate_checkpoint_compatibility(
         return "incompatible"
     if actual == expected:
         return "exact-compatible" if actual.has_complete_provenance() else "unverified-provenance"
+
+    if migration_id == "v4-to-v5-training-checkpoint":
+        if actual.format_version == 4 and expected.format_version == 5:
+            actual_dict = asdict(actual)
+            expected_dict = asdict(expected)
+            actual_dict.pop("format_version")
+            expected_dict.pop("format_version")
+            if (
+                actual_dict == expected_dict
+                and actual.has_complete_provenance()
+                and expected.has_complete_provenance()
+            ):
+                return "expected-compatible"
+        return "incompatible"
 
     if migration_id == "v4-serialization-metadata-v0-to-v1":
         if (

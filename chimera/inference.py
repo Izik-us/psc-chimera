@@ -530,6 +530,15 @@ def _load_checkpoint(
             raise CheckpointCompatibilityError(
                 f"canonical checkpoint manifest is invalid: {exc}"
             ) from exc
+        if payload.get("checkpoint_schema_version") == 2:
+            architecture_config = payload.get("architecture_config")
+            if (
+                not isinstance(architecture_config, dict)
+                or config_hash(architecture_config) != actual.config_hash
+            ):
+                raise CheckpointCompatibilityError(
+                    "canonical checkpoint architecture_config is missing or does not match its manifest"
+                )
         verdict = validate_checkpoint_compatibility(actual, expected)
         if verdict in {"incompatible", "unverified-provenance"}:
             raise CheckpointCompatibilityError(
@@ -541,6 +550,17 @@ def _load_checkpoint(
             )
         if not isinstance(payload.get("model_state"), dict):
             raise CheckpointCompatibilityError("canonical checkpoint is missing model_state")
+        if payload.get("checkpoint_schema_version") == 2:
+            from .checkpoint import state_dict_content_hash
+
+            declared_content_hash = payload.get("model_state_sha256")
+            if (
+                not isinstance(declared_content_hash, str)
+                or state_dict_content_hash(payload["model_state"]) != declared_content_hash
+            ):
+                raise CheckpointCompatibilityError(
+                    "canonical checkpoint model_state content SHA-256 is missing or invalid"
+                )
         if state_schema_hash(payload["model_state"]) != actual.state_schema_hash:
             raise CheckpointCompatibilityError(
                 "canonical checkpoint model_state does not match its declared state schema"
@@ -1037,6 +1057,20 @@ def _run_inference_locked(model: torch.nn.Module, request: InferenceRequest) -> 
     )
 
 
+def run_inference_from_checkpoint(
+    checkpoint_path: str | Path,
+    request: InferenceRequest,
+) -> InferenceResult:
+    """Reconstruct the canonical architecture from a v2 checkpoint and generate candidates."""
+    from dataclasses import replace
+
+    from .checkpoint_io import load_canonical_model_from_checkpoint
+
+    model = load_canonical_model_from_checkpoint(checkpoint_path)
+    bound_request = replace(request, checkpoint_path=Path(checkpoint_path))
+    return run_inference(model, bound_request)
+
+
 def run_inference(model: torch.nn.Module, request: InferenceRequest) -> InferenceResult:
     """Serialize the process-global runtime policy and model placement changes."""
     with _RUNTIME_POLICY_LOCK:
@@ -1049,4 +1083,5 @@ __all__ = [
     "InferenceResult",
     "ValidationOptions",
     "run_inference",
+    "run_inference_from_checkpoint",
 ]
