@@ -18,7 +18,7 @@ from ._version import __version__
 class CheckpointManifest:
     """Machine-readable description of the architecture and provenance a checkpoint belongs to."""
 
-    format_version: int = 4
+    format_version: int = 5
     serialization_revision: int = 1
     chimera_version: str = __version__
     transport: str = "se3_schrodinger_bridge"
@@ -97,7 +97,7 @@ class CheckpointManifest:
         )
 
     def validate(self, expected: "CheckpointManifest" | None = None) -> None:
-        if self.format_version not in (1, 2, 3, 4):
+        if self.format_version not in (1, 2, 3, 4, 5):
             raise ValueError(f"unsupported checkpoint format_version={self.format_version}")
         if self.serialization_revision < 0:
             raise ValueError("serialization_revision must be non-negative")
