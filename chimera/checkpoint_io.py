@@ -118,6 +118,10 @@ def load_canonical_model_from_checkpoint(
         raise CheckpointCompatibilityError(
             f"canonical checkpoint manifest is invalid: {exc}"
         ) from exc
+    if manifest.format_version != 5:
+        raise CheckpointCompatibilityError(
+            "architecture-reconstructable checkpoints must use manifest format_version 5"
+        )
     if not manifest.has_complete_provenance():
         raise CheckpointCompatibilityError(
             "canonical checkpoint does not have complete training provenance"
