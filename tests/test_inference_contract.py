@@ -8,14 +8,24 @@ import pytest
 import torch
 
 from chimera import CanonicalCHIMERAv2
-from chimera.checkpoint import CheckpointManifest, config_hash, state_dict_content_hash, state_schema_hash
+from chimera.checkpoint import (
+    CheckpointManifest,
+    config_hash,
+    state_dict_content_hash,
+    state_schema_hash,
+)
 from chimera.configuration import InferenceConfig
 from chimera.errors import (
     CheckpointCompatibilityError,
     ConfigurationError,
     InputValidationError,
 )
-from chimera.inference import InferenceRequest, ValidationOptions, run_inference, run_inference_from_checkpoint
+from chimera.inference import (
+    InferenceRequest,
+    ValidationOptions,
+    run_inference,
+    run_inference_from_checkpoint,
+)
 from chimera.objective_schema import objective_schema_hash
 
 
