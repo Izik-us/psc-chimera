@@ -189,39 +189,21 @@ def main(argv: list[str] | None = None) -> int:
                 weight_decay=args.weight_decay,
             )
         else:
-            previous = payload.get("training", {})
-            rng_state = previous.get("rng_state")
-            if rng_state is not None:
-                random.setstate(rng_state["python"])
-                np.random.set_state(rng_state["numpy"])
-                torch.set_rng_state(rng_state["torch"])
-                saved_cuda_state = rng_state.get("cuda")
-                if saved_cuda_state is not None:
-                    if not torch.cuda.is_available() or len(saved_cuda_state) != torch.cuda.device_count():
-                        raise ValueError("checkpoint CUDA RNG state does not match the current environment")
-                    torch.cuda.set_rng_state_all(saved_cuda_state)
-            trainer = CanonicalTrainer(
+            previous_trainer = CanonicalTrainer.from_checkpoint(
                 model,
-                args.regime,
+                args.resume,
                 learning_rate=args.learning_rate,
                 weight_decay=args.weight_decay,
+            )
+            trainer = previous_trainer.transition(
+                args.regime,
                 dataset_manifest=dataset_manifest_identity,
                 dataset_path=data_path,
                 dataset_version=args.dataset_version,
                 preprocessing_hash=preprocessing_hash,
-                random_seed=manifest.get("random_seed", args.seed),
+                learning_rate=args.learning_rate,
+                weight_decay=args.weight_decay,
             )
-            trainer.stage_history = list(previous.get("stage_history", [])) + [{
-                "regime": saved_regime,
-                "status": "stage_transitioned",
-                "completed_epochs": int(previous.get("epoch", 0)),
-                "global_step_at_transition": int(previous.get("global_step", 0)),
-                "trainable_components": list(previous.get("trainable_components", [])),
-                "dataset_hash": manifest.get("dataset_hash"),
-                "dataset_version": manifest.get("dataset_version"),
-            }]
-            trainer.global_step = int(previous.get("global_step", 0))
-            trainer.epoch = 0
     else:
         if args.architecture_json is None:
             raise ValueError("--architecture-json is required unless --resume is supplied")
