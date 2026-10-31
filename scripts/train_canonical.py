@@ -190,6 +190,16 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             previous = payload.get("training", {})
+            rng_state = previous.get("rng_state")
+            if rng_state is not None:
+                random.setstate(rng_state["python"])
+                np.random.set_state(rng_state["numpy"])
+                torch.set_rng_state(rng_state["torch"])
+                saved_cuda_state = rng_state.get("cuda")
+                if saved_cuda_state is not None:
+                    if not torch.cuda.is_available() or len(saved_cuda_state) != torch.cuda.device_count():
+                        raise ValueError("checkpoint CUDA RNG state does not match the current environment")
+                    torch.cuda.set_rng_state_all(saved_cuda_state)
             trainer = CanonicalTrainer(
                 model,
                 args.regime,
