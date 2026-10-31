@@ -71,3 +71,21 @@ def test_checkpoint_inspect_reports_single_checkpoint_stage_history(tmp_path: Pa
     assert report["active_regime"] == "sequence"
     assert report["global_step"] == 19
     assert report["stage_history"][0]["regime"] == "representation"
+
+
+def test_bare_chimera_command_displays_readme_and_system_status(capsys, tmp_path: Path):
+    assert main(["--cache-dir", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert "PSC-CHIMERA" in output
+    assert "CHIMERA SYSTEM STATUS" in output
+    assert "Model assets:" in output
+    assert "Canonical checkpoints discovered:" in output
+
+
+def test_status_json_is_machine_readable_and_does_not_load_checkpoints(capsys, tmp_path: Path):
+    assert main(["status", "--json", "--cache-dir", str(tmp_path)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["name"] == "PSC-CHIMERA"
+    assert report["package_api"]["state"] == "AVAILABLE"
+    assert report["model_assets"]["declared"] > 0
+    assert report["canonical_checkpoints"]["discovered"] == 0
