@@ -58,10 +58,35 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
-    commands = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--json", action="store_true", help="emit machine-readable status for the default dashboard")
+    parser.add_argument("--no-readme", action="store_true", help="show the compact dashboard without README")
+    parser.add_argument("--cache-dir", default=None, help="model asset cache directory")
+    commands = parser.add_subparsers(dest="command", required=False)
+    status = commands.add_parser("status", help="show runtime, model, and checkpoint status")
+    status.add_argument("--json", action="store_true", help="emit machine-readable status")
+    status.add_argument("--cache-dir", default=None)
     version_command = commands.add_parser("version", help="show the software version")
     version_command.set_defaults(command="version")
     _add_models_parser(commands)
+    train = commands.add_parser("train", help="train or resume one canonical CHIMERA regime")
+    train.add_argument("regime", choices=("representation", "flow", "sequence", "constraint", "objective", "preference"))
+    train.add_argument("action", choices=("start", "resume"))
+    train.add_argument("--dataset", required=True, help="pre-tensorized CanonicalTrainingBatch JSONL")
+    train.add_argument("--checkpoint", required=True, help="single evolving canonical checkpoint path")
+    train.add_argument("--architecture", default=None, help="architecture JSON, required for start")
+    train.add_argument("--epochs", "--epoch", "-epoch", dest="epochs", type=int, default=1)
+    train.add_argument("--lr", "-lr", "--learning-rate", dest="learning_rate", type=float, default=1e-4)
+    train.add_argument("--weight-decay", type=float, default=1e-4)
+    train.add_argument("--dataset-manifest", default=None)
+    train.add_argument("--dataset-version", default="canonical-training-batch-jsonl-v1")
+    train.add_argument("--preprocessing-hash", default=None)
+    train.add_argument("--checkpoint-every-steps", type=int, default=100)
+    train.add_argument("--seed", type=int, default=17)
+    train.add_argument("--device", default=None)
+    checkpoint = commands.add_parser("checkpoint", help="inspect a canonical training checkpoint")
+    checkpoint_actions = checkpoint.add_subparsers(dest="checkpoint_action", required=True)
+    checkpoint_inspect = checkpoint_actions.add_parser("inspect", help="show active regime and stage history")
+    checkpoint_inspect.add_argument("--checkpoint", required=True, type=Path)
     commands.add_parser(
         "production-dependencies",
         help="show the declared production candidate dependency closure",
@@ -105,8 +130,70 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        if args.command is None:
+            from .dashboard import collect_status, render_dashboard
+
+            if args.json:
+                _write_json(collect_status(args.cache_dir))
+            else:
+                print(render_dashboard(include_readme=not args.no_readme, cache_dir=args.cache_dir))
+            return 0
+        if args.command == "status":
+            from .dashboard import collect_status, render_dashboard
+
+            if args.json:
+                _write_json(collect_status(args.cache_dir))
+            else:
+                print(render_dashboard(include_readme=False, cache_dir=args.cache_dir))
+            return 0
         if args.command == "version":
             _write_json({"software": "psc-chimera", "version": __version__})
+            return 0
+        if args.command == "train":
+            if args.action == "start" and not args.architecture:
+                parser.error("chimera train <regime> start requires --architecture")
+            from scripts.train_canonical import main as train_main
+
+            training_args = [
+                "--training-jsonl", args.dataset,
+                "--checkpoint", str(args.checkpoint),
+                "--regime", args.regime,
+                "--epochs", str(args.epochs),
+                "--learning-rate", str(args.learning_rate),
+                "--weight-decay", str(args.weight_decay),
+                "--dataset-version", args.dataset_version,
+                "--checkpoint-every-steps", str(args.checkpoint_every_steps),
+                "--seed", str(args.seed),
+            ]
+            if args.architecture:
+                training_args.extend(["--architecture-json", args.architecture])
+            if args.action == "resume":
+                training_args.extend(["--resume", str(args.checkpoint)])
+            if args.dataset_manifest:
+                training_args.extend(["--dataset-manifest", args.dataset_manifest])
+            if args.preprocessing_hash:
+                training_args.extend(["--preprocessing-hash", args.preprocessing_hash])
+            if args.device:
+                training_args.extend(["--device", args.device])
+            return train_main(training_args)
+        if args.command == "checkpoint" and args.checkpoint_action == "inspect":
+            import torch
+
+            payload = torch.load(args.checkpoint.expanduser().resolve(), map_location="cpu", weights_only=False)
+            if not isinstance(payload, dict) or payload.get("artifact_type") != "canonical_training_checkpoint":
+                raise ValueError("file is not a canonical training checkpoint")
+            training = payload.get("training", {})
+            _write_json({
+                "artifact_type": payload.get("artifact_type"),
+                "checkpoint_schema_version": payload.get("checkpoint_schema_version"),
+                "active_regime": training.get("regime"),
+                "epoch": training.get("epoch"),
+                "global_step": training.get("global_step"),
+                "trainable_components": training.get("trainable_components", []),
+                "stage_history": training.get("stage_history", []),
+                "dataset_version": payload.get("manifest", {}).get("dataset_version"),
+                "dataset_hash": payload.get("manifest", {}).get("dataset_hash"),
+            })
             return 0
         if args.command == "production-dependencies":
             from .production_gate import production_dependency_inventory

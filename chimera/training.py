@@ -327,6 +327,7 @@ class CanonicalTrainer:
         self.min_validation_examples = min_validation_examples
         self.epoch = 0
         self.global_step = 0
+        self.stage_history: list[dict[str, Any]] = []
         self._last_objective_sources: dict[str, str] = {}
         self._last_objective_kinds: dict[str, str] = {}
         self._last_objective_names: tuple[str, ...] = ()
@@ -345,14 +346,12 @@ class CanonicalTrainer:
                 )
             if model._reference_policy is None:
                 model.init_dpo_reference()
-            selected = configure_trainable_components(
-                model,
+            selected = model.configure_training_regime(
                 self.regime,
                 allow_sequence_backbone_finetuning=self.allow_sequence_backbone_finetuning,
             )
         else:
-            selected = configure_trainable_components(
-                model,
+            selected = model.configure_training_regime(
                 self.regime,
                 allow_sequence_backbone_finetuning=self.allow_sequence_backbone_finetuning,
             )
@@ -392,6 +391,61 @@ class CanonicalTrainer:
             else None
         )
         self._resume_source_manifest: Optional[dict[str, Any]] = None
+
+    def transition(
+        self,
+        regime: TrainingRegime | str,
+        *,
+        dataset_manifest: str | Mapping[str, Any],
+        dataset_path: str | Path,
+        dataset_version: str,
+        preprocessing_hash: str,
+        learning_rate: float = 1e-4,
+        weight_decay: float = 1e-4,
+        allow_sequence_backbone_finetuning: bool = False,
+    ) -> "CanonicalTrainer":
+        """Switch this shared model to another regime without replacing its weights.
+
+        A fresh optimizer is deliberately created because the trainable parameter
+        set and loss contract may change between regimes. The previous optimizer
+        state is summarized in stage history, never attached to incompatible
+        parameter groups.
+        """
+        self._assert_current_regime()
+        self._assert_frozen_backbone_integrity()
+        next_regime = TrainingRegime(regime)
+        if next_regime == self.regime:
+            raise ValueError("transition requires a different training regime; use resume for the active regime")
+        history = list(self.stage_history)
+        history.append({
+            "regime": self.regime.value,
+            "status": "stage_transitioned",
+            "completed_epochs": self.epoch,
+            "global_step_at_transition": self.global_step,
+            "trainable_components": list(self.trainable_components),
+            "dataset_hash": self.dataset_hash,
+            "dataset_version": self.dataset_version,
+            "optimizer_class": self.optimizer_class,
+            "optimizer_hash": self.optimizer_hash,
+        })
+        next_trainer = CanonicalTrainer(
+            self.model,
+            next_regime,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            dataset_manifest=dataset_manifest,
+            dataset_path=dataset_path,
+            dataset_version=dataset_version,
+            preprocessing_hash=preprocessing_hash,
+            random_seed=self.random_seed,
+            min_validation_examples=self.min_validation_examples,
+            generator=self.generator,
+            allow_sequence_backbone_finetuning=allow_sequence_backbone_finetuning,
+        )
+        next_trainer.stage_history = history
+        next_trainer.global_step = self.global_step
+        next_trainer.epoch = 0
+        return next_trainer
 
     def _assert_current_regime(self) -> None:
         """Reject stale trainers after another stage reconfigures the shared model."""
@@ -1008,6 +1062,7 @@ class CanonicalTrainer:
             "manifest": asdict(manifest),
             "training": {
                 "regime": self.regime.value,
+                "stage_history": list(self.stage_history),
                 "trainable_components": list(self.trainable_components),
                 "allow_sequence_backbone_finetuning": (
                     self.allow_sequence_backbone_finetuning
@@ -1132,6 +1187,7 @@ class CanonicalTrainer:
             object.__setattr__(self.model, "_reference_policy", reference_policy)
         self.epoch = int(training["epoch"])
         self.global_step = int(training["global_step"])
+        self.stage_history = list(training.get("stage_history", []))
         self._resume_source_manifest = asdict(actual)
         rng_state = training.get("rng_state")
         if rng_state is not None:
