@@ -288,8 +288,12 @@ class CanonicalTrainer:
         min_validation_examples: int = 30,
         generator: Optional[torch.Generator] = None,
         allow_sequence_backbone_finetuning: bool = False,
+        max_grad_norm: Optional[float] = 1.0,
     ):
         self.model = model
+        if max_grad_norm is not None and not (isinstance(max_grad_norm, (int, float)) and max_grad_norm > 0):
+            raise ValueError("max_grad_norm must be a positive number or None")
+        self.max_grad_norm = None if max_grad_norm is None else float(max_grad_norm)
         self.regime = TrainingRegime(regime)
         if not isinstance(allow_sequence_backbone_finetuning, bool):
             raise TypeError("allow_sequence_backbone_finetuning must be a boolean")
@@ -522,8 +526,13 @@ class CanonicalTrainer:
             raise ValueError("flow training requires source and target rotations/translations")
         single, pair_cond, constraints = self._conditioning(batch)
         fixed_mask = constraints.fixed_mask if constraints is not None else None
+        residue_mask = batch.residue_mask
+        if residue_mask is None:
+            residue_mask = batch.msa_tokens.ne(22).any(dim=1)
+        if bool(residue_mask.all()):
+            residue_mask = None  # no padding: keep the unmasked code path bit-for-bit
         flow_single = self.model.flow_evo_projection(single)
-        conditioning = lambda nodes, time: self.model.evol_cross_attn(nodes, single, time)
+        conditioning = lambda nodes, time: self.model.evol_cross_attn(nodes, single, time, memory_mask=residue_mask)
         return self.model.flow_model.loss(
             batch.source_R,
             batch.source_t,
@@ -534,6 +543,7 @@ class CanonicalTrainer:
             fixed_mask=fixed_mask,
             substrate_coords=batch.substrate_coords,
             evol_conditioning_fn=conditioning,
+            residue_mask=residue_mask,
         )
 
     def _sequence_loss(self, batch: CanonicalTrainingBatch) -> torch.Tensor:
@@ -783,6 +793,12 @@ class CanonicalTrainer:
         ]
         if missing or nonfinite:
             raise RuntimeError(f"gradient contract failed; missing={missing}, nonfinite={nonfinite}")
+        grad_norm, grad_clipped = None, False
+        if self.max_grad_norm is not None:
+            grad_params = [p for p in self.model.parameters() if p.requires_grad and p.grad is not None]
+            total_norm = torch.nn.utils.clip_grad_norm_(grad_params, self.max_grad_norm, error_if_nonfinite=True)
+            grad_norm = float(total_norm)
+            grad_clipped = grad_norm > self.max_grad_norm
         self.optimizer.step()
         for name in self._required_gradient_components(batch):
             state = self.model.component_status[name]
@@ -812,7 +828,13 @@ class CanonicalTrainer:
         if self.scheduler is not None:
             self.scheduler.step()
         self.global_step += 1
-        return {"loss": float(loss.detach()), "gradient_flow": audit, "global_step": self.global_step}
+        return {
+            "loss": float(loss.detach()),
+            "gradient_flow": audit,
+            "global_step": self.global_step,
+            "grad_norm": grad_norm,
+            "grad_clipped": grad_clipped,
+        }
 
     def validate(
         self,

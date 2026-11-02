@@ -8,6 +8,7 @@ from typing import Callable, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from .schrodinger_bridge import SE3SchrodingerBridge
 
@@ -87,9 +88,12 @@ class InvariantPointAttention(nn.Module):
         R: torch.Tensor,
         t: torch.Tensor,
         substrate_coords: Optional[torch.Tensor] = None,
+        residue_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         B, L, _ = s.shape
 
+        if residue_mask is not None and (residue_mask.shape != (B, L) or residue_mask.dtype != torch.bool):
+            raise ValueError("residue_mask must be a bool tensor with shape (B, L)")
         if z.shape[:3] != (B, L, L):
             raise ValueError("z must have shape (B, L, L, d_pair)")
         if R.shape != (B, L, 3, 3) or t.shape != (B, L, 3):
@@ -147,6 +151,10 @@ class InvariantPointAttention(nn.Module):
 
         gamma_soft = F.softplus(self.gamma).view(1, self.n_head, 1, 1)
         logits = attn_s + gamma_soft * attn_p + attn_z
+        if residue_mask is not None:
+            # Padding residues are never attended to. Padded queries still get
+            # a finite row (they attend to real keys) and are zeroed below.
+            logits = logits.masked_fill(~residue_mask[:, None, None, :], torch.finfo(logits.dtype).min)
         attn = F.softmax(logits, dim=-1)
 
         # Scalar value aggregation.
@@ -175,7 +183,10 @@ class InvariantPointAttention(nn.Module):
         out_p_norm_ = out_p_norm.permute(0, 2, 1, 3).reshape(B, L, -1)
         out_z_ = out_z.permute(0, 2, 1, 3).reshape(B, L, -1)
         out = torch.cat([out_s_, out_p_, out_p_norm_, out_z_], dim=-1)
-        return self.out(out)
+        out = self.out(out)
+        if residue_mask is not None:
+            out = out * residue_mask.unsqueeze(-1).to(out.dtype)
+        return out
 
 
 # ── Canonical SE(3) drift field ───────────────────────────────────────────────
@@ -204,9 +215,13 @@ class VelocityField(nn.Module):
         n_blocks: int = 28,
         n_head: Optional[int] = None,
         ipa_class=InvariantPointAttention,
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
         self.d_single = d_single
+        # IPA materialises (B, H, L, L, n_pts, 3) point-difference tensors per block;
+        # recomputing blocks in the backward pass trades compute for memory.
+        self.gradient_checkpointing = gradient_checkpointing
         n_head = _resolve_ipa_heads(d_single, n_head)
 
         # Time embedding: sinusoidal → learned projection
@@ -252,6 +267,20 @@ class VelocityField(nn.Module):
             nn.Linear(d_single // 2, 3),  # translation velocity in R³
         )
 
+    @staticmethod
+    def _distance_stats(distances: torch.Tensor, residue_mask: Optional[torch.Tensor] = None):
+        """Per-residue mean/std of distances to the other residues, excluding padding.
+
+        Matches ``distances.mean(-1)`` / ``distances.std(-1)`` (unbiased) when no mask is given.
+        """
+        if residue_mask is None:
+            return distances.mean(dim=-1, keepdim=True), distances.std(dim=-1, keepdim=True)
+        w = residue_mask[:, None, :].to(distances.dtype)
+        n = w.sum(dim=-1, keepdim=True).clamp_min(1.0)
+        mean = (distances * w).sum(dim=-1, keepdim=True) / n
+        var = (((distances - mean) ** 2) * w).sum(dim=-1, keepdim=True) / (n - 1.0).clamp_min(1.0)
+        return mean, var.clamp_min(0.0).sqrt()
+
     def forward(
         self,
         R_t: torch.Tensor,  # (B, L, 3, 3) current rotations
@@ -263,15 +292,17 @@ class VelocityField(nn.Module):
         t0: Optional[torch.Tensor] = None,  # (B, L, 3)    source translations
         substrate_coords: Optional[torch.Tensor] = None,  # (B, K, 3)
         evol_conditioning_fn: Optional[Callable] = None,
+        residue_mask: Optional[torch.Tensor] = None,  # (B, L) bool, True = real residue
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B, L, _, _ = R_t.shape
+        if residue_mask is not None and (residue_mask.shape != (B, L) or residue_mask.dtype != torch.bool):
+            raise ValueError("residue_mask must be a bool tensor with shape (B, L)")
 
         # Scalar geometry is translation/rotation invariant. Translation
         # velocity is reconstructed from a local-frame vector below.
         rel = t_t.unsqueeze(2) - t_t.unsqueeze(1)
         distances = rel.norm(dim=-1)
-        local_distance = distances.mean(dim=-1, keepdim=True)
-        local_scale = distances.std(dim=-1, keepdim=True)
+        local_distance, local_scale = self._distance_stats(distances, residue_mask)
         frame_trace = R_t.transpose(-1, -2) @ R_t
         frame_invariant = frame_trace.diagonal(dim1=-2, dim2=-1).mean(-1, keepdim=True)
         backbone_feat = torch.cat([local_distance, local_scale, frame_invariant, frame_invariant * 0], dim=-1)
@@ -281,8 +312,7 @@ class VelocityField(nn.Module):
         if R0 is not None and t0 is not None:
             source_rel = t0.unsqueeze(2) - t0.unsqueeze(1)
             source_dist = source_rel.norm(dim=-1)
-            source_mean = source_dist.mean(dim=-1, keepdim=True)
-            source_std = source_dist.std(dim=-1, keepdim=True)
+            source_mean, source_std = self._distance_stats(source_dist, residue_mask)
             source_frame = R0.transpose(-1, -2) @ R0
             source_trace = source_frame.diagonal(dim1=-2, dim2=-1).mean(-1, keepdim=True)
             source_feat = torch.cat([source_mean, source_std, source_trace, source_trace * 0], dim=-1)
@@ -299,12 +329,20 @@ class VelocityField(nn.Module):
 
         # IPA refinement
         for block in self.ipa_blocks:
-            node_feat = block(node_feat, pair_cond, R_t, t_t, substrate_coords)
+            if self.gradient_checkpointing and self.training and torch.is_grad_enabled():
+                node_feat = checkpoint(
+                    block, node_feat, pair_cond, R_t, t_t, substrate_coords, residue_mask, use_reentrant=False
+                )
+            else:
+                node_feat = block(node_feat, pair_cond, R_t, t_t, substrate_coords, residue_mask)
 
         # Predict velocities
         v_rot = self.v_rot_head(node_feat)  # (B, L, 3)
         v_trans_local = self.v_trans_head(node_feat)  # (B, L, 3)
         v_trans = torch.einsum("blij,blj->bli", R_t, v_trans_local)
+        if residue_mask is not None:
+            keep = residue_mask.unsqueeze(-1).to(v_rot.dtype)
+            v_rot, v_trans = v_rot * keep, v_trans * keep
 
         return v_rot, v_trans
 
@@ -323,8 +361,8 @@ class IPABlock(nn.Module):
             nn.Linear(d_single * 4, d_single),
         )
 
-    def forward(self, s, z, R, t, substrate_coords=None):
-        s = s + self.ipa(self.norm1(s), z, R, t, substrate_coords)
+    def forward(self, s, z, R, t, substrate_coords=None, residue_mask=None):
+        s = s + self.ipa(self.norm1(s), z, R, t, substrate_coords, residue_mask)
         s = s + self.ffn(self.norm2(s))
         return s
 
@@ -380,6 +418,10 @@ class FlowMatchingBackbone(nn.Module):
             sinkhorn_iters=50,
         )
 
+    def set_gradient_checkpointing(self, enabled: bool = True) -> None:
+        """Recompute IPA blocks during backward to cut activation memory (training only)."""
+        self.flow_model.velocity_field.gradient_checkpointing = bool(enabled)
+
     def sample(
         self,
         R0: torch.Tensor,
@@ -391,6 +433,7 @@ class FlowMatchingBackbone(nn.Module):
         substrate_coords: Optional[torch.Tensor] = None,
         evol_conditioning_fn: Optional[Callable] = None,
         generator: Optional[torch.Generator] = None,
+        residue_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.sb_model.sample(
             R0,
@@ -402,6 +445,7 @@ class FlowMatchingBackbone(nn.Module):
             substrate_coords=substrate_coords,
             evol_conditioning_fn=evol_conditioning_fn,
             generator=generator,
+            residue_mask=residue_mask,
         )
 
     def loss(
@@ -415,6 +459,7 @@ class FlowMatchingBackbone(nn.Module):
         fixed_mask: Optional[torch.Tensor] = None,
         substrate_coords: Optional[torch.Tensor] = None,
         evol_conditioning_fn: Optional[Callable] = None,
+        residue_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         return self.sb_model.bridge_loss(
             R0,
@@ -426,4 +471,5 @@ class FlowMatchingBackbone(nn.Module):
             fixed_mask=fixed_mask,
             substrate_coords=substrate_coords,
             evol_conditioning_fn=evol_conditioning_fn,
+            residue_mask=residue_mask,
         )

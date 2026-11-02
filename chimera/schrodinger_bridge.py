@@ -109,41 +109,74 @@ class SchrodingerBridge(nn.Module):
 class SE3SchrodingerBridge(nn.Module):
     """SE(3) Schrödinger bridge in a local Lie-algebra coordinate chart."""
 
-    def __init__(self, drift_model: nn.Module, diffusion: float = 0.05, sinkhorn_iters: int = 50):
+    def __init__(
+        self,
+        drift_model: nn.Module,
+        diffusion: float = 0.05,
+        sinkhorn_iters: int = 50,
+        train_time_max: float = 0.99,
+    ):
         super().__init__()
+        if not 0.0 < train_time_max < 1.0:
+            raise ValueError("train_time_max must lie strictly inside (0, 1)")
         self.drift_model = drift_model
         self.bridge = SchrodingerBridge(diffusion, sinkhorn_iters)
+        # The conditional drift target is (x1 - xt)/(1 - t), whose noise term has
+        # variance 2D t/(1 - t). Sampling bridge times arbitrarily close to 1 gives
+        # heavy-tailed regression targets (gradient spikes). Training times and the
+        # sampler's evaluation times are both capped here so they stay consistent.
+        self.train_time_max = float(train_time_max)
 
     @staticmethod
     def _relative_rotation(R0, R1):
         return relative_rotation(R0, R1)
 
     @staticmethod
-    def _call_drift(drift_model, R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn):
+    def _call_drift(drift_model, R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn, residue_mask=None):
         """Call supported drift interfaces without swallowing internal TypeErrors."""
         try:
             import inspect
             signature = inspect.signature(drift_model.forward if isinstance(drift_model, nn.Module) else drift_model)
             positional = [p for p in signature.parameters.values() if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
             has_varargs = any(p.kind == p.VAR_POSITIONAL for p in signature.parameters.values())
+            accepts_mask = "residue_mask" in signature.parameters or any(
+                p.kind == p.VAR_KEYWORD for p in signature.parameters.values()
+            )
         except (TypeError, ValueError):
-            positional, has_varargs = [], True
+            positional, has_varargs, accepts_mask = [], True, True
+
+        kwargs = {}
+        if residue_mask is not None:
+            if not accepts_mask:
+                raise TypeError("drift_model does not accept residue_mask; refusing to ignore padding")
+            kwargs["residue_mask"] = residue_mask
 
         if has_varargs or len(positional) >= 9:
-            return drift_model(R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn)
+            return drift_model(R, t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn, **kwargs)
+        if kwargs:
+            raise TypeError("residue_mask requires a drift_model with the full 9-argument interface")
         if len(positional) >= 6:
             return drift_model(R, t, time, pair_cond, evol_single, R0)
         if len(positional) >= 5:
             return drift_model(R, t, time, pair_cond, evol_single)
         raise TypeError("drift_model must accept at least 5 positional inputs")
 
-    def _coupled_targets(self, R0, t0, R1, t1):
-        """Sample target endpoints from an SE(3)-aware entropic coupling."""
+    def _coupled_targets(self, R0, t0, R1, t1, residue_mask=None):
+        """Sample target endpoints from an SE(3)-aware entropic coupling.
+
+        With ``residue_mask`` only residues that are real in both the source and the
+        candidate target contribute to the cost, so padding cannot steer the pairing.
+        """
         B = R0.shape[0]
-        trans_cost = torch.cdist(t0.reshape(B, -1), t1.reshape(B, -1)).square()
         rel = R0.transpose(-1, -2)[:, None] @ R1[None, :]
         rel_log = so3_log(rel)
-        rot_cost = rel_log.reshape(B, B, -1).square().sum(-1)
+        if residue_mask is None:
+            trans_cost = torch.cdist(t0.reshape(B, -1), t1.reshape(B, -1)).square()
+            rot_cost = rel_log.reshape(B, B, -1).square().sum(-1)
+        else:
+            w = (residue_mask[:, None, :] & residue_mask[None, :, :]).to(t0.dtype)  # (B,B,L)
+            trans_cost = ((t0[:, None] - t1[None, :]).square().sum(-1) * w).sum(-1)
+            rot_cost = (rel_log.square().sum(-1) * w).sum(-1)
         cost = trans_cost + rot_cost
         coupling = self.bridge.sinkhorn_coupling(cost)
         row_probs = coupling / coupling.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(coupling.dtype).eps)
@@ -168,7 +201,15 @@ class SE3SchrodingerBridge(nn.Module):
             trans_drift = torch.where(mx, torch.zeros_like(trans_drift), trans_drift)
         return R_t, trans_t, rot_drift, trans_drift
 
-    def bridge_loss(self, R0, t0, R1, t1, pair_cond, evol_single, fixed_mask=None, substrate_coords=None, evol_conditioning_fn: Optional[Callable] = None):
+    @staticmethod
+    def _effective_fixed(fixed_mask, residue_mask):
+        """Padding behaves like a fixed residue: it never moves and never contributes to the loss."""
+        if residue_mask is None:
+            return fixed_mask
+        pad = ~residue_mask
+        return pad if fixed_mask is None else (fixed_mask | pad)
+
+    def bridge_loss(self, R0, t0, R1, t1, pair_cond, evol_single, fixed_mask=None, substrate_coords=None, evol_conditioning_fn: Optional[Callable] = None, residue_mask=None):
         """Train the marginal SB drift against coupled Brownian-bridge targets."""
         if R0.shape != R1.shape or t0.shape != t1.shape:
             raise ValueError("source and target SE(3) tensors must have matching shapes")
@@ -176,11 +217,14 @@ class SE3SchrodingerBridge(nn.Module):
             raise ValueError("expected R=(B,L,3,3) and t=(B,L,3)")
         if fixed_mask is not None and fixed_mask.shape != t0.shape[:2]:
             raise ValueError("fixed_mask must have shape (B,L)")
+        if residue_mask is not None and (residue_mask.shape != t0.shape[:2] or residue_mask.dtype != torch.bool):
+            raise ValueError("residue_mask must be a bool tensor with shape (B,L)")
         B = R0.shape[0]
-        target_R, target_t = self._coupled_targets(R0, t0, R1, t1)
-        time = torch.rand(B, device=R0.device, dtype=t0.dtype).clamp_(1e-4, 1.0 - 1e-4)
+        target_R, target_t = self._coupled_targets(R0, t0, R1, t1, residue_mask=residue_mask)
+        time = torch.rand(B, device=R0.device, dtype=t0.dtype).clamp_(1e-4, self.train_time_max)
+        fixed_mask = self._effective_fixed(fixed_mask, residue_mask)
         R_t, t_t, target_r, target_t_drift = self.interpolate(R0, t0, target_R, target_t, time, fixed_mask=fixed_mask)
-        pred_r, pred_t = self._call_drift(self.drift_model, R_t, t_t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn)
+        pred_r, pred_t = self._call_drift(self.drift_model, R_t, t_t, time, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn, residue_mask=residue_mask)
         valid = None if fixed_mask is None else (~fixed_mask).to(pred_r.dtype)
         rot_err = (pred_r - target_r).square().sum(-1)
         trans_err = (pred_t - target_t_drift).square().sum(-1)
@@ -189,19 +233,22 @@ class SE3SchrodingerBridge(nn.Module):
         return (rot_err + trans_err).mean()
 
     @torch.no_grad()
-    def sample(self, R0, t0, pair_cond, evol_single, n_steps=50, fixed_mask=None, substrate_coords=None, evol_conditioning_fn: Optional[Callable] = None, generator=None):
+    def sample(self, R0, t0, pair_cond, evol_single, n_steps=50, fixed_mask=None, substrate_coords=None, evol_conditioning_fn: Optional[Callable] = None, generator=None, residue_mask=None):
         """Sample the learned SB with Euler-Maruyama."""
         if n_steps < 2:
             raise ValueError("n_steps must be at least 2")
         if fixed_mask is not None and fixed_mask.shape != t0.shape[:2]:
             raise ValueError("fixed_mask must have shape (B,L)")
+        if residue_mask is not None and (residue_mask.shape != t0.shape[:2] or residue_mask.dtype != torch.bool):
+            raise ValueError("residue_mask must be a bool tensor with shape (B,L)")
+        fixed_mask = self._effective_fixed(fixed_mask, residue_mask)
         R, x = R0.clone(), t0.clone()
         B = R.shape[0]
         dt = 1.0 / n_steps
         noise_scale = (2.0 * self.bridge.diffusion * dt) ** 0.5
         for step in range(n_steps):
-            tau = torch.full((B,), min(step * dt, 1.0 - 1e-4), device=R.device, dtype=x.dtype)
-            vr, vt = self._call_drift(self.drift_model, R, x, tau, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn)
+            tau = torch.full((B,), min(step * dt, self.train_time_max), device=R.device, dtype=x.dtype)
+            vr, vt = self._call_drift(self.drift_model, R, x, tau, pair_cond, evol_single, R0, t0, substrate_coords, evol_conditioning_fn, residue_mask=residue_mask)
             # vr is supervised as a derivative in the source-relative chart
             # omega = log(R0^T R), not as a right-trivialized group velocity.
             # Convert the chart increment with J_r(omega) before applying the

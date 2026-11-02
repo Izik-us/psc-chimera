@@ -844,7 +844,7 @@ These files are present but should not be confused with the canonical source of 
 
 - `chimera/chimera_v1.py`: earlier model generation.
 - `chimera/chimera_v2.py`: legacy CHIMERAv2 composition retained for compatibility; the canonical composition is `chimera/architecture.py`.
-- `chimera/architecture.py.bak`: backup file, not the active composition.
+- `chimera/architecture.py.bak`: removed (it was a stale backup, not the active composition).
 - `chimera/legacy_flow.py`: legacy flow/OT utilities.
 - `chimera/flow_matching.py`: compatibility-facing flow module and historical import surface.
 - `chimera/legacy_optimization.py`: historical optimization implementations.
