@@ -989,8 +989,10 @@ class CanonicalCHIMERAv2(nn.Module):
 
         flow_single = self.flow_evo_projection(single_repr)
 
+        flow_residue_mask = residue_mask if (residue_mask is not None and not bool(residue_mask.all())) else None
+
         def evo_conditioning_fn(nodes, flow_time):
-            return self.evol_cross_attn(nodes, single_repr, flow_time)
+            return self.evol_cross_attn(nodes, single_repr, flow_time, memory_mask=flow_residue_mask)
 
         R_final, t_final = self.flow_model.sample(
             source_R, source_t, pair_cond, flow_single,
@@ -999,6 +1001,7 @@ class CanonicalCHIMERAv2(nn.Module):
             substrate_coords=substrate_coords,
             evol_conditioning_fn=evo_conditioning_fn,
             generator=generator,
+            residue_mask=flow_residue_mask,
         )
         backbone_coords = self._frames_to_coords(R_final, t_final)
         pocket_mask = None

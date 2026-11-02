@@ -243,16 +243,25 @@ class EvolCrossAttentionConnector(nn.Module):
         se3_node: torch.Tensor,  # (B, L, d_se3)
         evo_single: torch.Tensor,  # (B, L, d_evo)
         noise_level: torch.Tensor,  # (B,) flow time t ∈ [0,1]
+        memory_mask: Optional[torch.Tensor] = None,  # (B, L) bool, True = real residue
     ) -> torch.Tensor:
         gate = self.noise_gate(noise_level.unsqueeze(-1))  # (B, d_se3)
         gate = gate.unsqueeze(1)  # (B, 1, d_se3)
 
+        key_padding_mask = None
+        if memory_mask is not None:
+            if memory_mask.shape != evo_single.shape[:2] or memory_mask.dtype != torch.bool:
+                raise ValueError("memory_mask must be a bool tensor with shape (B, L)")
+            if not bool(memory_mask.any(dim=1).all()):
+                raise ValueError("memory_mask must keep at least one residue per example")
+            key_padding_mask = ~memory_mask
+
         # Pathway 1: standard cross-attention
-        path1, _ = self.cross_attn(se3_node, evo_single, evo_single)
+        path1, _ = self.cross_attn(se3_node, evo_single, evo_single, key_padding_mask=key_padding_mask)
         path1 = self.norm1(se3_node + gate * path1)
 
         # A second attention path over the same evolutionary memory.
-        path2, _ = self.direct_attn(se3_node, evo_single, evo_single)
+        path2, _ = self.direct_attn(se3_node, evo_single, evo_single, key_padding_mask=key_padding_mask)
         path2 = self.norm2(se3_node + path2)
 
         return self.combine(torch.cat([path1, path2], dim=-1))
