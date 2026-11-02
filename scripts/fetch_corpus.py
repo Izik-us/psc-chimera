@@ -63,19 +63,21 @@ SOURCES: list[dict[str, Any]] = [
         id="rcsb_structures", stage="structures", kind="rcsb", status="repo-inventory",
         title="RCSB PDB experimental structures (mmCIF, asymmetric unit)",
         regimes=["flow", "sequence", "constraint", "objective(stability geometry)", "CHIMERAFold"],
-        est="nrps-pfam: low hundreds of entries (<1 GB); general: ~1e5 entries (tens to ~100 GB)",
+        est="nrps-pfam: expected low hundreds of entries (<1 GB; run plan --live for the true count). Whole PDB is ~2e5 "
+            "entries, ~60 GB as .cif.gz (AlphaFold3 setup docs); this script stores uncompressed .cif, several times larger",
         license="CC0 1.0 (wwPDB)", rps=2.0,
         notes="Discovery via the repo's RCSBAcquirer (text) or a Pfam-annotation search (this script). "
               "Acquisition records QC state, SHA-256 (computed, not externally verified).",
     ),
     dict(
-        id="rcsb_clusters", stage="clusters", kind="static", status="unverified",
+        id="rcsb_clusters", stage="clusters", kind="static", status="verified-docs",
         title="RCSB sequence clusters by entity (30% and 90% identity)",
         urls=[("clusters-by-entity-30.txt", "https://cdn.rcsb.org/resources/sequence/clusters/clusters-by-entity-30.txt"),
               ("clusters-by-entity-90.txt", "https://cdn.rcsb.org/resources/sequence/clusters/clusters-by-entity-90.txt")],
         regimes=["splits (sequence_cluster_id)", "folding calibration"],
-        est="~30-60 MB total", license="CC0 1.0", rps=1.0,
-        notes="The repo requires externally computed cluster labels for non-trivial split builds.",
+        est="tens of MB (plain text, one cluster per line, entity IDs)", license="CC0 1.0", rps=1.0,
+        notes="URLs confirmed on RCSB's File Download Services page (updated 2026-02-10). Weekly clusters; files are "
+              "now produced with DIAMOND. The repo requires external cluster labels for non-trivial split builds.",
     ),
     dict(
         id="wwpdb_ccd", stage="ccd", kind="static", status="repo-inventory",
@@ -85,27 +87,34 @@ SOURCES: list[dict[str, Any]] = [
         notes="Ligand identity only; a CCD match does not establish biochemical substrate role.",
     ),
     dict(
-        id="sifts", stage="sifts", kind="static", status="unverified",
+        id="sifts", stage="sifts", kind="static", status="verified-docs",
         title="SIFTS PDB-chain to UniProt and Pfam mappings",
         urls=[("pdb_chain_uniprot.tsv.gz", "https://ftp.ebi.ac.uk/pub/databases/msd/sifts/flatfiles/tsv/pdb_chain_uniprot.tsv.gz"),
               ("pdb_chain_pfam.tsv.gz", "https://ftp.ebi.ac.uk/pub/databases/msd/sifts/flatfiles/tsv/pdb_chain_pfam.tsv.gz")],
-        regimes=["splits (protein_family_id)", "linkage at scale"], est="~100 MB", license="EMBL-EBI terms", rps=1.0,
-        notes="Lets 1e5-chain builds avoid one UniProt/InterPro API call per chain.",
+        regimes=["splits (protein_family_id)", "linkage at scale", "offline NRPS discovery (Pfam)"], est="tens to ~100 MB",
+        license="EMBL-EBI terms", rps=1.0,
+        notes="File names confirmed on PDBe's SIFTS page. pdb_chain_pfam.tsv.gz drives offline discovery of PF00668 entries, "
+              "so the unverified RCSB Pfam query is only a fallback.",
     ),
     dict(
-        id="mibig", stage="mibig", kind="static", status="unverified",
-        title="MIBiG 4.0 curated BGC records (JSON + GenBank)",
-        urls=[("mibig_json_4.0.tar.gz", "https://dl.secondarymetabolites.org/mibig/mibig_json_4.0.tar.gz"),
-              ("mibig_gbk_4.0.tar.gz", "https://dl.secondarymetabolites.org/mibig/mibig_gbk_4.0.tar.gz")],
+        id="mibig", stage="mibig", kind="static", status="verified-docs",
+        title="MIBiG 4.0.1 curated BGC records (JSON, GenBank, protein FASTA) from Zenodo",
+        urls=[("mibig_json_4.0.tar.gz", "https://zenodo.org/records/14835872/files/mibig_json_4.0.tar.gz?download=1",
+               {"md5": "ce1736f4fac7168d85dae3b37c77d3d2"}),
+              ("mibig_gbk_4.0.tar.gz", "https://zenodo.org/records/14835872/files/mibig_gbk_4.0.tar.gz?download=1",
+               {"md5": "4e905ea01e4d8990e24c36161aea5fbd"}),
+              ("mibig_prot_seqs_4.0.fasta", "https://zenodo.org/records/14835872/files/mibig_prot_seqs_4.0.fasta?download=1",
+               {"md5": "1dd73356e63d6ba3507f9199cfd22e1c"})],
         regimes=["objective(substrate_selectivity)", "constraint", "splits (nrps_family, substrate)"],
-        est="<1 GB", license="CC BY 4.0", rps=1.0,
-        notes="Repo inventory records the download page; direct file names are inferred from earlier releases.",
+        est="125.5 MB total (10.0 + 83.7 + 31.8)", license="CC BY 4.0", rps=1.0,
+        notes="Zenodo record 14835872 (doi 10.5281/zenodo.14835872), 3,059 curated entries; names, sizes and MD5s "
+              "taken from the record page. Downloads are MD5-verified against Zenodo.",
     ),
     dict(
         id="uniprot_nrps", stage="nrps_uniprot", kind="uniprot_stream", status="repo-inventory",
         title="UniProtKB NRPS-family proteins (InterPro IPR010071 adenylation, IPR001242 condensation)",
         query="(xref:interpro-IPR010071) OR (xref:interpro-IPR001242)",
-        regimes=["representation (NRPS-specific MSAs)", "homolog sets"], est="hundreds of MB (FASTA, gz)",
+        regimes=["representation (NRPS-specific MSAs)", "homolog sets"], est="unknown until counted (run verify); likely hundreds of MB to low GB (FASTA, gz)",
         license="CC BY 4.0", rps=1.0,
         notes="Stream endpoint is resource-intensive; one serial request, compressed.",
     ),
@@ -113,9 +122,12 @@ SOURCES: list[dict[str, Any]] = [
         id="uniref90", stage="uniref90", kind="static", status="unverified", huge=True,
         title="UniRef90 FASTA (homology-search target database)",
         urls=[("uniref90.fasta.gz", "https://ftp.uniprot.org/pub/databases/uniprot/uniref/uniref90/uniref90.fasta.gz")],
-        regimes=["representation (deep MSAs via MMseqs2)"], est="tens of GB compressed; >200 GB scratch for the MMseqs2 DB",
+        regimes=["representation (deep MSAs via MMseqs2)"], est="~13-55 GB compressed depending on release (third-party docs; current release not checked); "
+            "roughly 60-140 GB unpacked; budget >200 GB scratch for an indexed MMseqs2 DB",
         license="CC BY 4.0", rps=1.0,
-        notes="Needed because UniRef90 *cluster members* are >=90% identical, so the repo's cluster-member MSA collapses to Neff ~ 1.",
+        notes="Only needed for general (non-NRPS) deep MSAs. For NRPS-focused work, search the UniProt NRPS-family FASTA "
+              "instead (msa --target nrps, the default): hundreds of MB instead of hundreds of GB. The repo's UniRef90 "
+              "*cluster-member* MSA collapses to Neff ~ 1.",
     ),
     dict(
         id="codon_in_repo", stage=None, kind="in_repo", status="repo",
@@ -166,8 +178,8 @@ PFAM_ANCHORS = {
     "adenylate-family": ["PF00501", "PF13193"],    # AMP-binding; includes non-NRPS acyl-CoA synthetases
 }
 STAGE_GROUPS = {
-    "light": ["structures", "clusters", "ccd", "sifts", "mibig", "nrps_uniprot"],
-    "all": ["structures", "clusters", "ccd", "sifts", "mibig", "nrps_uniprot", "uniref90"],
+    "light": ["clusters", "sifts", "ccd", "mibig", "nrps_uniprot", "structures"],
+    "all": ["clusters", "sifts", "ccd", "mibig", "nrps_uniprot", "structures", "uniref90"],
 }
 
 
@@ -229,7 +241,8 @@ def read_manifest(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def download(url: str, dest: Path, ctx: Ctx, *, source_id: str, rps: float = 1.0,
-             expected_sha256: str | None = None, retries: int = 3, chunk: int = 1 << 20) -> dict[str, Any]:
+             expected_sha256: str | None = None, expected_md5: str | None = None,
+             retries: int = 3, chunk: int = 1 << 20) -> dict[str, Any]:
     """Resumable, atomic, checksummed download. Re-running skips completed files."""
     dest = Path(dest)
     known = read_manifest(ctx.manifest).get(str(dest))
@@ -268,14 +281,18 @@ def download(url: str, dest: Path, ctx: Ctx, *, source_id: str, rps: float = 1.0
             return {"etag": response.headers.get("ETag"), "last_modified": response.headers.get("Last-Modified")}
 
     meta = _retry(attempt, retries=retries, what=f"download {url}")
-    digest = hashlib.sha256()
+    digest, md5 = hashlib.sha256(), hashlib.md5()
     with part.open("rb") as handle:
         for block in iter(lambda: handle.read(chunk), b""):
             digest.update(block)
+            md5.update(block)
     sha = digest.hexdigest()
     if expected_sha256 and sha != expected_sha256.lower():
         part.rename(dest.with_name(dest.name + ".CHECKSUM_MISMATCH"))
         raise ValueError(f"checksum mismatch for {url}: expected {expected_sha256}, got {sha}")
+    if expected_md5 and md5.hexdigest() != expected_md5.lower():
+        part.rename(dest.with_name(dest.name + ".CHECKSUM_MISMATCH"))
+        raise ValueError(f"checksum mismatch (md5) for {url}: expected {expected_md5}, got {md5.hexdigest()}")
     if dest.suffix == ".gz" and part.stat().st_size <= GiB:     # full gunzip check for files up to 1 GiB;
         with gzip.open(part, "rb") as probe:                      # larger files rely on the length check above
             while probe.read(1 << 20):
@@ -283,7 +300,8 @@ def download(url: str, dest: Path, ctx: Ctx, *, source_id: str, rps: float = 1.0
     part.replace(dest)
     record = {
         "source_id": source_id, "url": url, "path": str(dest), "bytes": dest.stat().st_size, "sha256": sha,
-        "checksum_verified_against_source": bool(expected_sha256), "retrieved_utc": utc_now(), **meta,
+        "checksum_verified_against_source": bool(expected_sha256 or expected_md5),
+        "md5": md5.hexdigest(), "retrieved_utc": utc_now(), **meta,
     }
     ctx.manifest.parent.mkdir(parents=True, exist_ok=True)
     with ctx.manifest.open("a", encoding="utf-8", newline="\n") as handle:
@@ -343,9 +361,39 @@ def rcsb_search(payload: dict[str, Any], ctx: Ctx | None, endpoint: str | None =
     return _retry(call, what="RCSB search")
 
 
+def pfam_entries_from_sifts(path: Path, pfam_ids: Iterable[str]) -> list[str]:
+    """Entry IDs with any chain annotated with one of the Pfam IDs (offline; SIFTS pdb_chain_pfam.tsv.gz)."""
+    wanted, found = set(pfam_ids), set()
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith(("#", "PDB")) or not line.strip():
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) > 3 and parts[3] in wanted:
+                found.add(parts[0].upper())
+    return sorted(found)
+
+
+def cluster_representatives(ids: Iterable[str], clusters_path: Path) -> list[str]:
+    """One entry per sequence cluster: the first cluster member that is in ``ids``."""
+    wanted, chosen = {value.upper() for value in ids}, set()
+    with open(clusters_path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            for member in line.split():
+                entry = member.split("_")[0].upper()
+                if entry in wanted:
+                    chosen.add(entry)
+                    break
+    return sorted(chosen)
+
+
 def discover_ids(profile: str, ctx: Ctx, *, count_only: bool = False) -> list[str] | int:
     from data.rcsb import RCSBAcquirer, RCSBQuery, build_rcsb_query_payload
     pfam_profiles = PFAM_ANCHORS
+    sifts_path = ctx.root / "raw" / "sifts" / "pdb_chain_pfam.tsv.gz"
+    if profile in pfam_profiles and sifts_path.exists():
+        ids = pfam_entries_from_sifts(sifts_path, pfam_profiles[profile])
+        return len(ids) if count_only else ids
     if profile in pfam_profiles:
         ids: list[str] = []
         start, rows = 0, 1 if count_only else 1000
@@ -384,8 +432,11 @@ def source_by_stage(stage: str) -> dict[str, Any]:
 
 def stage_static(stage: str, ctx: Ctx) -> None:
     source = source_by_stage(stage)
-    for name, url in source["urls"]:
-        download(url, ctx.root / "raw" / source["id"] / name, ctx, source_id=source["id"], rps=source["rps"])
+    for item in source["urls"]:
+        name, url = item[0], item[1]
+        extra = item[2] if len(item) > 2 else {}
+        download(url, ctx.root / "raw" / source["id"] / name, ctx, source_id=source["id"], rps=source["rps"],
+                 expected_md5=extra.get("md5"), expected_sha256=extra.get("sha256"))
 
 
 def stage_nrps_uniprot(ctx: Ctx) -> None:
@@ -395,7 +446,8 @@ def stage_nrps_uniprot(ctx: Ctx) -> None:
     download(url, ctx.root / "raw" / "uniprot_nrps" / "nrps_family.fasta.gz", ctx, source_id="uniprot_nrps", rps=1.0)
 
 
-def stage_structures(ctx: Ctx, profiles: list[str], *, max_structures: int | None, batch_size: int, assembly: str | None) -> None:
+def stage_structures(ctx: Ctx, profiles: list[str], *, max_structures: int | None, batch_size: int, assembly: str | None,
+                     cluster_identity: int | None = None) -> None:
     from data.rcsb import RCSBAcquirer
     acquirer = RCSBAcquirer(requests_per_second=2.0, maximum_workers=4)
     for profile in profiles:
@@ -418,6 +470,13 @@ def stage_structures(ctx: Ctx, profiles: list[str], *, max_structures: int | Non
             out.mkdir(parents=True, exist_ok=True)
             discovery.write_text(json.dumps({"profile": profile, "retrieved_utc": utc_now(), "structure_ids": ids}, indent=1),
                                  encoding="utf-8")
+        if cluster_identity:
+            clusters_file = ctx.root / "raw" / "rcsb_clusters" / f"clusters-by-entity-{cluster_identity}.txt"
+            if not clusters_file.exists():
+                raise SystemExit(f"{clusters_file} missing; run the 'clusters' stage first (it is in the default order).")
+            before = len(ids)
+            ids = cluster_representatives(ids, clusters_file)
+            ctx.log(f"profile {profile}: {before} entries -> {len(ids)} cluster representatives at {cluster_identity}%")
         if max_structures:
             ids = ids[:max_structures]
         ctx.log(f"profile {profile}: {len(ids)} entries in {-(-len(ids) // batch_size)} batch(es)")
@@ -482,7 +541,7 @@ def run(cmd: list[str], ctx: Ctx, **kwargs: Any) -> None:
 
 
 def stage_msa(ctx: Ctx, *, mmseqs: str, uniref_fasta: Path | None, uniref_db: Path | None, threads: int,
-              sensitivity: float, iterations: int, max_seqs: int, all_chains: bool) -> None:
+              sensitivity: float, iterations: int, max_seqs: int, all_chains: bool, target: str = "nrps") -> None:
     binary = shutil.which(mmseqs)
     if binary is None and not ctx.dry_run:
         raise SystemExit("mmseqs not found. Install MMseqs2 (https://github.com/soedinglab/MMseqs2) or pass --mmseqs PATH.")
@@ -491,8 +550,9 @@ def stage_msa(ctx: Ctx, *, mmseqs: str, uniref_fasta: Path | None, uniref_db: Pa
     out_dir = work / "a3m"
     if uniref_db is None:
         if uniref_fasta is None:
-            uniref_fasta = ctx.root / "raw" / "uniref90" / "uniref90.fasta.gz"
-        uniref_db = work / "uniref90_db"
+            uniref_fasta = (ctx.root / "raw" / "uniprot_nrps" / "nrps_family.fasta.gz" if target == "nrps"
+                            else ctx.root / "raw" / "uniref90" / "uniref90.fasta.gz")
+        uniref_db = work / f"{target}_db"
         if not (uniref_db.with_name(uniref_db.name + ".dbtype")).exists():
             run([binary, "createdb", str(uniref_fasta), str(uniref_db)], ctx)
             run([binary, "createindex", str(uniref_db), str(work / "tmp_index"), "--threads", str(threads)], ctx)
@@ -722,11 +782,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    ctx = Ctx(root=Path("."), email=args.email)
+    ctx = Ctx(root=Path("/nonexistent"), email=args.email)   # no local SIFTS file: verify must test the live API
     failures = 0
     for source in SOURCES:
         if source["kind"] == "static":
-            for name, url in source["urls"]:
+            for item in source["urls"]:
+                name, url = item[0], item[1]
                 result = probe(url, ctx)
                 failures += not result["ok"]
                 size = f"{result['bytes'] / 1e6:.0f} MB" if result.get("bytes") else "?"
@@ -795,7 +856,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         ctx.log(f"== {stage} ==")
         if stage == "structures":
             stage_structures(ctx, args.profiles, max_structures=args.max_structures, batch_size=args.batch_size,
-                             assembly=args.assembly)
+                             assembly=args.assembly, cluster_identity=args.cluster_representatives)
         elif stage == "nrps_uniprot":
             stage_nrps_uniprot(ctx)
         else:
@@ -806,7 +867,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 def cmd_msa(args: argparse.Namespace) -> int:
     ctx = Ctx(root=Path(args.root), dry_run=args.dry_run)
     stage_msa(ctx, mmseqs=args.mmseqs, uniref_fasta=args.uniref_fasta, uniref_db=args.uniref_db, threads=args.threads,
-              sensitivity=args.sensitivity, iterations=args.iterations, max_seqs=args.max_seqs, all_chains=args.all_chains)
+              sensitivity=args.sensitivity, iterations=args.iterations, max_seqs=args.max_seqs, all_chains=args.all_chains,
+              target=args.target)
     return 0
 
 
@@ -841,6 +903,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--profiles", nargs="+", default=["nrps-pfam", "nrps-text"],
                    help="structure profiles: nrps-pfam, nrps-text, adenylate-family, general")
     p.add_argument("--max-structures", type=int)
+    p.add_argument("--cluster-representatives", type=int, choices=[30, 90],
+                   help="keep one entry per RCSB sequence cluster at this identity (needs the clusters stage); "
+                        "cuts the general profile several-fold")
     p.add_argument("--batch-size", type=int, default=500)
     p.add_argument("--assembly", help="also fetch biological assembly N (default: asymmetric unit only)")
     p.add_argument("--refresh", action="store_true")
@@ -853,6 +918,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mmseqs", default="mmseqs")
     p.add_argument("--uniref-db", type=Path, help="existing MMseqs2 database (skips createdb/createindex)")
     p.add_argument("--uniref-fasta", type=Path, help="FASTA(.gz) to build the database from")
+    p.add_argument("--target", choices=["nrps", "uniref90"], default="nrps",
+                   help="search the small UniProt NRPS-family set (default) or the full UniRef90")
     p.add_argument("--threads", type=int, default=os.cpu_count() or 4)
     p.add_argument("--sensitivity", type=float, default=7.5)
     p.add_argument("--iterations", type=int, default=3)

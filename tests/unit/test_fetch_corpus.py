@@ -76,7 +76,7 @@ def make_ctx(tmp_path, **kwargs):
 def test_plan_covers_every_regime_and_flags_unverifiable_sources():
     stages = {s["stage"] for s in fc.SOURCES if s.get("stage")}
     assert {"structures", "clusters", "ccd", "sifts", "mibig", "nrps_uniprot", "uniref90"} <= stages
-    assert all(s["status"] in {"repo-inventory", "unverified", "repo", "n/a"} for s in fc.SOURCES)
+    assert all(s["status"] in {"repo-inventory", "verified-docs", "unverified", "repo", "n/a"} for s in fc.SOURCES)
     assert any(s["id"] == "proteus_rounds" and s["kind"] == "wet_lab" for s in fc.SOURCES)
     assert set(fc.expand_stages(["light"])) <= stages
     assert fc.main(["plan", "--json"]) == 0
@@ -206,3 +206,36 @@ def test_msa_stage_with_real_mmseqs_feeds_the_assembly_line(tmp_path):
     # rerunning the stage is a no-op (resume)
     fc.stage_msa(make_ctx(tmp_path), mmseqs=binary, uniref_fasta=None, uniref_db=tmp_path / "targetdb", threads=2,
                  sensitivity=7.5, iterations=2, max_seqs=1000, all_chains=False)
+
+
+def test_mibig_uses_zenodo_with_md5_and_downloads_verify_md5(tmp_path, server):
+    mibig = next(s for s in fc.SOURCES if s["id"] == "mibig")
+    assert all(item[1].startswith("https://zenodo.org/records/14835872/files/") and len(item[2]["md5"]) == 32
+               for item in mibig["urls"])
+    _Handler.files = {"/m.bin": b"payload"}
+    _Handler.truncate_once = set()
+    ctx = make_ctx(tmp_path)
+    good = hashlib.md5(b"payload").hexdigest()
+    assert fc.download(f"{server}/m.bin", tmp_path / "m.bin", ctx, source_id="t", rps=1000, expected_md5=good)[
+        "checksum_verified_against_source"]
+    with pytest.raises(ValueError, match="md5"):
+        fc.download(f"{server}/m.bin", tmp_path / "bad.bin", ctx, source_id="t", rps=1000, expected_md5="0" * 32)
+
+
+def test_offline_pfam_discovery_and_cluster_representatives(tmp_path):
+    import gzip as gz
+    sifts = tmp_path / "pdb_chain_pfam.tsv.gz"
+    with gz.open(sifts, "wt") as handle:
+        handle.write("# 2026/10/01 - 00:00\nPDB\tCHAIN\tSP_PRIMARY\tPFAM_ID\n"
+                     "1amu\tA\tP0C062\tPF00501\n1amu\tA\tP0C062\tPF00550\n2vsq\tA\tQ1\tPF00668\n"
+                     "5isx\tB\tQ2\tPF00668\n3zzz\tA\tQ3\tPF99999\n")
+    assert fc.pfam_entries_from_sifts(sifts, ["PF00668"]) == ["2VSQ", "5ISX"]
+    assert fc.pfam_entries_from_sifts(sifts, ["PF00501", "PF00668"]) == ["1AMU", "2VSQ", "5ISX"]
+    clusters = tmp_path / "clusters-by-entity-30.txt"
+    clusters.write_text("AF_X_1 2VSQ_1 5ISX_1\n1AMU_1 1AMU_2\n9ZZZ_1\n")
+    assert fc.cluster_representatives(["2VSQ", "5ISX", "1AMU"], clusters) == ["1AMU", "2VSQ"]
+    ctx = make_ctx(tmp_path)
+    (tmp_path / "raw" / "sifts").mkdir(parents=True)
+    shutil.copy(sifts, tmp_path / "raw" / "sifts" / "pdb_chain_pfam.tsv.gz")
+    assert fc.discover_ids("nrps-pfam", ctx) == ["2VSQ", "5ISX"]       # no network needed
+    assert fc.discover_ids("nrps-pfam", ctx, count_only=True) == 2
