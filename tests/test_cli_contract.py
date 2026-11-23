@@ -82,7 +82,8 @@ def test_bare_chimera_command_displays_readme_and_system_status(capsys, tmp_path
     assert "Canonical checkpoints discovered:" in output
 
 
-def test_status_json_is_machine_readable_and_does_not_load_checkpoints(capsys, tmp_path: Path):
+def test_status_json_is_machine_readable_and_does_not_load_checkpoints(capsys, tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     assert main(["status", "--json", "--cache-dir", str(tmp_path)]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["name"] == "PSC-CHIMERA"
