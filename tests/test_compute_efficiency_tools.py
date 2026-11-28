@@ -88,8 +88,9 @@ def test_compute_estimator_counts_pair_representation_and_dominant_macs():
     result = profiler.estimate(
         batch=1, msa_depth=128, length=600, d_msa=256, d_pair=128,
         c_hidden_opm=32, c_hidden_triangle=128, n_evo_blocks=138,
-        dtype_bytes=4,
+        dtype_bytes=4, checkpoint_group_size=4,
     )
 
     assert result["representation_tensors"]["pair"]["elements"] == 600 * 600 * 128
+    assert result["dimensions"]["checkpoint_groups"] == 35
     assert result["dominant_operations"]["combined_MACs_per_example_per_block"] > 100_000_000_000
