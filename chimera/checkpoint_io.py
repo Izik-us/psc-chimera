@@ -69,7 +69,12 @@ def canonical_model_from_configuration(architecture: dict[str, Any]):
             )
         constructor_config[constructor_name] = evoformer_config[saved_name]
     try:
-        return CanonicalCHIMERAv2(**constructor_config)
+        model = CanonicalCHIMERAv2(**constructor_config)
+        if "gradient_checkpointing_group_size" not in evoformer_config:
+            # Preserve the exact legacy architecture identity so older
+            # checkpoint manifest hashes remain verifiable on resume.
+            model.evoformer.configuration.pop("gradient_checkpointing_group_size", None)
+        return model
     except (TypeError, ValueError, AttributeError) as exc:
         raise CheckpointCompatibilityError(
             f"saved canonical architecture cannot be reconstructed: {exc}"
