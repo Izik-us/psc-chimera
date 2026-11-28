@@ -45,6 +45,16 @@ def test_streaming_jsonl_loader_batches_records_without_loading_all_rows(tmp_pat
     assert batches[1].msa_tokens[0, 0, 0].item() == 3
 
 
+def test_missing_pair_features_are_materialized_from_model_width():
+    runner = _load_script("train_canonical.py")
+    record = {"msa_tokens": [[[1, 2, 3], [1, 4, 5]]], "residue_mask": [[True, True, True]]}
+
+    batch = runner._batch(record, pair_width=16)
+
+    assert batch.pair_features.shape == (1, 3, 3, 16)
+    assert torch.count_nonzero(batch.pair_features).item() == 0
+
+
 def test_distributed_jsonl_sharding_yields_equal_rank_batches(tmp_path):
     runner = _load_script("train_canonical.py")
     path = tmp_path / "train.jsonl"
