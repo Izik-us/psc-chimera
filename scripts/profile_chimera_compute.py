@@ -87,6 +87,8 @@ def main() -> int:
     parser.add_argument("--msa-depth", type=int, default=128)
     parser.add_argument("--length", type=int, default=600)
     parser.add_argument("--dtype", choices=("fp32", "bf16", "fp16"), default="fp32")
+    parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--evoformer-checkpoint-group-size", type=int, default=None)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if min(args.batch_size, args.msa_depth, args.length) < 1:
@@ -101,6 +103,14 @@ def main() -> int:
         model = canonical_model_from_configuration(config)
     else:
         model = CanonicalCHIMERAv2()
+    if args.evoformer_checkpoint_group_size is not None:
+        if args.evoformer_checkpoint_group_size < 1:
+            parser.error("EvoFormer checkpoint group size must be positive")
+        model.evoformer.gradient_checkpointing_group_size = args.evoformer_checkpoint_group_size
+        model.evoformer.configuration["gradient_checkpointing_group_size"] = args.evoformer_checkpoint_group_size
+    if args.gradient_checkpointing is not None:
+        model.evoformer.gradient_checkpointing = args.gradient_checkpointing
+        model.evoformer.configuration["gradient_checkpointing"] = args.gradient_checkpointing
     dtype_bytes = {"fp32": 4, "bf16": 2, "fp16": 2}[args.dtype]
     evo = model.evoformer
     velocity = model.flow_model.flow_model.velocity_field
