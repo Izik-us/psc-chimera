@@ -664,6 +664,36 @@ def test_gradient_checkpointing_preserves_gradients_for_each_block():
     assert all(block.msa_transition.output.weight.grad is not None for block in model.blocks)
 
 
+def test_grouped_gradient_checkpointing_preserves_outputs_and_block_gradients():
+    reference = _small_stack(
+        n_blocks=4, dropout_msa_row=0.0, dropout_triangle=0.0,
+        gradient_checkpointing=False,
+    ).train()
+    grouped = _small_stack(
+        n_blocks=4, dropout_msa_row=0.0, dropout_triangle=0.0,
+        gradient_checkpointing=True, gradient_checkpointing_group_size=2,
+    ).train()
+    grouped.load_state_dict(reference.state_dict())
+    tokens = torch.randint(0, 20, (1, 2, 4))
+    pair = torch.randn(1, 4, 4, 8)
+
+    reference_single, reference_pair = reference(tokens, pair)
+    grouped_single, grouped_pair = grouped(tokens, pair)
+    (reference_single.square().mean() + reference_pair.square().mean()).backward()
+    (grouped_single.square().mean() + grouped_pair.square().mean()).backward()
+
+    assert torch.allclose(reference_single, grouped_single, atol=1e-6, rtol=1e-6)
+    assert torch.allclose(reference_pair, grouped_pair, atol=1e-6, rtol=1e-6)
+    for reference_parameter, grouped_parameter in zip(
+        reference.parameters(), grouped.parameters()
+    ):
+        if reference_parameter.grad is not None:
+            assert grouped_parameter.grad is not None
+            assert torch.allclose(
+                reference_parameter.grad, grouped_parameter.grad, atol=1e-5, rtol=1e-5
+            )
+
+
 def test_diagnostics_are_opt_in_and_report_per_block_updates():
     model = _small_stack().eval()
     tokens = torch.randint(0, 20, (1, 2, 4))
