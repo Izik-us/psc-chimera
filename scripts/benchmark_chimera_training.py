@@ -90,20 +90,12 @@ def main() -> int:
     regime = TrainingRegime(args.regime)
     trainer = CanonicalTrainer(
         model, regime, learning_rate=1e-4, dataset_manifest="synthetic-benchmark-only",
-        min_validation_examples=1,
+        min_validation_examples=1, precision=args.precision,
     )
     batch = make_batch(model, regime, args.batch_size, args.msa_depth, args.length, device)
 
     def step():
-        context = (
-            torch.autocast(device_type=device.type, dtype=torch.bfloat16)
-            if args.precision == "bf16" and device.type in ("cuda", "cpu")
-            else torch.autocast(device_type=device.type, enabled=False)
-            if device.type in ("cuda", "cpu")
-            else __import__("contextlib").nullcontext()
-        )
-        with context:
-            return trainer.train_step(batch)
+        return trainer.train_step(batch)
 
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
