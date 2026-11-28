@@ -295,8 +295,6 @@ def main(argv: list[str] | None = None) -> int:
         manifest = payload.get("manifest", {})
         model = load_canonical_model_from_checkpoint(args.resume)
         model.to(device)
-        model.evoformer.gradient_checkpointing = args.gradient_checkpointing
-        model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
         saved_regime = payload.get("training", {}).get("regime")
         if saved_regime == args.regime:
             if manifest.get("dataset_hash") != dataset_hash:
@@ -313,7 +311,11 @@ def main(argv: list[str] | None = None) -> int:
                 learning_rate=args.learning_rate,
                 weight_decay=args.weight_decay,
             )
-            trainer.precision = args.precision
+            if args.precision is not None:
+                trainer.precision = args.precision
+            if args.gradient_checkpointing is not None:
+                model.evoformer.gradient_checkpointing = args.gradient_checkpointing
+                model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
         else:
             previous_trainer = CanonicalTrainer.from_checkpoint(
                 model,
@@ -321,7 +323,11 @@ def main(argv: list[str] | None = None) -> int:
                 learning_rate=args.learning_rate,
                 weight_decay=args.weight_decay,
             )
-            previous_trainer.precision = args.precision
+            if args.precision is not None:
+                previous_trainer.precision = args.precision
+            if args.gradient_checkpointing is not None:
+                model.evoformer.gradient_checkpointing = args.gradient_checkpointing
+                model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
             trainer = previous_trainer.transition(
                 args.regime,
                 dataset_manifest=dataset_manifest_identity,
@@ -344,8 +350,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("architecture JSON must contain a model_configuration object")
             model = canonical_model_from_configuration(architecture)
         model.to(device)
-        model.evoformer.gradient_checkpointing = args.gradient_checkpointing
-        model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
+        if args.gradient_checkpointing is not None:
+            model.evoformer.gradient_checkpointing = args.gradient_checkpointing
+            model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
         trainer = CanonicalTrainer(
             model,
             args.regime,
@@ -356,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
             dataset_version=args.dataset_version,
             preprocessing_hash=preprocessing_hash,
             random_seed=args.seed,
-            precision=args.precision,
+            precision=args.precision or "fp32",
         )
 
     args.checkpoint.expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
