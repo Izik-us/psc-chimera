@@ -52,7 +52,8 @@ def estimate(batch: int, msa_depth: int, length: int, d_msa: int, d_pair: int,
         "representation_tensors": {
             "msa": {"elements": msa_values, "bytes": msa_bytes, "GiB": gibibytes(msa_bytes)},
             "pair": {"elements": pair_values, "bytes": pair_bytes, "GiB": gibibytes(pair_bytes)},
-            "combined_one_state_GiB": gibibytes(msa_bytes + pair_bytes),\n            "checkpoint_note": "When EvoFormer per-block checkpointing is enabled, block inputs are retained for recomputation; this estimate excludes other autograd and temporary tensors.",
+            "combined_one_state_GiB": gibibytes(msa_bytes + pair_bytes),
+            "checkpoint_note": "When EvoFormer per-block checkpointing is enabled, block inputs are retained for recomputation; this estimate excludes other autograd and temporary tensors.",
             "per_block_checkpoint_input_state_storage_GiB": gibibytes(
                 n_evo_blocks * (msa_bytes + pair_bytes)
             ),
