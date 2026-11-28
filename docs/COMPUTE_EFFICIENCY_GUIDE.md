@@ -34,7 +34,7 @@ Run the same command on each GPU and preserve the JSON report:
 python scripts/benchmark_chimera_training.py \
   --regime representation \
   --batch-size 1 --msa-depth 128 --length 600 \
-  --precision fp32 --gradient-checkpointing --evoformer-checkpoint-group-size 4 --evoformer-checkpoint-group-size 4 \
+  --precision fp32 --gradient-checkpointing --evoformer-checkpoint-group-size 4 \
   --warmup-steps 2 --steps 10 \
   --output benchmark-representation.json
 ```
@@ -77,7 +77,7 @@ python scripts/train_canonical.py \
   --regime representation \
   --checkpoint Models/representation.pt \
   --epochs 1 --batch-size 1 \
-  --precision fp32 --gradient-checkpointing
+  --precision fp32 --gradient-checkpointing --evoformer-checkpoint-group-size 4
 ```
 
 BF16 is opt-in. The trainer checks CUDA BF16 support and leaves explicit
