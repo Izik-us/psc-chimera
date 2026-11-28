@@ -807,6 +807,56 @@ class CanonicalTrainer:
             return ("objective_feature_encoder", "pareto_head")
         return ("sequence_policy",)
 
+    def _synchronize_distributed_gradients(self) -> None:
+        """Average replicated gradients across ranks using bounded communication buckets."""
+            if dist.is_available() and dist.is_initialized():
+                world_size = dist.get_world_size()
+                trainable = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+                if trainable:
+                    presence = torch.tensor(
+                        [parameter.grad is not None for parameter in trainable],
+                        device=trainable[0].device, dtype=torch.int32
+                    )
+                    minimum, maximum = presence.clone(), presence.clone()
+                    dist.all_reduce(minimum, op=dist.ReduceOp.MIN)
+                    dist.all_reduce(maximum, op=dist.ReduceOp.MAX)
+                    if not torch.equal(minimum, maximum):
+                        raise RuntimeError(
+                            "distributed ranks produced inconsistent gradient presence; "
+                            "ensure every rank receives structurally compatible batches"
+                        )
+                    # Coalesce gradients into bounded buckets to avoid one network
+                    # collective per parameter on large CHIMERA components.
+                    bucket_limit = 25 * 1024 * 1024
+                    bucket, bucket_bytes = [], 0
+                    def synchronize_bucket(parameters):
+                        if not parameters:
+                            return
+                        flat = torch.cat([parameter.grad.detach().reshape(-1) for parameter in parameters])
+                        dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+                        flat.div_(world_size)
+                        offset = 0
+                        for parameter in parameters:
+                            count = parameter.grad.numel()
+                            parameter.grad.copy_(flat[offset:offset + count].view_as(parameter.grad))
+                            offset += count
+                    for parameter, has_gradient in zip(trainable, maximum.tolist()):
+                        if not has_gradient:
+                            continue
+                        size = parameter.grad.numel() * parameter.grad.element_size()
+                        if size > bucket_limit:
+                            synchronize_bucket(bucket)
+                            bucket, bucket_bytes = [], 0
+                            dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM)
+                            parameter.grad.div_(world_size)
+                            continue
+                        if bucket and (bucket_bytes + size > bucket_limit or parameter.grad.dtype != bucket[0].grad.dtype):
+                            synchronize_bucket(bucket)
+                            bucket, bucket_bytes = [], 0
+                        bucket.append(parameter)
+                        bucket_bytes += size
+                    synchronize_bucket(bucket)
+
     def train_step(self, batch: CanonicalTrainingBatch) -> dict[str, Any]:
         self._assert_current_regime()
         if self.regime == TrainingRegime.PREFERENCE:
@@ -829,53 +879,7 @@ class CanonicalTrainer:
         if loss.ndim != 0 or not torch.isfinite(loss):
             raise FloatingPointError("canonical regime loss must be a finite scalar")
         loss.backward()
-        if dist.is_available() and dist.is_initialized():
-            world_size = dist.get_world_size()
-            trainable = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
-            if trainable:
-                presence = torch.tensor(
-                    [parameter.grad is not None for parameter in trainable],
-                    device=trainable[0].device, dtype=torch.int32
-                )
-                minimum, maximum = presence.clone(), presence.clone()
-                dist.all_reduce(minimum, op=dist.ReduceOp.MIN)
-                dist.all_reduce(maximum, op=dist.ReduceOp.MAX)
-                if not torch.equal(minimum, maximum):
-                    raise RuntimeError(
-                        "distributed ranks produced inconsistent gradient presence; "
-                        "ensure every rank receives structurally compatible batches"
-                    )
-                # Coalesce gradients into bounded buckets to avoid one network
-                # collective per parameter on large CHIMERA components.
-                bucket_limit = 25 * 1024 * 1024
-                bucket, bucket_bytes = [], 0
-                def synchronize_bucket(parameters):
-                    if not parameters:
-                        return
-                    flat = torch.cat([parameter.grad.detach().reshape(-1) for parameter in parameters])
-                    dist.all_reduce(flat, op=dist.ReduceOp.SUM)
-                    flat.div_(world_size)
-                    offset = 0
-                    for parameter in parameters:
-                        count = parameter.grad.numel()
-                        parameter.grad.copy_(flat[offset:offset + count].view_as(parameter.grad))
-                        offset += count
-                for parameter, has_gradient in zip(trainable, maximum.tolist()):
-                    if not has_gradient:
-                        continue
-                    size = parameter.grad.numel() * parameter.grad.element_size()
-                    if size > bucket_limit:
-                        synchronize_bucket(bucket)
-                        bucket, bucket_bytes = [], 0
-                        dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM)
-                        parameter.grad.div_(world_size)
-                        continue
-                    if bucket and (bucket_bytes + size > bucket_limit or parameter.grad.dtype != bucket[0].grad.dtype):
-                        synchronize_bucket(bucket)
-                        bucket, bucket_bytes = [], 0
-                    bucket.append(parameter)
-                    bucket_bytes += size
-                synchronize_bucket(bucket)
+        self._synchronize_distributed_gradients()
         audit = gradient_flow_report(self.model, detailed=False)
         component_rows = audit["components"]
         missing = [
@@ -1083,17 +1087,35 @@ class CanonicalTrainer:
             raise ValueError("preference training requires a DPOBatch")
         self.model.train()
         self.optimizer.zero_grad(set_to_none=True)
-        loss, metrics = self.model.dpo_trainer.loss(
-            self.model.sequence_policy,
-            self.model._reference_policy,
-            batch,
-        )
+        device = next(self.model.sequence_policy.parameters()).device
+        autocast_enabled = self.precision == "bf16" and device.type in ("cuda", "cpu")
+        if autocast_enabled and device.type == "cuda" and not torch.cuda.is_bf16_supported():
+            raise RuntimeError("BF16 precision requested but this CUDA device does not support BF16")
+        if device.type in ("cuda", "cpu"):
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=autocast_enabled):
+                loss, metrics = self.model.dpo_trainer.loss(
+                    self.model.sequence_policy,
+                    self.model._reference_policy,
+                    batch,
+                )
+        else:
+            loss, metrics = self.model.dpo_trainer.loss(
+                self.model.sequence_policy,
+                self.model._reference_policy,
+                batch,
+            )
         loss.backward()
-        audit = gradient_flow_report(self.model)
+        self._synchronize_distributed_gradients()
+        audit = gradient_flow_report(self.model, detailed=False)
         policy_gradients = audit["components"].get("sequence_policy", {})
         if policy_gradients.get("gradient_parameters", 0) == 0 or not policy_gradients.get("all_gradients_finite", False):
             raise RuntimeError("preference gradient contract failed for sequence_policy")
-        torch.nn.utils.clip_grad_norm_(self.model.sequence_policy.parameters(), 1.0)
+        grad_norm = policy_gradients["gradient_norm"]
+        if grad_norm > 1.0:
+            scale = 1.0 / (grad_norm + 1e-6)
+            for parameter in self.model.sequence_policy.parameters():
+                if parameter.grad is not None:
+                    parameter.grad.mul_(scale)
         self.optimizer.step()
         status = self.model.component_status["sequence_policy"]
         if status.get("validation") is not None:
