@@ -58,7 +58,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--batch-size", type=int, default=1,
                         help="number of JSONL batch-records to concatenate per optimizer update")
-    parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
+    parser.add_argument("--precision", choices=("fp32", "bf16"), default=None,\n                        help="defaults to FP32 for new runs; resumes preserve checkpoint precision unless overridden")
     parser.add_argument("--gradient-checkpointing", action="store_true",
                         help="enable EvoFormer and flow IPA activation checkpointing")
     return parser
