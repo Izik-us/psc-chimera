@@ -66,7 +66,9 @@ leading batch dimension for one optimizer update. For example, if every record
 contains one example, `--batch-size 8` creates a local batch of eight examples.
 If every record already contains eight examples, the same setting creates a
 local batch of 64. Keep records homogeneous: optional fields, constraint fields,
-and metadata must be compatible across records being collated.
+and metadata must be compatible across records being collated. The runner
+preserves JSONL row order; shuffle the dataset deterministically upstream before
+training if its current order is not already suitable.
 
 Example:
 
