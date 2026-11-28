@@ -77,11 +77,12 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
     parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument("--evoformer-checkpoint-group-size", type=int, default=1)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if min(args.batch_size, args.msa_depth, args.length, args.steps) < 1:
         parser.error("batch size, MSA depth, length and steps must be positive")
-    if args.warmup_steps < 0:
+    if args.evoformer_checkpoint_group_size < 1:\n        parser.error("EvoFormer checkpoint group size must be positive")\n    if args.warmup_steps < 0:
         parser.error("warmup steps cannot be negative")
 
     device = torch.device(args.device)
@@ -99,6 +100,8 @@ def main() -> int:
         model = CanonicalCHIMERAv2()
     model = model.to(device)
     model.evoformer.gradient_checkpointing = args.gradient_checkpointing
+    model.evoformer.gradient_checkpointing_group_size = args.evoformer_checkpoint_group_size
+    model.evoformer.configuration["gradient_checkpointing_group_size"] = args.evoformer_checkpoint_group_size
     model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
     regime = TrainingRegime(args.regime)
     trainer = CanonicalTrainer(
@@ -139,6 +142,7 @@ def main() -> int:
         "length": args.length,
         "precision": args.precision,
         "gradient_checkpointing": args.gradient_checkpointing,
+        "evoformer_checkpoint_group_size": args.evoformer_checkpoint_group_size,
         "warmup_steps": args.warmup_steps,
         "measured_steps": args.steps,
         "step_seconds_mean": statistics.mean(durations),
