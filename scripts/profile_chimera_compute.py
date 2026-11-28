@@ -49,7 +49,7 @@ def estimate(batch: int, msa_depth: int, length: int, d_msa: int, d_pair: int,
             "msa": {"elements": msa_values, "bytes": msa_bytes, "GiB": gibibytes(msa_bytes)},
             "pair": {"elements": pair_values, "bytes": pair_bytes, "GiB": gibibytes(pair_bytes)},
             "combined_one_state_GiB": gibibytes(msa_bytes + pair_bytes),
-            "all_block_boundary_states_GiB": gibibytes(
+            "uncheckpointed_block_boundary_states_upper_bound_GiB": gibibytes(
                 n_evo_blocks * (msa_bytes + pair_bytes)
             ),
         },
@@ -99,9 +99,8 @@ def main() -> int:
         "evoformer": estimate(
             args.batch_size, args.msa_depth, args.length,
             evo.d_msa, evo.d_pair,
-            next(block.outer_product_mean.hidden for block in evo.blocks).shape[-1]
-                if False else int(evo.blocks[0].outer_product_mean.hidden),
-            int(evo.blocks[0].triangle_multiplication_outgoing.hidden),
+            int(evo.blocks[0].outer_product_mean.left.out_features),
+            int(evo.blocks[0].triangle_multiplication_outgoing.left.out_features),
             len(evo.blocks), dtype_bytes,
         ),
         "runtime": {
