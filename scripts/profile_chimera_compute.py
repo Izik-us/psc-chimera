@@ -98,6 +98,10 @@ def main() -> int:
         "trainable_parameter_count": sum(
             parameter.numel() for parameter in model.parameters() if parameter.requires_grad
         ),
+        "activation_checkpointing": {
+            "evoformer_per_block": bool(evo.gradient_checkpointing),
+            "flow_ipa_per_block": bool(velocity.gradient_checkpointing),
+        },
         "parameter_storage": {
             "dtype": args.dtype,
             "GiB": gibibytes(
