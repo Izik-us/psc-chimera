@@ -82,7 +82,9 @@ def main() -> int:
     args = parser.parse_args()
     if min(args.batch_size, args.msa_depth, args.length, args.steps) < 1:
         parser.error("batch size, MSA depth, length and steps must be positive")
-    if args.evoformer_checkpoint_group_size < 1:\n        parser.error("EvoFormer checkpoint group size must be positive")\n    if args.warmup_steps < 0:
+    if args.evoformer_checkpoint_group_size < 1:
+        parser.error("EvoFormer checkpoint group size must be positive")
+    if args.warmup_steps < 0:
         parser.error("warmup steps cannot be negative")
 
     device = torch.device(args.device)
