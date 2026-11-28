@@ -2,6 +2,7 @@ import torch
 
 from chimera import CanonicalCHIMERAv2
 from chimera.components import MSARepresentationBackbone
+from chimera.checkpoint_io import canonical_model_from_configuration
 from chimera.evoformer_stack import (
     EvoFormerBlock,
     MSAColumnAttention,
@@ -69,6 +70,34 @@ def test_canonical_composition_passes_configured_depth_into_the_stack():
     )
     assert len(model.evoformer.blocks) == 3
     assert model.model_configuration()["evoformer"]["n_blocks"] == 3
+
+
+def test_grouped_checkpoint_configuration_round_trips_and_legacy_defaults():
+    model = CanonicalCHIMERAv2(
+        d_evo_single=16,
+        d_evo_pair=8,
+        d_se3=16,
+        d_pair_out=16,
+        d_mpnn=16,
+        evoformer_n_blocks=4,
+        evoformer_gradient_checkpointing=True,
+        evoformer_gradient_checkpointing_group_size=2,
+        n_flow_blocks=1,
+        n_domains=1,
+        n_modules=1,
+        n_mpnn_seqs=1,
+        n_mc_dropout=2,
+    )
+    configuration = model.model_configuration()
+    restored = canonical_model_from_configuration(configuration)
+    assert restored.evoformer.gradient_checkpointing_group_size == 2
+
+    legacy_configuration = dict(configuration)
+    legacy_configuration["evoformer"] = dict(configuration["evoformer"])
+    legacy_configuration["evoformer"].pop("gradient_checkpointing_group_size")
+    legacy_restored = canonical_model_from_configuration(legacy_configuration)
+    assert legacy_restored.evoformer.gradient_checkpointing_group_size == 1
+    assert "gradient_checkpointing_group_size" not in legacy_restored.model_configuration()["evoformer"]
 
 
 def test_stack_emits_query_single_and_coupled_msa_pair_shapes():
@@ -662,6 +691,36 @@ def test_gradient_checkpointing_preserves_gradients_for_each_block():
     (single.square().mean() + pair_output.square().mean()).backward()
 
     assert all(block.msa_transition.output.weight.grad is not None for block in model.blocks)
+
+
+def test_grouped_gradient_checkpointing_preserves_outputs_and_block_gradients():
+    reference = _small_stack(
+        n_blocks=4, dropout_msa_row=0.0, dropout_triangle=0.0,
+        gradient_checkpointing=False,
+    ).train()
+    grouped = _small_stack(
+        n_blocks=4, dropout_msa_row=0.0, dropout_triangle=0.0,
+        gradient_checkpointing=True, gradient_checkpointing_group_size=2,
+    ).train()
+    grouped.load_state_dict(reference.state_dict())
+    tokens = torch.randint(0, 20, (1, 2, 4))
+    pair = torch.randn(1, 4, 4, 8)
+
+    reference_single, reference_pair = reference(tokens, pair)
+    grouped_single, grouped_pair = grouped(tokens, pair)
+    (reference_single.square().mean() + reference_pair.square().mean()).backward()
+    (grouped_single.square().mean() + grouped_pair.square().mean()).backward()
+
+    assert torch.allclose(reference_single, grouped_single, atol=1e-6, rtol=1e-6)
+    assert torch.allclose(reference_pair, grouped_pair, atol=1e-6, rtol=1e-6)
+    for reference_parameter, grouped_parameter in zip(
+        reference.parameters(), grouped.parameters()
+    ):
+        if reference_parameter.grad is not None:
+            assert grouped_parameter.grad is not None
+            assert torch.allclose(
+                reference_parameter.grad, grouped_parameter.grad, atol=1e-5, rtol=1e-5
+            )
 
 
 def test_diagnostics_are_opt_in_and_report_per_block_updates():

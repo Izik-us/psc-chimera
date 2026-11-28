@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, fields
 from enum import Enum
 import hashlib
 import json
+import math
 import os
 import random
 import tempfile
@@ -14,6 +15,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from .checkpoint import (
@@ -233,21 +235,19 @@ def configure_trainable_components(
     return tuple(selected)
 
 
-def gradient_flow_report(model) -> dict[str, Any]:
-    """Report every parameter's trainability and observed gradient state."""
+def gradient_flow_report(model, *, detailed: bool = True) -> dict[str, Any]:
+    """Report trainability and gradient state, optionally avoiding per-parameter CPU syncs.
+
+    Detailed mode preserves the historical per-parameter report. Fast mode is
+    intended for every optimizer step in large models: it aggregates finite
+    checks and norms per component and performs only component-level host syncs.
+    """
     parameters = []
     components: dict[str, dict[str, Any]] = {}
+    component_norms: dict[str, list[torch.Tensor]] = {}
+    component_finite: dict[str, list[torch.Tensor]] = {}
     for name, parameter in model.named_parameters():
         gradient = parameter.grad
-        finite = bool(torch.isfinite(gradient).all()) if gradient is not None else None
-        norm = float(gradient.detach().norm().cpu()) if gradient is not None else None
-        parameters.append({
-            "name": name,
-            "requires_grad": bool(parameter.requires_grad),
-            "gradient_present": gradient is not None,
-            "gradient_norm": norm,
-            "gradient_finite": finite,
-        })
         component = name.split(".", 1)[0]
         row = components.setdefault(component, {
             "trainable_parameters": 0,
@@ -257,12 +257,40 @@ def gradient_flow_report(model) -> dict[str, Any]:
         })
         if parameter.requires_grad:
             row["trainable_parameters"] += parameter.numel()
+        finite_tensor = None
+        norm_tensor = None
         if gradient is not None:
             row["gradient_parameters"] += parameter.numel()
-            row["gradient_norm_squared"] += norm * norm
-            row["all_gradients_finite"] &= bool(finite)
-    for row in components.values():
-        row["gradient_norm"] = row.pop("gradient_norm_squared") ** 0.5
+            finite_tensor = torch.isfinite(gradient).all()
+            norm_tensor = gradient.detach().float().norm()
+            component_finite.setdefault(component, []).append(finite_tensor)
+            component_norms.setdefault(component, []).append(norm_tensor)
+        if detailed:
+            finite = bool(finite_tensor.item()) if finite_tensor is not None else None
+            norm = float(norm_tensor.item()) if norm_tensor is not None else None
+            parameters.append({
+                "name": name,
+                "requires_grad": bool(parameter.requires_grad),
+                "gradient_present": gradient is not None,
+                "gradient_norm": norm,
+                "gradient_finite": finite,
+            })
+            if norm is not None:
+                row["gradient_norm_squared"] += norm * norm
+                row["all_gradients_finite"] &= bool(finite)
+    for component, row in components.items():
+        if detailed:
+            row["gradient_norm"] = row.pop("gradient_norm_squared") ** 0.5
+        else:
+            norms = component_norms.get(component, [])
+            finite = component_finite.get(component, [])
+            row["gradient_norm"] = (
+                float(torch.stack(norms).norm().item()) if norms else 0.0
+            )
+            row["all_gradients_finite"] = (
+                bool(torch.stack(finite).all().item()) if finite else True
+            )
+            row.pop("gradient_norm_squared")
     return {"parameters": parameters, "components": components}
 
 
@@ -289,8 +317,12 @@ class CanonicalTrainer:
         generator: Optional[torch.Generator] = None,
         allow_sequence_backbone_finetuning: bool = False,
         max_grad_norm: Optional[float] = 1.0,
+        precision: str = "fp32",
     ):
         self.model = model
+        if precision not in {"fp32", "bf16"}:
+            raise ValueError("precision must be 'fp32' or 'bf16'")
+        self.precision = precision
         if max_grad_norm is not None and not (isinstance(max_grad_norm, (int, float)) and max_grad_norm > 0):
             raise ValueError("max_grad_norm must be a positive number or None")
         self.max_grad_norm = None if max_grad_norm is None else float(max_grad_norm)
@@ -307,8 +339,11 @@ class CanonicalTrainer:
         else:
             self.dataset_manifest = str(dataset_manifest) if dataset_manifest else None
         if dataset_path is not None:
-            dataset_bytes = Path(dataset_path).expanduser().resolve().read_bytes()
-            file_hash = hashlib.sha256(dataset_bytes).hexdigest()
+            digest = hashlib.sha256()
+            with Path(dataset_path).expanduser().resolve().open("rb") as stream:
+                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                    digest.update(chunk)
+            file_hash = digest.hexdigest()
             if dataset_hash is not None and dataset_hash != file_hash:
                 raise ValueError("dataset_hash does not match the supplied dataset_path")
             dataset_hash = file_hash
@@ -445,6 +480,7 @@ class CanonicalTrainer:
             min_validation_examples=self.min_validation_examples,
             generator=self.generator,
             allow_sequence_backbone_finetuning=allow_sequence_backbone_finetuning,
+            precision=self.precision,
         )
         next_trainer.stage_history = history
         next_trainer.global_step = self.global_step
@@ -771,17 +807,80 @@ class CanonicalTrainer:
             return ("objective_feature_encoder", "pareto_head")
         return ("sequence_policy",)
 
+    def _synchronize_distributed_gradients(self) -> None:
+        """Average replicated gradients across ranks using bounded communication buckets."""
+        if dist.is_available() and dist.is_initialized():
+            world_size = dist.get_world_size()
+            trainable = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+            if trainable:
+                presence = torch.tensor(
+                    [parameter.grad is not None for parameter in trainable],
+                    device=trainable[0].device, dtype=torch.int32
+                )
+                minimum, maximum = presence.clone(), presence.clone()
+                dist.all_reduce(minimum, op=dist.ReduceOp.MIN)
+                dist.all_reduce(maximum, op=dist.ReduceOp.MAX)
+                if not torch.equal(minimum, maximum):
+                    raise RuntimeError(
+                        "distributed ranks produced inconsistent gradient presence; "
+                        "ensure every rank receives structurally compatible batches"
+                    )
+                # Coalesce gradients into bounded buckets to avoid one network
+                # collective per parameter on large CHIMERA components.
+                bucket_limit = 25 * 1024 * 1024
+                bucket, bucket_bytes = [], 0
+                def synchronize_bucket(parameters):
+                    if not parameters:
+                        return
+                    flat = torch.cat([parameter.grad.detach().reshape(-1) for parameter in parameters])
+                    dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+                    flat.div_(world_size)
+                    offset = 0
+                    for parameter in parameters:
+                        count = parameter.grad.numel()
+                        parameter.grad.copy_(flat[offset:offset + count].view_as(parameter.grad))
+                        offset += count
+                for parameter, has_gradient in zip(trainable, maximum.tolist()):
+                    if not has_gradient:
+                        continue
+                    size = parameter.grad.numel() * parameter.grad.element_size()
+                    if size > bucket_limit:
+                        synchronize_bucket(bucket)
+                        bucket, bucket_bytes = [], 0
+                        dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM)
+                        parameter.grad.div_(world_size)
+                        continue
+                    if bucket and (bucket_bytes + size > bucket_limit or parameter.grad.dtype != bucket[0].grad.dtype):
+                        synchronize_bucket(bucket)
+                        bucket, bucket_bytes = [], 0
+                    bucket.append(parameter)
+                    bucket_bytes += size
+                synchronize_bucket(bucket)
+
     def train_step(self, batch: CanonicalTrainingBatch) -> dict[str, Any]:
         self._assert_current_regime()
         if self.regime == TrainingRegime.PREFERENCE:
             return self.train_preference_step(batch.preference_batch)
         self.model.train()
+        if self.regime == TrainingRegime.SEQUENCE and not self.allow_sequence_backbone_finetuning:
+            # Frozen features must not drift through EvoFormer dropout between
+            # examples; the downstream designer remains in training mode.
+            self.model.evoformer.eval()
         self.optimizer.zero_grad(set_to_none=True)
-        loss = self._loss(batch)
+        device = batch.msa_tokens.device
+        autocast_enabled = self.precision == "bf16" and device.type in ("cuda", "cpu")
+        if autocast_enabled and device.type == "cuda" and not torch.cuda.is_bf16_supported():
+            raise RuntimeError("BF16 precision requested but this CUDA device does not support BF16")
+        if device.type in ("cuda", "cpu"):
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=autocast_enabled):
+                loss = self._loss(batch)
+        else:
+            loss = self._loss(batch)
         if loss.ndim != 0 or not torch.isfinite(loss):
             raise FloatingPointError("canonical regime loss must be a finite scalar")
         loss.backward()
-        audit = gradient_flow_report(self.model)
+        self._synchronize_distributed_gradients()
+        audit = gradient_flow_report(self.model, detailed=False)
         component_rows = audit["components"]
         missing = [
             name for name in self._required_gradient_components(batch)
@@ -795,10 +894,17 @@ class CanonicalTrainer:
             raise RuntimeError(f"gradient contract failed; missing={missing}, nonfinite={nonfinite}")
         grad_norm, grad_clipped = None, False
         if self.max_grad_norm is not None:
-            grad_params = [p for p in self.model.parameters() if p.requires_grad and p.grad is not None]
-            total_norm = torch.nn.utils.clip_grad_norm_(grad_params, self.max_grad_norm, error_if_nonfinite=True)
-            grad_norm = float(total_norm)
+            # Reuse component norms already computed by the fast gradient audit
+            # instead of traversing every gradient tensor a second time.
+            grad_norm = math.sqrt(sum(
+                row["gradient_norm"] ** 2 for row in component_rows.values()
+            ))
             grad_clipped = grad_norm > self.max_grad_norm
+            if grad_clipped:
+                scale = self.max_grad_norm / (grad_norm + 1e-6)
+                for parameter in self.model.parameters():
+                    if parameter.requires_grad and parameter.grad is not None:
+                        parameter.grad.mul_(scale)
         self.optimizer.step()
         for name in self._required_gradient_components(batch):
             state = self.model.component_status[name]
@@ -981,17 +1087,35 @@ class CanonicalTrainer:
             raise ValueError("preference training requires a DPOBatch")
         self.model.train()
         self.optimizer.zero_grad(set_to_none=True)
-        loss, metrics = self.model.dpo_trainer.loss(
-            self.model.sequence_policy,
-            self.model._reference_policy,
-            batch,
-        )
+        device = next(self.model.sequence_policy.parameters()).device
+        autocast_enabled = self.precision == "bf16" and device.type in ("cuda", "cpu")
+        if autocast_enabled and device.type == "cuda" and not torch.cuda.is_bf16_supported():
+            raise RuntimeError("BF16 precision requested but this CUDA device does not support BF16")
+        if device.type in ("cuda", "cpu"):
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=autocast_enabled):
+                loss, metrics = self.model.dpo_trainer.loss(
+                    self.model.sequence_policy,
+                    self.model._reference_policy,
+                    batch,
+                )
+        else:
+            loss, metrics = self.model.dpo_trainer.loss(
+                self.model.sequence_policy,
+                self.model._reference_policy,
+                batch,
+            )
         loss.backward()
-        audit = gradient_flow_report(self.model)
+        self._synchronize_distributed_gradients()
+        audit = gradient_flow_report(self.model, detailed=False)
         policy_gradients = audit["components"].get("sequence_policy", {})
         if policy_gradients.get("gradient_parameters", 0) == 0 or not policy_gradients.get("all_gradients_finite", False):
             raise RuntimeError("preference gradient contract failed for sequence_policy")
-        torch.nn.utils.clip_grad_norm_(self.model.sequence_policy.parameters(), 1.0)
+        grad_norm = policy_gradients["gradient_norm"]
+        if grad_norm > 1.0:
+            scale = 1.0 / (grad_norm + 1e-6)
+            for parameter in self.model.sequence_policy.parameters():
+                if parameter.grad is not None:
+                    parameter.grad.mul_(scale)
         self.optimizer.step()
         status = self.model.component_status["sequence_policy"]
         if status.get("validation") is not None:
@@ -1084,6 +1208,13 @@ class CanonicalTrainer:
             "manifest": asdict(manifest),
             "training": {
                 "regime": self.regime.value,
+                "precision": self.precision,
+                "evoformer_gradient_checkpointing": bool(
+                    self.model.evoformer.gradient_checkpointing
+                ),
+                "flow_gradient_checkpointing": bool(
+                    self.model.flow_model.flow_model.velocity_field.gradient_checkpointing
+                ),
                 "stage_history": list(self.stage_history),
                 "trainable_components": list(self.trainable_components),
                 "allow_sequence_backbone_finetuning": (
@@ -1286,8 +1417,15 @@ class CanonicalTrainer:
             preprocessing_hash=manifest.preprocessing_hash,
             random_seed=manifest.random_seed,
             min_validation_examples=manifest.min_validation_examples or 30,
+            precision=training.get("precision", "fp32"),
         )
         trainer.resume(path, migration_id=migration_id)
+        model.evoformer.gradient_checkpointing = bool(
+            training.get("evoformer_gradient_checkpointing", False)
+        )
+        model.flow_model.set_gradient_checkpointing(
+            bool(training.get("flow_gradient_checkpointing", False))
+        )
         return trainer
 
 
