@@ -17,7 +17,7 @@ The report includes:
 - Exact instantiated model parameter count.
 - Estimated parameter storage for the selected dtype.
 - MSA and pair representation tensor sizes.
-- The approximate per-block checkpoint input-state storage, OPM outer-product chunk, triangle-product tensor, and IPA point-difference tensor.
+- The approximate per-group checkpoint input-state storage, OPM outer-product chunk, triangle-product tensor, and IPA point-difference tensor.
 - OPM and outgoing/incoming triangle-multiplication MAC estimates.
 - The IPA point-difference and attention-logit intermediate sizes.
 
@@ -34,7 +34,7 @@ Run the same command on each GPU and preserve the JSON report:
 python scripts/benchmark_chimera_training.py \
   --regime representation \
   --batch-size 1 --msa-depth 128 --length 600 \
-  --precision fp32 --gradient-checkpointing \
+  --precision fp32 --gradient-checkpointing --evoformer-checkpoint-group-size 4 --evoformer-checkpoint-group-size 4 \
   --warmup-steps 2 --steps 10 \
   --output benchmark-representation.json
 ```
