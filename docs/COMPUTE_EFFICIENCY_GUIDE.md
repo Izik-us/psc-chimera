@@ -10,7 +10,8 @@ By default the tools instantiate `CanonicalCHIMERAv2()` with canonical defaults.
 
 ```bash
 python scripts/profile_chimera_compute.py \
-  --batch-size 1 --msa-depth 128 --length 600 --dtype fp32
+  --batch-size 1 --msa-depth 128 --length 600 --dtype fp32 \
+  --gradient-checkpointing --evoformer-checkpoint-group-size 4
 ```
 
 The report includes:
