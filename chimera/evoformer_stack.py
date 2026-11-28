@@ -564,8 +564,12 @@ class EvoFormerStack(nn.Module):
             raise ValueError("opm_chunk_size must be positive or None")
         if attention_chunk_size is not None and attention_chunk_size <= 0:
             raise ValueError("attention_chunk_size must be positive or None")
-        if gradient_checkpointing_group_size <= 0:
-            raise ValueError("gradient_checkpointing_group_size must be positive")
+        if (
+            not isinstance(gradient_checkpointing_group_size, int)
+            or isinstance(gradient_checkpointing_group_size, bool)
+            or gradient_checkpointing_group_size <= 0
+        ):
+            raise ValueError("gradient_checkpointing_group_size must be a positive integer")
         if transition_factor <= 0:
             raise ValueError("transition_factor must be positive")
         if max_relative_position < 1:
