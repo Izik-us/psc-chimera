@@ -62,6 +62,8 @@ def _parser() -> argparse.ArgumentParser:
                         help="defaults to FP32 for new runs; resumes preserve checkpoint precision unless overridden")
     parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=None,
                         help="override saved activation-checkpointing settings")
+    parser.add_argument("--evoformer-checkpoint-group-size", type=int, default=None,
+                        help="number of EvoFormer blocks per checkpoint group; smaller groups use more activation memory")
     return parser
 
 
@@ -249,8 +251,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.epochs < 1 or args.checkpoint_every_steps < 1:
         raise ValueError("--epochs and --checkpoint-every-steps must be positive")
-    if args.seed < 0 or args.batch_size < 1:
-        raise ValueError("--seed must be non-negative and --batch-size must be positive")
+    if args.seed < 0 or args.batch_size < 1 or (args.evoformer_checkpoint_group_size is not None and args.evoformer_checkpoint_group_size < 1):
+        raise ValueError("--seed and batch size must be valid; checkpoint group size must be positive")
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", str(rank)))
@@ -316,6 +318,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.gradient_checkpointing is not None:
                 model.evoformer.gradient_checkpointing = args.gradient_checkpointing
                 model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
+            if args.evoformer_checkpoint_group_size is not None:
+                model.evoformer.gradient_checkpointing_group_size = args.evoformer_checkpoint_group_size
+                model.evoformer.configuration["gradient_checkpointing_group_size"] = args.evoformer_checkpoint_group_size
         else:
             previous_trainer = CanonicalTrainer.from_checkpoint(
                 model,
@@ -328,6 +333,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.gradient_checkpointing is not None:
                 model.evoformer.gradient_checkpointing = args.gradient_checkpointing
                 model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
+            if args.evoformer_checkpoint_group_size is not None:
+                model.evoformer.gradient_checkpointing_group_size = args.evoformer_checkpoint_group_size
+                model.evoformer.configuration["gradient_checkpointing_group_size"] = args.evoformer_checkpoint_group_size
             trainer = previous_trainer.transition(
                 args.regime,
                 dataset_manifest=dataset_manifest_identity,
@@ -353,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.gradient_checkpointing is not None:
             model.evoformer.gradient_checkpointing = args.gradient_checkpointing
             model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
+        if args.evoformer_checkpoint_group_size is not None:
+            model.evoformer.gradient_checkpointing_group_size = args.evoformer_checkpoint_group_size
+            model.evoformer.configuration["gradient_checkpointing_group_size"] = args.evoformer_checkpoint_group_size
         trainer = CanonicalTrainer(
             model,
             args.regime,
