@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -32,7 +33,10 @@ def gibibytes(num_bytes: int) -> float:
 
 def estimate(batch: int, msa_depth: int, length: int, d_msa: int, d_pair: int,
              c_hidden_opm: int, c_hidden_triangle: int, n_evo_blocks: int,
-             dtype_bytes: int) -> dict:
+             dtype_bytes: int, checkpoint_group_size: int = 1) -> dict:
+    if checkpoint_group_size < 1:
+        raise ValueError("checkpoint_group_size must be positive")
+    checkpoint_groups = math.ceil(n_evo_blocks / checkpoint_group_size)
     msa_values = batch * msa_depth * length * d_msa
     pair_values = batch * length * length * d_pair
     msa_bytes = msa_values * dtype_bytes
@@ -48,6 +52,8 @@ def estimate(batch: int, msa_depth: int, length: int, d_msa: int, d_pair: int,
             "c_hidden_opm": c_hidden_opm,
             "c_hidden_triangle": c_hidden_triangle,
             "evoformer_blocks": n_evo_blocks,
+            "checkpoint_group_size": checkpoint_group_size,
+            "checkpoint_groups": checkpoint_groups,
         },
         "representation_tensors": {
             "msa": {"elements": msa_values, "bytes": msa_bytes, "GiB": gibibytes(msa_bytes)},
@@ -55,7 +61,7 @@ def estimate(batch: int, msa_depth: int, length: int, d_msa: int, d_pair: int,
             "combined_one_state_GiB": gibibytes(msa_bytes + pair_bytes),
             "checkpoint_note": "When EvoFormer per-block checkpointing is enabled, block inputs are retained for recomputation; this estimate excludes other autograd and temporary tensors.",
             "per_block_checkpoint_input_state_storage_GiB": gibibytes(
-                n_evo_blocks * (msa_bytes + pair_bytes)
+                checkpoint_groups * (msa_bytes + pair_bytes)
             ),
         },
         "dominant_operations": {
@@ -121,7 +127,8 @@ def main() -> int:
             parameter.numel() for parameter in model.parameters() if parameter.requires_grad
         ),
         "activation_checkpointing": {
-            "evoformer_per_block": bool(evo.gradient_checkpointing),
+            "evoformer_enabled": bool(evo.gradient_checkpointing),
+            "evoformer_group_size": int(evo.gradient_checkpointing_group_size),
             "flow_ipa_per_block": bool(velocity.gradient_checkpointing),
         },
         "parameter_storage": {
@@ -135,7 +142,7 @@ def main() -> int:
             evo.d_msa, evo.d_pair,
             int(evo.blocks[0].outer_product_mean.left.out_features),
             int(evo.blocks[0].triangle_multiplication_outgoing.left.out_features),
-            len(evo.blocks), dtype_bytes,
+            len(evo.blocks), dtype_bytes, evo.gradient_checkpointing_group_size,
         ),
         "evoformer_temporaries": {
             "opm_outer_product_chunk": {
