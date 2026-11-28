@@ -84,6 +84,14 @@ def main() -> int:
     model = canonical_model_from_configuration(config)
     dtype_bytes = {"fp32": 4, "bf16": 2, "fp16": 2}[args.dtype]
     evo = model.evoformer
+    velocity = model.flow_model.flow_model.velocity_field
+    ipa = velocity.ipa_blocks[0].ipa
+    point_diff_elements = (
+        args.batch_size * ipa.n_head * args.length * args.length * ipa.n_qk_pts * 3
+    )
+    point_diff_bytes = point_diff_elements * dtype_bytes
+    attention_elements = args.batch_size * ipa.n_head * args.length * args.length
+    attention_bytes = attention_elements * dtype_bytes
     result = {
         "status": "analytical_estimate_not_measured",
         "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
@@ -103,6 +111,26 @@ def main() -> int:
             int(evo.blocks[0].triangle_multiplication_outgoing.left.out_features),
             len(evo.blocks), dtype_bytes,
         ),
+        "flow_ipa": {
+            "blocks": len(velocity.ipa_blocks),
+            "heads": ipa.n_head,
+            "query_key_points": ipa.n_qk_pts,
+            "value_points": ipa.n_v_pts,
+            "point_difference_tensor": {
+                "shape": [
+                    args.batch_size, ipa.n_head, args.length, args.length,
+                    ipa.n_qk_pts, 3,
+                ],
+                "elements": point_diff_elements,
+                "GiB": gibibytes(point_diff_bytes),
+            },
+            "attention_logits_tensor": {
+                "shape": [args.batch_size, ipa.n_head, args.length, args.length],
+                "elements": attention_elements,
+                "GiB": gibibytes(attention_bytes),
+            },
+            "note": "Single-intermediate lower-bound estimate; multiple IPA intermediates, autograd saves, pair conditioning and backward activations add memory.",
+        },
         "runtime": {
             "torch_version": torch.__version__,
             "cuda_available": torch.cuda.is_available(),
