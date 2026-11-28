@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from .checkpoint import (
@@ -289,8 +290,12 @@ class CanonicalTrainer:
         generator: Optional[torch.Generator] = None,
         allow_sequence_backbone_finetuning: bool = False,
         max_grad_norm: Optional[float] = 1.0,
+        precision: str = "fp32",
     ):
         self.model = model
+        if precision not in {"fp32", "bf16"}:
+            raise ValueError("precision must be 'fp32' or 'bf16'")
+        self.precision = precision
         if max_grad_norm is not None and not (isinstance(max_grad_norm, (int, float)) and max_grad_norm > 0):
             raise ValueError("max_grad_norm must be a positive number or None")
         self.max_grad_norm = None if max_grad_norm is None else float(max_grad_norm)
@@ -307,8 +312,11 @@ class CanonicalTrainer:
         else:
             self.dataset_manifest = str(dataset_manifest) if dataset_manifest else None
         if dataset_path is not None:
-            dataset_bytes = Path(dataset_path).expanduser().resolve().read_bytes()
-            file_hash = hashlib.sha256(dataset_bytes).hexdigest()
+            digest = hashlib.sha256()
+            with Path(dataset_path).expanduser().resolve().open("rb") as stream:
+                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                    digest.update(chunk)
+            file_hash = digest.hexdigest()
             if dataset_hash is not None and dataset_hash != file_hash:
                 raise ValueError("dataset_hash does not match the supplied dataset_path")
             dataset_hash = file_hash
@@ -777,10 +785,38 @@ class CanonicalTrainer:
             return self.train_preference_step(batch.preference_batch)
         self.model.train()
         self.optimizer.zero_grad(set_to_none=True)
-        loss = self._loss(batch)
+        device = batch.msa_tokens.device
+        autocast_enabled = self.precision == "bf16" and device.type in ("cuda", "cpu")
+        if autocast_enabled and device.type == "cuda" and not torch.cuda.is_bf16_supported():
+            raise RuntimeError("BF16 precision requested but this CUDA device does not support BF16")
+        if device.type in ("cuda", "cpu"):
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=autocast_enabled):
+                loss = self._loss(batch)
+        else:
+            loss = self._loss(batch)
         if loss.ndim != 0 or not torch.isfinite(loss):
             raise FloatingPointError("canonical regime loss must be a finite scalar")
         loss.backward()
+        if dist.is_available() and dist.is_initialized():
+            world_size = dist.get_world_size()
+            for parameter in self.model.parameters():
+                if not parameter.requires_grad:
+                    continue
+                present = torch.tensor(
+                    1 if parameter.grad is not None else 0,
+                    device=parameter.device, dtype=torch.int32
+                )
+                minimum, maximum = present.clone(), present.clone()
+                dist.all_reduce(minimum, op=dist.ReduceOp.MIN)
+                dist.all_reduce(maximum, op=dist.ReduceOp.MAX)
+                if minimum.item() != maximum.item():
+                    raise RuntimeError(
+                        "distributed ranks produced inconsistent gradient presence; "
+                        "ensure every rank receives structurally compatible batches"
+                    )
+                if parameter.grad is not None:
+                    dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM)
+                    parameter.grad.div_(world_size)
         audit = gradient_flow_report(self.model)
         component_rows = audit["components"]
         missing = [
@@ -1084,6 +1120,7 @@ class CanonicalTrainer:
             "manifest": asdict(manifest),
             "training": {
                 "regime": self.regime.value,
+                "precision": self.precision,
                 "stage_history": list(self.stage_history),
                 "trainable_components": list(self.trainable_components),
                 "allow_sequence_backbone_finetuning": (
