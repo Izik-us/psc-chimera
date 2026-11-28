@@ -39,6 +39,7 @@ def canonical_model_from_configuration(architecture: dict[str, Any]):
     evoformer_keys = {
         "n_blocks": "evoformer_n_blocks",
         "gradient_checkpointing": "evoformer_gradient_checkpointing",
+        "gradient_checkpointing_group_size": "evoformer_gradient_checkpointing_group_size",
         "attention_chunk_size": "evoformer_attention_chunk_size",
         "opm_chunk_size": "evoformer_opm_chunk_size",
         "dropout_msa_row": "evoformer_dropout_msa_row",
@@ -60,6 +61,9 @@ def canonical_model_from_configuration(architecture: dict[str, Any]):
         )
     for saved_name, constructor_name in evoformer_keys.items():
         if saved_name not in evoformer_config:
+            if saved_name == "gradient_checkpointing_group_size":
+                constructor_config[constructor_name] = 1
+                continue
             raise CheckpointCompatibilityError(
                 f"architecture_config.evoformer is missing {saved_name}"
             )
