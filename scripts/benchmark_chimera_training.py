@@ -60,7 +60,7 @@ def make_batch(model, regime: TrainingRegime, batch: int, depth: int, length: in
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--architecture-json", type=Path, required=True)
-    parser.add_argument("--regime", choices=[r.value for r in TrainingRegime],
+    parser.add_argument("--regime", choices=("representation", "flow", "sequence"),
                         default="representation")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=1)
