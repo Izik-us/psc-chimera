@@ -6,11 +6,10 @@ biological learning or model quality.
 
 ## 1. Source-derived compute estimate
 
-Prepare the same architecture JSON used by the canonical trainer, then run:
+By default the tools instantiate `CanonicalCHIMERAv2()` with canonical defaults. Supply `--architecture-json` to profile a custom architecture or `--checkpoint` to reconstruct a saved canonical model.
 
 ```bash
 python scripts/profile_chimera_compute.py \
-  --architecture-json config/chimera_architecture.json \
   --batch-size 1 --msa-depth 128 --length 600 --dtype fp32
 ```
 
@@ -33,7 +32,6 @@ Run the same command on each GPU and preserve the JSON report:
 
 ```bash
 python scripts/benchmark_chimera_training.py \
-  --architecture-json config/chimera_architecture.json \
   --regime representation \
   --batch-size 1 --msa-depth 128 --length 600 \
   --precision fp32 --gradient-checkpointing \
