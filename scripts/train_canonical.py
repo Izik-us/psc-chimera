@@ -139,7 +139,7 @@ def _collate_batches(batches: list[CanonicalTrainingBatch]) -> CanonicalTraining
     })
 
 
-def _iter_batches(path: Path, batch_size: int, *, rank: int = 0, world_size: int = 1):
+def _iter_batches(path: Path, batch_size: int, *, rank: int = 0, world_size: int = 1, pair_width: int | None = None):
     """Yield streamed batches, sharding records evenly across distributed ranks.
 
     Each JSONL row is a pre-tensorized CanonicalTrainingBatch. --batch-size
@@ -156,7 +156,7 @@ def _iter_batches(path: Path, batch_size: int, *, rank: int = 0, world_size: int
             break
         if index % world_size != rank:
             continue
-        pending.append(_batch(record))
+        pending.append(_batch(record, pair_width=pair_width))
         selected += 1
         if len(pending) == batch_size:
             yield pending[0] if batch_size == 1 else _collate_batches(pending)
@@ -167,12 +167,24 @@ def _iter_batches(path: Path, batch_size: int, *, rank: int = 0, world_size: int
         yield pending[0] if len(pending) == 1 else _collate_batches(pending)
 
 
-def _batch(record: dict) -> CanonicalTrainingBatch:
+def _batch(record: dict, *, pair_width: int | None = None) -> CanonicalTrainingBatch:
     allowed = set(CanonicalTrainingBatch.__dataclass_fields__)
     unknown = set(record) - allowed
     if unknown:
         raise ValueError(f"unknown CanonicalTrainingBatch fields: {sorted(unknown)}")
     values = dict(record)
+    if values.get("pair_features") is None:
+        if pair_width is None or pair_width < 1:
+            raise ValueError(
+                "pair_features may be omitted only when the canonical pair width is supplied"
+            )
+        msa_value = torch.as_tensor(values["msa_tokens"])
+        if msa_value.ndim != 3:
+            raise ValueError("MSA tokens must have shape (B, N, L) when pair_features are omitted")
+        batch_size, _, length = msa_value.shape
+        values["pair_features"] = torch.zeros(
+            batch_size, length, length, pair_width, dtype=torch.float32
+        )
     for name in _TENSOR_FIELDS:
         if name in values and values[name] is not None:
             values[name] = torch.as_tensor(values[name])
@@ -356,7 +368,8 @@ def main(argv: list[str] | None = None) -> int:
             epoch_loss = 0.0
             batch_count = 0
             for batch in _iter_batches(
-                data_path, args.batch_size, rank=rank, world_size=world_size
+                data_path, args.batch_size, rank=rank, world_size=world_size,
+                pair_width=model.d_evo_pair,
             ):
                 result = trainer.train_step(batch.to(device))
                 epoch_loss += float(result["loss"])
