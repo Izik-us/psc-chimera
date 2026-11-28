@@ -55,6 +55,12 @@ The canonical runner consumes JSONL where each line is one pre-tensorized
 dimension. The loader now streams rows and incrementally hashes the file rather
 than loading the entire JSONL dataset into a Python list or a single bytes object.
 
+If `pair_features` is omitted, the runner creates a zero-initialized pair tensor
+for that batch using the model's configured pair width. This avoids storing
+repeated dense zero pair tensors in JSONL, but it is only correct when zero
+initial pair features are intended. It must not replace meaningful externally
+computed pair features.
+
 `--batch-size` means the number of JSONL batch-records concatenated along their
 leading batch dimension for one optimizer update. For example, if every record
 contains one example, `--batch-size 8` creates a local batch of eight examples.
