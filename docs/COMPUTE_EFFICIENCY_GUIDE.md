@@ -18,7 +18,7 @@ The report includes:
 - Exact instantiated model parameter count.
 - Estimated parameter storage for the selected dtype.
 - MSA and pair representation tensor sizes.
-- An uncheckpointed block-boundary activation upper bound.
+- The approximate per-block checkpoint input-state storage.
 - OPM and outgoing/incoming triangle-multiplication MAC estimates.
 - The IPA point-difference and attention-logit intermediate sizes.
 
