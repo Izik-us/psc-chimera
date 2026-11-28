@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, fields
 from enum import Enum
 import hashlib
 import json
+import math
 import os
 import random
 import tempfile
@@ -889,10 +890,17 @@ class CanonicalTrainer:
             raise RuntimeError(f"gradient contract failed; missing={missing}, nonfinite={nonfinite}")
         grad_norm, grad_clipped = None, False
         if self.max_grad_norm is not None:
-            grad_params = [p for p in self.model.parameters() if p.requires_grad and p.grad is not None]
-            total_norm = torch.nn.utils.clip_grad_norm_(grad_params, self.max_grad_norm, error_if_nonfinite=True)
-            grad_norm = float(total_norm)
+            # Reuse component norms already computed by the fast gradient audit
+            # instead of traversing every gradient tensor a second time.
+            grad_norm = math.sqrt(sum(
+                row["gradient_norm"] ** 2 for row in component_rows.values()
+            ))
             grad_clipped = grad_norm > self.max_grad_norm
+            if grad_clipped:
+                scale = self.max_grad_norm / (grad_norm + 1e-6)
+                for parameter in self.model.parameters():
+                    if parameter.requires_grad and parameter.grad is not None:
+                        parameter.grad.mul_(scale)
         self.optimizer.step()
         for name in self._required_gradient_components(batch):
             state = self.model.component_status[name]
