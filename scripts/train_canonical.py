@@ -11,6 +11,7 @@ import argparse
 from dataclasses import fields, is_dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import random
 import sys
