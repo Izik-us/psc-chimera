@@ -216,8 +216,6 @@ class MSAColumnAttention(nn.Module):
 class MSATransition(nn.Module):
     def __init__(self, c_m: int, depth: int, transition_factor: int = 4):
         super().__init__()
-        if gradient_checkpointing_group_size <= 0:
-            raise ValueError("gradient_checkpointing_group_size must be positive")
         if transition_factor <= 0:
             raise ValueError("transition_factor must be positive")
         self.norm = _Float32LayerNorm(c_m)
@@ -566,6 +564,8 @@ class EvoFormerStack(nn.Module):
             raise ValueError("opm_chunk_size must be positive or None")
         if attention_chunk_size is not None and attention_chunk_size <= 0:
             raise ValueError("attention_chunk_size must be positive or None")
+        if gradient_checkpointing_group_size <= 0:
+            raise ValueError("gradient_checkpointing_group_size must be positive")
         if transition_factor <= 0:
             raise ValueError("transition_factor must be positive")
         if max_relative_position < 1:
