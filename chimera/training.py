@@ -863,6 +863,12 @@ class CanonicalTrainer:
                     if not has_gradient:
                         continue
                     size = parameter.grad.numel() * parameter.grad.element_size()
+                    if size > bucket_limit:
+                        synchronize_bucket(bucket)
+                        bucket, bucket_bytes = [], 0
+                        dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM)
+                        parameter.grad.div_(world_size)
+                        continue
                     if bucket and (bucket_bytes + size > bucket_limit or parameter.grad.dtype != bucket[0].grad.dtype):
                         synchronize_bucket(bucket)
                         bucket, bucket_bytes = [], 0
