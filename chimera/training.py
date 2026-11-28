@@ -453,6 +453,7 @@ class CanonicalTrainer:
             min_validation_examples=self.min_validation_examples,
             generator=self.generator,
             allow_sequence_backbone_finetuning=allow_sequence_backbone_finetuning,
+            precision=self.precision,
         )
         next_trainer.stage_history = history
         next_trainer.global_step = self.global_step
@@ -1323,6 +1324,7 @@ class CanonicalTrainer:
             preprocessing_hash=manifest.preprocessing_hash,
             random_seed=manifest.random_seed,
             min_validation_examples=manifest.min_validation_examples or 30,
+            precision=training.get("precision", "fp32"),
         )
         trainer.resume(path, migration_id=migration_id)
         return trainer
