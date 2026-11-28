@@ -234,21 +234,19 @@ def configure_trainable_components(
     return tuple(selected)
 
 
-def gradient_flow_report(model) -> dict[str, Any]:
-    """Report every parameter's trainability and observed gradient state."""
+def gradient_flow_report(model, *, detailed: bool = True) -> dict[str, Any]:
+    """Report trainability and gradient state, optionally avoiding per-parameter CPU syncs.
+
+    Detailed mode preserves the historical per-parameter report. Fast mode is
+    intended for every optimizer step in large models: it aggregates finite
+    checks and norms per component and performs only component-level host syncs.
+    """
     parameters = []
     components: dict[str, dict[str, Any]] = {}
+    component_norms: dict[str, list[torch.Tensor]] = {}
+    component_finite: dict[str, list[torch.Tensor]] = {}
     for name, parameter in model.named_parameters():
         gradient = parameter.grad
-        finite = bool(torch.isfinite(gradient).all()) if gradient is not None else None
-        norm = float(gradient.detach().norm().cpu()) if gradient is not None else None
-        parameters.append({
-            "name": name,
-            "requires_grad": bool(parameter.requires_grad),
-            "gradient_present": gradient is not None,
-            "gradient_norm": norm,
-            "gradient_finite": finite,
-        })
         component = name.split(".", 1)[0]
         row = components.setdefault(component, {
             "trainable_parameters": 0,
@@ -258,12 +256,40 @@ def gradient_flow_report(model) -> dict[str, Any]:
         })
         if parameter.requires_grad:
             row["trainable_parameters"] += parameter.numel()
+        finite_tensor = None
+        norm_tensor = None
         if gradient is not None:
             row["gradient_parameters"] += parameter.numel()
-            row["gradient_norm_squared"] += norm * norm
-            row["all_gradients_finite"] &= bool(finite)
-    for row in components.values():
-        row["gradient_norm"] = row.pop("gradient_norm_squared") ** 0.5
+            finite_tensor = torch.isfinite(gradient).all()
+            norm_tensor = gradient.detach().float().norm()
+            component_finite.setdefault(component, []).append(finite_tensor)
+            component_norms.setdefault(component, []).append(norm_tensor)
+        if detailed:
+            finite = bool(finite_tensor.item()) if finite_tensor is not None else None
+            norm = float(norm_tensor.item()) if norm_tensor is not None else None
+            parameters.append({
+                "name": name,
+                "requires_grad": bool(parameter.requires_grad),
+                "gradient_present": gradient is not None,
+                "gradient_norm": norm,
+                "gradient_finite": finite,
+            })
+            if norm is not None:
+                row["gradient_norm_squared"] += norm * norm
+                row["all_gradients_finite"] &= bool(finite)
+    for component, row in components.items():
+        if detailed:
+            row["gradient_norm"] = row.pop("gradient_norm_squared") ** 0.5
+        else:
+            norms = component_norms.get(component, [])
+            finite = component_finite.get(component, [])
+            row["gradient_norm"] = (
+                float(torch.stack(norms).norm().item()) if norms else 0.0
+            )
+            row["all_gradients_finite"] = (
+                bool(torch.stack(finite).all().item()) if finite else True
+            )
+            row.pop("gradient_norm_squared")
     return {"parameters": parameters, "components": components}
 
 
@@ -839,7 +865,7 @@ class CanonicalTrainer:
                     bucket.append(parameter)
                     bucket_bytes += size
                 synchronize_bucket(bucket)
-        audit = gradient_flow_report(self.model)
+        audit = gradient_flow_report(self.model, detailed=False)
         component_rows = audit["components"]
         missing = [
             name for name in self._required_gradient_components(batch)
