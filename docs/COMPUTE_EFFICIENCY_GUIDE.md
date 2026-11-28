@@ -22,6 +22,12 @@ The report includes:
 - OPM and outgoing/incoming triangle-multiplication MAC estimates.
 - The IPA point-difference and attention-logit intermediate sizes.
 
+For the canonical widths at batch 1, MSA depth 128, length 600 and FP32,
+the MSA+pair input state is about 0.245 GiB. Retaining one boundary per each of
+138 blocks is about 33.8 GiB; grouping four blocks produces 35 checkpoint groups,
+about 8.6 GiB of group-input states. This is a calculated checkpoint-state
+estimate, not peak VRAM.
+
 The operation estimate deliberately excludes attention, transitions, projections,
 the rest of the flow network, backward-pass work, optimizer updates, data movement,
 and allocator overhead. It must not be interpreted as total model FLOPs or total
