@@ -103,6 +103,15 @@ def main() -> int:
         args.batch_size * ipa.n_head * args.length * args.length * ipa.n_qk_pts * 3
     )
     point_diff_bytes = point_diff_elements * dtype_bytes
+    opm = evo.blocks[0].outer_product_mean
+    triangle = evo.blocks[0].triangle_multiplication_outgoing
+    opm_chunk = args.length if opm.chunk_size is None else min(args.length, opm.chunk_size)
+    opm_outer_elements = (
+        args.batch_size * opm_chunk * args.length * opm.left.out_features ** 2
+    )
+    triangle_product_elements = (
+        args.batch_size * args.length * args.length * triangle.left.out_features
+    )
     attention_elements = args.batch_size * ipa.n_head * args.length * args.length
     attention_bytes = attention_elements * dtype_bytes
     result = {
@@ -128,6 +137,25 @@ def main() -> int:
             int(evo.blocks[0].triangle_multiplication_outgoing.left.out_features),
             len(evo.blocks), dtype_bytes,
         ),
+        "evoformer_temporaries": {
+            "opm_outer_product_chunk": {
+                "shape": [
+                    args.batch_size, opm_chunk, args.length,
+                    opm.left.out_features, opm.left.out_features,
+                ],
+                "elements": opm_outer_elements,
+                "GiB_fp32": gibibytes(opm_outer_elements * 4),
+                "note": "OPM explicitly disables autocast and computes this outer-product chunk in FP32.",
+            },
+            "triangle_multiplication_product": {
+                "shape": [
+                    args.batch_size, args.length, args.length,
+                    triangle.left.out_features,
+                ],
+                "elements": triangle_product_elements,
+                "GiB_selected_dtype": gibibytes(triangle_product_elements * dtype_bytes),
+            },
+        },
         "flow_ipa": {
             "blocks": len(velocity.ipa_blocks),
             "heads": ipa.n_head,
