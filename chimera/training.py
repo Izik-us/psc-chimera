@@ -811,6 +811,10 @@ class CanonicalTrainer:
         if self.regime == TrainingRegime.PREFERENCE:
             return self.train_preference_step(batch.preference_batch)
         self.model.train()
+        if self.regime == TrainingRegime.SEQUENCE and not self.allow_sequence_backbone_finetuning:
+            # Frozen features must not drift through EvoFormer dropout between
+            # examples; the downstream designer remains in training mode.
+            self.model.evoformer.eval()
         self.optimizer.zero_grad(set_to_none=True)
         device = batch.msa_tokens.device
         autocast_enabled = self.precision == "bf16" and device.type in ("cuda", "cpu")
