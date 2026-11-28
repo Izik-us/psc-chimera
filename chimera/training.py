@@ -809,53 +809,53 @@ class CanonicalTrainer:
 
     def _synchronize_distributed_gradients(self) -> None:
         """Average replicated gradients across ranks using bounded communication buckets."""
-            if dist.is_available() and dist.is_initialized():
-                world_size = dist.get_world_size()
-                trainable = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
-                if trainable:
-                    presence = torch.tensor(
-                        [parameter.grad is not None for parameter in trainable],
-                        device=trainable[0].device, dtype=torch.int32
+        if dist.is_available() and dist.is_initialized():
+            world_size = dist.get_world_size()
+            trainable = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+            if trainable:
+                presence = torch.tensor(
+                    [parameter.grad is not None for parameter in trainable],
+                    device=trainable[0].device, dtype=torch.int32
+                )
+                minimum, maximum = presence.clone(), presence.clone()
+                dist.all_reduce(minimum, op=dist.ReduceOp.MIN)
+                dist.all_reduce(maximum, op=dist.ReduceOp.MAX)
+                if not torch.equal(minimum, maximum):
+                    raise RuntimeError(
+                        "distributed ranks produced inconsistent gradient presence; "
+                        "ensure every rank receives structurally compatible batches"
                     )
-                    minimum, maximum = presence.clone(), presence.clone()
-                    dist.all_reduce(minimum, op=dist.ReduceOp.MIN)
-                    dist.all_reduce(maximum, op=dist.ReduceOp.MAX)
-                    if not torch.equal(minimum, maximum):
-                        raise RuntimeError(
-                            "distributed ranks produced inconsistent gradient presence; "
-                            "ensure every rank receives structurally compatible batches"
-                        )
-                    # Coalesce gradients into bounded buckets to avoid one network
-                    # collective per parameter on large CHIMERA components.
-                    bucket_limit = 25 * 1024 * 1024
-                    bucket, bucket_bytes = [], 0
-                    def synchronize_bucket(parameters):
-                        if not parameters:
-                            return
-                        flat = torch.cat([parameter.grad.detach().reshape(-1) for parameter in parameters])
-                        dist.all_reduce(flat, op=dist.ReduceOp.SUM)
-                        flat.div_(world_size)
-                        offset = 0
-                        for parameter in parameters:
-                            count = parameter.grad.numel()
-                            parameter.grad.copy_(flat[offset:offset + count].view_as(parameter.grad))
-                            offset += count
-                    for parameter, has_gradient in zip(trainable, maximum.tolist()):
-                        if not has_gradient:
-                            continue
-                        size = parameter.grad.numel() * parameter.grad.element_size()
-                        if size > bucket_limit:
-                            synchronize_bucket(bucket)
-                            bucket, bucket_bytes = [], 0
-                            dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM)
-                            parameter.grad.div_(world_size)
-                            continue
-                        if bucket and (bucket_bytes + size > bucket_limit or parameter.grad.dtype != bucket[0].grad.dtype):
-                            synchronize_bucket(bucket)
-                            bucket, bucket_bytes = [], 0
-                        bucket.append(parameter)
-                        bucket_bytes += size
-                    synchronize_bucket(bucket)
+                # Coalesce gradients into bounded buckets to avoid one network
+                # collective per parameter on large CHIMERA components.
+                bucket_limit = 25 * 1024 * 1024
+                bucket, bucket_bytes = [], 0
+                def synchronize_bucket(parameters):
+                    if not parameters:
+                        return
+                    flat = torch.cat([parameter.grad.detach().reshape(-1) for parameter in parameters])
+                    dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+                    flat.div_(world_size)
+                    offset = 0
+                    for parameter in parameters:
+                        count = parameter.grad.numel()
+                        parameter.grad.copy_(flat[offset:offset + count].view_as(parameter.grad))
+                        offset += count
+                for parameter, has_gradient in zip(trainable, maximum.tolist()):
+                    if not has_gradient:
+                        continue
+                    size = parameter.grad.numel() * parameter.grad.element_size()
+                    if size > bucket_limit:
+                        synchronize_bucket(bucket)
+                        bucket, bucket_bytes = [], 0
+                        dist.all_reduce(parameter.grad, op=dist.ReduceOp.SUM)
+                        parameter.grad.div_(world_size)
+                        continue
+                    if bucket and (bucket_bytes + size > bucket_limit or parameter.grad.dtype != bucket[0].grad.dtype):
+                        synchronize_bucket(bucket)
+                        bucket, bucket_bytes = [], 0
+                    bucket.append(parameter)
+                    bucket_bytes += size
+                synchronize_bucket(bucket)
 
     def train_step(self, batch: CanonicalTrainingBatch) -> dict[str, Any]:
         self._assert_current_regime()
