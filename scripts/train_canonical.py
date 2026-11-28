@@ -317,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
                 trainer.precision = args.precision
             if args.gradient_checkpointing is not None:
                 model.evoformer.gradient_checkpointing = args.gradient_checkpointing
+                model.evoformer.configuration["gradient_checkpointing"] = args.gradient_checkpointing
                 model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
             if args.evoformer_checkpoint_group_size is not None:
                 model.evoformer.gradient_checkpointing_group_size = args.evoformer_checkpoint_group_size
@@ -360,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
         model.to(device)
         if args.gradient_checkpointing is not None:
             model.evoformer.gradient_checkpointing = args.gradient_checkpointing
+            model.evoformer.configuration["gradient_checkpointing"] = args.gradient_checkpointing
             model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
         if args.evoformer_checkpoint_group_size is not None:
             model.evoformer.gradient_checkpointing_group_size = args.evoformer_checkpoint_group_size
