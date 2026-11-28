@@ -19,7 +19,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from chimera.checkpoint_io import canonical_model_from_configuration
+from chimera.architecture import CanonicalCHIMERAv2
+from chimera.checkpoint_io import (
+    canonical_model_from_configuration,
+    load_canonical_model_from_checkpoint,
+)
 
 
 def gibibytes(num_bytes: int) -> float:
@@ -68,7 +72,10 @@ def estimate(batch: int, msa_depth: int, length: int, d_msa: int, d_pair: int,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--architecture-json", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--architecture-json", type=Path)
+    source.add_argument("--checkpoint", type=Path,
+                        help="optional canonical checkpoint; defaults to CanonicalCHIMERAv2()")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--msa-depth", type=int, default=128)
     parser.add_argument("--length", type=int, default=600)
@@ -78,10 +85,15 @@ def main() -> int:
     if min(args.batch_size, args.msa_depth, args.length) < 1:
         parser.error("batch size, MSA depth and length must be positive")
 
-    config = json.loads(args.architecture_json.read_text(encoding="utf-8"))
-    if not isinstance(config, dict):
-        parser.error("architecture JSON must contain an object")
-    model = canonical_model_from_configuration(config)
+    if args.checkpoint is not None:
+        model = load_canonical_model_from_checkpoint(args.checkpoint)
+    elif args.architecture_json is not None:
+        config = json.loads(args.architecture_json.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            parser.error("architecture JSON must contain an object")
+        model = canonical_model_from_configuration(config)
+    else:
+        model = CanonicalCHIMERAv2()
     dtype_bytes = {"fp32": 4, "bf16": 2, "fp16": 2}[args.dtype]
     evo = model.evoformer
     velocity = model.flow_model.flow_model.velocity_field
