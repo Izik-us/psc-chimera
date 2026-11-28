@@ -20,7 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from chimera.checkpoint_io import canonical_model_from_configuration
+from chimera.architecture import CanonicalCHIMERAv2
+from chimera.checkpoint_io import (
+    canonical_model_from_configuration,
+    load_canonical_model_from_checkpoint,
+)
 from chimera.lie import so3_exp
 from chimera.training import CanonicalTrainingBatch, CanonicalTrainer, TrainingRegime
 
@@ -59,7 +63,10 @@ def make_batch(model, regime: TrainingRegime, batch: int, depth: int, length: in
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--architecture-json", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--architecture-json", type=Path)
+    source.add_argument("--checkpoint", type=Path,
+                        help="optional canonical checkpoint; defaults to CanonicalCHIMERAv2()")
     parser.add_argument("--regime", choices=("representation", "flow", "sequence"),
                         default="representation")
     parser.add_argument("--device", default="cuda")
@@ -83,8 +90,14 @@ def main() -> int:
     if args.precision == "bf16" and device.type == "cuda" and not torch.cuda.is_bf16_supported():
         raise RuntimeError("selected CUDA device does not support BF16")
 
-    configuration = json.loads(args.architecture_json.read_text(encoding="utf-8"))
-    model = canonical_model_from_configuration(configuration).to(device)
+    if args.checkpoint is not None:
+        model = load_canonical_model_from_checkpoint(args.checkpoint)
+    elif args.architecture_json is not None:
+        configuration = json.loads(args.architecture_json.read_text(encoding="utf-8"))
+        model = canonical_model_from_configuration(configuration)
+    else:
+        model = CanonicalCHIMERAv2()
+    model = model.to(device)
     model.evoformer.gradient_checkpointing = args.gradient_checkpointing
     model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
     regime = TrainingRegime(args.regime)
