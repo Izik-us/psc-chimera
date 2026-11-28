@@ -216,6 +216,8 @@ class MSAColumnAttention(nn.Module):
 class MSATransition(nn.Module):
     def __init__(self, c_m: int, depth: int, transition_factor: int = 4):
         super().__init__()
+        if gradient_checkpointing_group_size <= 0:
+            raise ValueError("gradient_checkpointing_group_size must be positive")
         if transition_factor <= 0:
             raise ValueError("transition_factor must be positive")
         self.norm = _Float32LayerNorm(c_m)
@@ -548,6 +550,7 @@ class EvoFormerStack(nn.Module):
         opm_chunk_size: Optional[int] = 16,
         attention_chunk_size: Optional[int] = 32,
         gradient_checkpointing: bool = False,
+        gradient_checkpointing_group_size: int = 1,
         max_relative_position: int = 32,
         transition_factor: int = 4,
         opm_epsilon: float = 1e-3,
@@ -572,6 +575,7 @@ class EvoFormerStack(nn.Module):
         self.d_single = d_single
         self.n_blocks = n_blocks
         self.gradient_checkpointing = gradient_checkpointing
+        self.gradient_checkpointing_group_size = gradient_checkpointing_group_size
         self.padding_token = 22
         self.mask_token = 23
         self.token_embed = nn.Embedding(24, d_msa, padding_idx=self.padding_token)
@@ -629,6 +633,7 @@ class EvoFormerStack(nn.Module):
             "opm_chunk_size": opm_chunk_size,
             "attention_chunk_size": attention_chunk_size,
             "gradient_checkpointing": gradient_checkpointing,
+            "gradient_checkpointing_group_size": gradient_checkpointing_group_size,
             "max_relative_position": max_relative_position,
             "transition_factor": transition_factor,
             "opm_epsilon": opm_epsilon,
@@ -716,19 +721,29 @@ class EvoFormerStack(nn.Module):
         pair = pair_features + self._relative_pair_features(residue_index, batch, n_res, msa_tokens.device)
         pair = pair * pair_mask[..., None].to(pair.dtype)
         block_diagnostics: list[dict[str, float]] = []
-        for block in self.blocks:
-            if self.gradient_checkpointing and self.training and torch.is_grad_enabled():
+        if self.gradient_checkpointing and self.training and torch.is_grad_enabled():
+            group_size = self.gradient_checkpointing_group_size
+            for group_start in range(0, len(self.blocks), group_size):
+                block_group = self.blocks[group_start:group_start + group_size]
+
+                def run_group(msa_input, pair_input, msa_mask, pair_mask, blocks=block_group):
+                    current_msa, current_pair = msa_input, pair_input
+                    for current_block in blocks:
+                        current_msa, current_pair = current_block(
+                            current_msa, current_pair, msa_mask, pair_mask, False
+                        )[:2]
+                    return current_msa, current_pair
+
                 msa, pair = checkpoint(
-                    lambda m, z, mm, pm, current_block=block: current_block(
-                        m, z, mm, pm, False
-                    )[:2],
+                    run_group,
                     msa,
                     pair,
                     valid,
                     pair_mask,
                     use_reentrant=False,
                 )
-            else:
+        else:
+            for block in self.blocks:
                 msa, pair, diagnostics = block(
                     msa, pair, valid, pair_mask, collect_diagnostics
                 )
