@@ -1173,6 +1173,12 @@ class CanonicalTrainer:
             "training": {
                 "regime": self.regime.value,
                 "precision": self.precision,
+                "evoformer_gradient_checkpointing": bool(
+                    self.model.evoformer.gradient_checkpointing
+                ),
+                "flow_gradient_checkpointing": bool(
+                    self.model.flow_model.flow_model.velocity_field.gradient_checkpointing
+                ),
                 "stage_history": list(self.stage_history),
                 "trainable_components": list(self.trainable_components),
                 "allow_sequence_backbone_finetuning": (
@@ -1378,6 +1384,12 @@ class CanonicalTrainer:
             precision=training.get("precision", "fp32"),
         )
         trainer.resume(path, migration_id=migration_id)
+        model.evoformer.gradient_checkpointing = bool(
+            training.get("evoformer_gradient_checkpointing", False)
+        )
+        model.flow_model.set_gradient_checkpointing(
+            bool(training.get("flow_gradient_checkpointing", False))
+        )
         return trainer
 
 
