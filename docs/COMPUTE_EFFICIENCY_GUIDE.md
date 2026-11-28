@@ -67,7 +67,7 @@ Example:
 ```bash
 python scripts/train_canonical.py \
   --training-jsonl data/train.jsonl \
-  --architecture-json config/chimera_architecture.json \
+  --default-architecture \
   --regime representation \
   --checkpoint Models/representation.pt \
   --epochs 1 --batch-size 1 \
