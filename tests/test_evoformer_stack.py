@@ -2,6 +2,7 @@ import torch
 
 from chimera import CanonicalCHIMERAv2
 from chimera.components import MSARepresentationBackbone
+from chimera.checkpoint_io import canonical_model_from_configuration
 from chimera.evoformer_stack import (
     EvoFormerBlock,
     MSAColumnAttention,
@@ -69,6 +70,33 @@ def test_canonical_composition_passes_configured_depth_into_the_stack():
     )
     assert len(model.evoformer.blocks) == 3
     assert model.model_configuration()["evoformer"]["n_blocks"] == 3
+
+
+def test_grouped_checkpoint_configuration_round_trips_and_legacy_defaults():
+    model = CanonicalCHIMERAv2(
+        d_evo_single=16,
+        d_evo_pair=8,
+        d_se3=16,
+        d_pair_out=16,
+        d_mpnn=16,
+        evoformer_n_blocks=4,
+        evoformer_gradient_checkpointing=True,
+        evoformer_gradient_checkpointing_group_size=2,
+        n_flow_blocks=1,
+        n_domains=1,
+        n_modules=1,
+        n_mpnn_seqs=1,
+        n_mc_dropout=2,
+    )
+    configuration = model.model_configuration()
+    restored = canonical_model_from_configuration(configuration)
+    assert restored.evoformer.gradient_checkpointing_group_size == 2
+
+    legacy_configuration = dict(configuration)
+    legacy_configuration["evoformer"] = dict(configuration["evoformer"])
+    legacy_configuration["evoformer"].pop("gradient_checkpointing_group_size")
+    legacy_restored = canonical_model_from_configuration(legacy_configuration)
+    assert legacy_restored.evoformer.gradient_checkpointing_group_size == 1
 
 
 def test_stack_emits_query_single_and_coupled_msa_pair_shapes():
