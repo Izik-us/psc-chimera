@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from chimera.architecture import CanonicalCHIMERAv2
 from chimera.checkpoint_io import canonical_model_from_configuration
 from chimera.training import CanonicalTrainingBatch, CanonicalTrainer, TrainingRegime
 
@@ -39,6 +40,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--training-jsonl", "--dataset", dest="training_jsonl", required=True, type=Path)
     parser.add_argument("--architecture-json", type=Path)
+    parser.add_argument("--default-architecture", action="store_true",
+                        help="instantiate CanonicalCHIMERAv2() when no architecture JSON is supplied")
     parser.add_argument(
         "--regime", choices=[item.value for item in TrainingRegime], default="sequence"
     )
@@ -316,12 +319,17 @@ def main(argv: list[str] | None = None) -> int:
                 weight_decay=args.weight_decay,
             )
     else:
-        if args.architecture_json is None:
-            raise ValueError("--architecture-json is required unless --resume is supplied")
-        architecture = json.loads(args.architecture_json.expanduser().read_text(encoding="utf-8"))
-        if not isinstance(architecture, dict):
-            raise ValueError("architecture JSON must contain a model_configuration object")
-        model = canonical_model_from_configuration(architecture)
+        if args.architecture_json is not None and args.default_architecture:
+            raise ValueError("--architecture-json and --default-architecture are mutually exclusive")
+        if args.architecture_json is None and not args.default_architecture:
+            raise ValueError("supply --architecture-json or explicitly select --default-architecture")
+        if args.default_architecture:
+            model = CanonicalCHIMERAv2()
+        else:
+            architecture = json.loads(args.architecture_json.expanduser().read_text(encoding="utf-8"))
+            if not isinstance(architecture, dict):
+                raise ValueError("architecture JSON must contain a model_configuration object")
+            model = canonical_model_from_configuration(architecture)
         model.to(device)
         model.evoformer.gradient_checkpointing = args.gradient_checkpointing
         model.flow_model.set_gradient_checkpointing(args.gradient_checkpointing)
