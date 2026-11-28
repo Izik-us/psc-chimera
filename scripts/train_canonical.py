@@ -360,6 +360,11 @@ def main(argv: list[str] | None = None) -> int:
                         dist.barrier()
             if batch_count == 0:
                 raise ValueError("training dataset produced no complete batches for this rank")
+            if world_size > 1:
+                epoch_stats = torch.tensor([epoch_loss, float(batch_count)], device=device, dtype=torch.float64)
+                dist.all_reduce(epoch_stats, op=dist.ReduceOp.SUM)
+                epoch_loss = float(epoch_stats[0].item())
+                batch_count = int(epoch_stats[1].item())
             trainer.epoch += 1
             if rank == 0:
                 trainer.save_checkpoint(args.checkpoint)
