@@ -97,6 +97,7 @@ def test_grouped_checkpoint_configuration_round_trips_and_legacy_defaults():
     legacy_configuration["evoformer"].pop("gradient_checkpointing_group_size")
     legacy_restored = canonical_model_from_configuration(legacy_configuration)
     assert legacy_restored.evoformer.gradient_checkpointing_group_size == 1
+    assert "gradient_checkpointing_group_size" not in legacy_restored.model_configuration()["evoformer"]
 
 
 def test_stack_emits_query_single_and_coupled_msa_pair_shapes():
